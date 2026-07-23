@@ -1,0 +1,17 @@
+name: Release Gates
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  baseline-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce generic baseline boundary
+        run: python scripts/release_gate.py

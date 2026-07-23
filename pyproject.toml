@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aletheia-memory"
+version = "1.3.0"
+description = "Local, auditable memory for AI agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  { name = "Aletheia Contributors" }
+]
+keywords = [
+  "ai",
+  "agents",
+  "memory",
+  "local-first",
+  "retrieval",
+  "context"
+]
+dependencies = [
+    "cryptography>=49.0.0",
+]
+
+[project.optional-dependencies]
+cli = []
+server = []
+mcp = []
+dev = [
+  "pytest"
+]
+
+[project.scripts]
+aletheia = "aletheia.cli.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aletheia"]
+include = ["aletheia_client.py"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"docs" = "aletheia/docs"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/aletheia",
+  "/aletheia_client.py",
+  "/docs",
+  "/scripts",
+  "/tests",
+  "/README.md",
+  "/CODE_REVIEW.md",
+  "/pyproject.toml",
+]
