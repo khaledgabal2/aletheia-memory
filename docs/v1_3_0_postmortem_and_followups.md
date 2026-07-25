@@ -1,9 +1,17 @@
-# v1.3.0 Remediation — Post-Mortem & Follow-Up TODO (for Codex)
+# Aletheia v1.3.0 Historical Remediation Notes
 
-Independent verification of Phases 1–3 (main baseline, non-sample adapter). Verdicts are from
-reading the shipped code directly, not the closure checklist. Test suite was **not**
-re-run during this pass (the environment had Python 3.10; the code requires 3.13),
-so the "149 tests pass" claim is taken on trust — code-level review is the basis below.
+This document preserves an earlier independent review snapshot plus the
+follow-up closure evidence that came after it. The historical "reopen" and
+"new/residual" sections below are retained for audit context; the closure
+evidence at the top of this file, `docs/v1_3_0_review_closure_checklist.md`,
+and the current test suite are the source of truth for the public baseline.
+
+The historical review snapshot below covered Phases 1-3 of the main baseline,
+excluding the sample adapter. Its verdicts came from reading the shipped code
+directly rather than trusting the closure checklist. That pass did not rerun
+the full test suite because the review environment had Python 3.10 while the
+reviewer was using a Python 3.13 test baseline. Current public package metadata
+declares Python 3.11+ support.
 
 ## Codex follow-up closure evidence (2026-07-02)
 
@@ -50,11 +58,11 @@ passed 40 tests; `uv run pytest tests/test_m1_reliable_recall.py tests/test_m3_i
 passed 20 tests; `uv run pytest tests/test_m10_federated_memory.py` passed 12 tests;
 `uv run pytest` passed 140 tests on Python 3.13.13.
 
-## Scorecard
+## Historical Scorecard Before Follow-Up Closure
 
-- Solidly fixed (18): C1, C3, C4, H1, H3, H4, H5, H6, H7, H8, H9, H13, H15, H16, H19, H20, and the mediums (mass-assignment, read-before-authz, LLM trust boundary, C5 read-only retrieve, job-race atomic claim, migration version gate, storage path/key).
-- Partial — reopen (4): **C2, H2, H11, H17**.
-- New/residual issues found (6): semantic scan unbounded, rate-limit header spoofing, retention per-evidence matching, H14 raw-context residue, federation private keys at rest, duplicated governed-query logic.
+- Solidly fixed at that review point (18): C1, C3, C4, H1, H3, H4, H5, H6, H7, H8, H9, H13, H15, H16, H19, H20, and the mediums (mass-assignment, read-before-authz, LLM trust boundary, C5 read-only retrieve, job-race atomic claim, migration version gate, storage path/key).
+- Partial at that review point and later followed up (4): **C2, H2, H11, H17**.
+- New/residual issues found at that review point and later followed up (6): semantic scan unbounded, rate-limit header spoofing, retention per-evidence matching, H14 raw-context residue, federation private keys at rest, duplicated governed-query logic.
 
 ---
 
@@ -87,7 +95,12 @@ X25519, Ed25519, PBKDF2 + `compare_digest`) are correct and centralized in
 
 ---
 
-## TODO — Reopen (must fix before the baseline is "closed")
+## Historical Reopen Notes From The Earlier Review
+
+The notes in this section are the original follow-up findings from the earlier
+review snapshot. They are kept so maintainers can see what was challenged and
+why; closure status is recorded in the evidence section above and in
+`docs/v1_3_0_review_closure_checklist.md`.
 
 ### 1. H11 — enforce plugin permission grants at operation time  `[High]`
 - File: `aletheia/core/platform.py:519` `run_plugin_operation`.
@@ -135,7 +148,11 @@ X25519, Ed25519, PBKDF2 + `compare_digest`) are correct and centralized in
 
 ---
 
-## TODO — New / residual issues
+## Historical New And Residual Notes
+
+The notes in this section are likewise preserved from the earlier review
+snapshot. Treat them as audit history unless a current test, issue, or review
+reopens the concern.
 
 ### 5. Semantic vector search is unbounded  `[Medium, scale]`
 - File: `aletheia/semantic.py:369` `SQLiteVectorStore.search`.

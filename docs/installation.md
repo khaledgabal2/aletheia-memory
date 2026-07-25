@@ -11,15 +11,15 @@ the package.
 - A writable local path for the Aletheia database.
 - Optional: `uv` for repository development workflows.
 
-The published Python package is named `aletheia-memory`. The console script is
-named `aletheia`.
+The Python package name is `aletheia-memory`. The console script is named
+`aletheia`.
 
-## Install From A Release Wheel
+## Install From GitHub
 
-Install the release artifact into your environment:
+Install the public repository directly:
 
 ```bash
-python -m pip install aletheia-memory
+python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
 ```
 
 Then verify the CLI:
@@ -29,10 +29,30 @@ aletheia --help
 aletheia docs list
 ```
 
-If you are installing from a local wheel file instead of an index:
+## Install From PyPI
+
+When the `aletheia-memory` package has been published to PyPI, install it with:
+
+```bash
+python -m pip install aletheia-memory
+```
+
+If pip reports that no matching distribution exists, install from GitHub or a
+release wheel instead.
+
+## Install From A Release Wheel
+
+Install a downloaded release artifact into your environment:
 
 ```bash
 python -m pip install ./dist/aletheia_memory-1.3.0-py3-none-any.whl
+```
+
+Then verify the CLI:
+
+```bash
+aletheia --help
+aletheia docs list
 ```
 
 ## Install From Source
@@ -40,7 +60,9 @@ python -m pip install ./dist/aletheia_memory-1.3.0-py3-none-any.whl
 From the repository root:
 
 ```bash
-python -m pip install ".[dev]"
+git clone https://github.com/khaledgabal2/aletheia-memory.git
+cd aletheia-memory
+python -m pip install -e ".[dev]"
 ```
 
 For local development with `uv`, commands in this repository commonly use:

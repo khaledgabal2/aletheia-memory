@@ -1,8 +1,14 @@
 .venv/
+dist/
+build/
+*.egg-info/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+.mypy_cache/
 .DS_Store
 *.db
 *.sqlite
 *.sqlite3
+marketing/

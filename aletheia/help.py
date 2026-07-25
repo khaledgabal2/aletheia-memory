@@ -46,7 +46,7 @@ _CATALOG: tuple[tuple[str, str, str, str, str], ...] = (
     ("plan", "Plan.md", "Original Planning Notes", "reference", "Early implementation planning notes."),
     ("aletheia-phased-plan", "aletheia_phased_plan.md", "Phased Design Plan", "reference", "Historical phased build plan."),
     ("v1-3-0-baseline-remediation-plan", "v1_3_0_baseline_remediation_plan.md", "v1.3.0 Baseline Remediation Plan", "reference", "Release remediation plan for the generic baseline."),
-    ("v1-3-0-postmortem-and-followups", "v1_3_0_postmortem_and_followups.md", "v1.3.0 Postmortem And Follow-Ups", "reference", "Postmortem and follow-up record for v1.3.0."),
+    ("v1-3-0-postmortem-and-followups", "v1_3_0_postmortem_and_followups.md", "v1.3.0 Historical Remediation Notes", "reference", "Historical review notes and follow-up closure evidence for v1.3.0."),
     ("v1-3-0-review-closure-checklist", "v1_3_0_review_closure_checklist.md", "v1.3.0 Review Closure Checklist", "reference", "Review closure evidence for v1.3.0."),
     ("m0-contract", "m0_MVP_contract.md", "M0 MVP Contract", "contracts", "Historical MVP contract."),
     ("m1-contract", "m1_reliable_recall_contract.md", "M1 Reliable Recall Contract", "contracts", "Reliable recall and context continuity contract."),

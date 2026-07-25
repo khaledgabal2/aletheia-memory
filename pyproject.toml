@@ -20,9 +20,29 @@ keywords = [
   "retrieval",
   "context"
 ]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "cryptography>=49.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/khaledgabal2/aletheia-memory"
+Repository = "https://github.com/khaledgabal2/aletheia-memory"
+Documentation = "https://github.com/khaledgabal2/aletheia-memory/tree/main/docs"
+Issues = "https://github.com/khaledgabal2/aletheia-memory/issues"
+Changelog = "https://github.com/khaledgabal2/aletheia-memory/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 cli = []
@@ -55,6 +75,9 @@ include = [
   "/scripts",
   "/tests",
   "/README.md",
-  "/CODE_REVIEW.md",
+  "/LICENSE",
+  "/CONTRIBUTING.md",
+  "/SECURITY.md",
+  "/CHANGELOG.md",
   "/pyproject.toml",
 ]

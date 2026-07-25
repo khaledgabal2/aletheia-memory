@@ -82,6 +82,17 @@ Plugin authors should read:
 | `near_future_changes.md` | Summarize current v1.3.0 status and likely next changes. |
 | `v1_public_contracts.md` | Document stable public contracts and compatibility expectations. |
 
+## Repository Community Files
+
+The repository root also includes:
+
+| File | Purpose |
+| --- | --- |
+| `LICENSE` | MIT license terms. |
+| `CONTRIBUTING.md` | Contribution workflow, local verification, and public-boundary expectations. |
+| `SECURITY.md` | Responsible disclosure and local deployment security guidance. |
+| `CHANGELOG.md` | Release notes for public versions. |
+
 ## Layer Map
 
 Aletheia is easiest to understand as layers:

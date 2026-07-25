@@ -1,13 +1,13 @@
 # Aletheia v1 Public Contracts
 
-Aletheia v1.0.0 treats these surfaces as stable public contracts:
+Aletheia v1.3.0 treats these surfaces as stable public contracts:
 
 - Python package API: `Memory`, `AletheiaClient`, `AsyncAletheiaClient`, and plugin protocols in `aletheia.plugins`.
 - HTTP API: `/v1/*` routes published by `aletheia api openapi`.
 - MCP tool names and request shapes published by `aletheia mcp --list-tools`.
 - CLI command groups: `doctor`, `compatibility`, `plugins`, `conformance`, `adapters`, `docs`, `examples`, `contracts`, `deprecations`, and `v1-gate`.
 - Archive and context-pack formats.
-- Database migration behavior from 0.9.x to 1.0.0.
+- Database migration behavior across supported v1 schemas through 1.3.0.
 
 Semver policy:
 

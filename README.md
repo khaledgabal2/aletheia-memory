@@ -1,5 +1,7 @@
 # Aletheia
 
+[![Release Gates](https://github.com/khaledgabal2/aletheia-memory/actions/workflows/release-gates.yml/badge.svg)](https://github.com/khaledgabal2/aletheia-memory/actions/workflows/release-gates.yml)
+
 Local, auditable memory for AI agents.
 
 Aletheia is a Python package, CLI, and local service for giving agents durable
@@ -26,7 +28,9 @@ clear audit trail.
 - Current version: `1.3.0`
 - Runtime: Python 3.11+
 - Storage: local SQLite
-- License: MIT
+- License: [MIT](LICENSE)
+- Distribution: GitHub/source install and wheel builds are supported today;
+  `pip install aletheia-memory` becomes the primary path after PyPI publication.
 
 ## What Aletheia Provides
 
@@ -57,10 +61,22 @@ clear audit trail.
 
 ## Installation
 
-Install from a published package or release wheel:
+Install directly from the public GitHub repository:
+
+```bash
+python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
+```
+
+After the PyPI package is published, install from the package index:
 
 ```bash
 python -m pip install aletheia-memory
+```
+
+Or install a release wheel:
+
+```bash
+python -m pip install ./dist/aletheia_memory-1.3.0-py3-none-any.whl
 ```
 
 Verify the CLI and bundled docs:
@@ -74,9 +90,9 @@ aletheia docs show introduction
 Install from source:
 
 ```bash
-git clone https://github.com/<owner>/<repo>.git
-cd <repo>
-python -m pip install ".[dev]"
+git clone https://github.com/khaledgabal2/aletheia-memory.git
+cd aletheia-memory
+python -m pip install -e ".[dev]"
 ```
 
 For local development with `uv`:
@@ -458,14 +474,25 @@ Before publishing a new public repository, verify:
 - The Git remote URL does not contain embedded credentials.
 - Historical design docs are acceptable to publish, or are moved to a private
   branch before the public import.
+- `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, and `CHANGELOG.md` are present
+  and match the intended public policy.
+- The PyPI package is published before `pip install aletheia-memory` is
+  presented as the default installation path.
 - `uv run --extra dev pytest` passes.
 - `python scripts/release_gate.py --branch main` passes.
 - The package metadata in `pyproject.toml` has the intended name, version,
-  license, authorship, and project URLs.
+  license, authorship, classifiers, and project URLs.
+
+## Community And Security
+
+- Contributions: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security reports: [SECURITY.md](SECURITY.md)
+- Release notes: [CHANGELOG.md](CHANGELOG.md)
 
 ## Contributing
 
-Contributions should preserve Aletheia's core boundaries: local-first operation,
-evidence-backed memory, candidate-first agent writes, explicit review for trust,
-scoped access, and auditability. Open an issue or discussion before introducing
-new persistent schema, new network behavior, or new active-write paths.
+Contributions should preserve Aletheia's core boundaries: local-first
+operation, evidence-backed memory, candidate-first agent writes, explicit
+review for trust, scoped access, and auditability. Open an issue or discussion
+before introducing new persistent schema, new network behavior, or new
+active-write paths.
