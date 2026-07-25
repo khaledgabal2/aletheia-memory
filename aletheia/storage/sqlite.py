@@ -814,7 +814,8 @@ class SQLiteStore:
             ("plugin_interface", "Storage backend plugin interface", "0.1.0", "experimental", "python:storage_backend", "docs/plugin_developer_guide.md"),
         ]
         for contract_type, name, version, stability, schema_ref, docs_ref in contracts:
-            contract_id = f"contract_{content_hash(f'{contract_type}\0{name}\0{version}')[:24]}"
+            contract_hash_input = f"{contract_type}\0{name}\0{version}"
+            contract_id = f"contract_{content_hash(contract_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO public_contracts (
@@ -847,7 +848,8 @@ class SQLiteStore:
             ("archive", "1", "stable"),
         ]
         for api_type, version, status in api_contracts:
-            row_id = f"apic_{content_hash(f'{api_type}\0{version}')[:24]}"
+            api_hash_input = f"{api_type}\0{version}"
+            row_id = f"apic_{content_hash(api_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO api_contract_versions (
@@ -893,7 +895,8 @@ class SQLiteStore:
             ("plugin_api", "plugin-interface", "1.0.0", "supported", "Manifest and permission model"),
         ]
         for component_type, component_name, version, status, notes in matrix:
-            row_id = f"compat_{content_hash(f'{component_type}\0{component_name}\0{version}')[:24]}"
+            compatibility_hash_input = f"{component_type}\0{component_name}\0{version}"
+            row_id = f"compat_{content_hash(compatibility_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO compatibility_matrix_entries (
@@ -944,7 +947,8 @@ class SQLiteStore:
                 ("error_envelope", "Failures are reported without raw sensitive content", "high"),
             ]
             for case_name, description, severity in cases:
-                case_id = f"case_{content_hash(f'{suite_id}\0{case_name}')[:24]}"
+                case_hash_input = f"{suite_id}\0{case_name}"
+                case_id = f"case_{content_hash(case_hash_input)[:24]}"
                 self.connection.execute(
                     """
                     INSERT OR IGNORE INTO conformance_cases (
@@ -971,7 +975,8 @@ class SQLiteStore:
             ("typescript", "1.0.0-contract", "typescript", "typescript_sdk.v1"),
         ]
         for sdk_name, version, language, contract in sdk_records:
-            row_id = f"sdk_{content_hash(f'{sdk_name}\0{version}')[:24]}"
+            sdk_hash_input = f"{sdk_name}\0{version}"
+            row_id = f"sdk_{content_hash(sdk_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO sdk_release_records (
@@ -1006,7 +1011,8 @@ class SQLiteStore:
             ("python_api", "Python SDK federation methods", "1.3.0", "experimental", "python:aletheia.client.federation", "docs/m10_federated_memory_contract.md"),
         ]
         for contract_type, name, version, stability, schema_ref, docs_ref in contracts:
-            contract_id = f"contract_{content_hash(f'{contract_type}\0{name}\0{version}')[:24]}"
+            contract_hash_input = f"{contract_type}\0{name}\0{version}"
+            contract_id = f"contract_{content_hash(contract_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO public_contracts (
@@ -1038,7 +1044,8 @@ class SQLiteStore:
             ("cli", "1.3.0", "stable"),
         ]
         for api_type, version, status in api_contracts:
-            row_id = f"apic_{content_hash(f'{api_type}\0{version}')[:24]}"
+            api_hash_input = f"{api_type}\0{version}"
+            row_id = f"apic_{content_hash(api_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO api_contract_versions (
@@ -1066,7 +1073,8 @@ class SQLiteStore:
             ("cli", "aletheia", "1.3.0", "supported", "Federation and semantic index command groups"),
         ]
         for component_type, component_name, version, status, notes in matrix:
-            row_id = f"compat_{content_hash(f'{component_type}\0{component_name}\0{version}')[:24]}"
+            compatibility_hash_input = f"{component_type}\0{component_name}\0{version}"
+            row_id = f"compat_{content_hash(compatibility_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO compatibility_matrix_entries (
@@ -1199,7 +1207,8 @@ class SQLiteStore:
                 ("privacy_enforced", "Privacy ceilings and secret exclusions are enforced", "critical"),
             ]
             for case_name, description, severity in cases:
-                case_id = f"case_{content_hash(f'{suite_id}\0{case_name}')[:24]}"
+                case_hash_input = f"{suite_id}\0{case_name}"
+                case_id = f"case_{content_hash(case_hash_input)[:24]}"
                 self.connection.execute(
                     """
                     INSERT OR IGNORE INTO conformance_cases (
@@ -1225,7 +1234,8 @@ class SQLiteStore:
             ("python-async", "1.3.0", "python", "python_sdk.v1.federation"),
         ]
         for sdk_name, version, language, contract in sdk_records:
-            row_id = f"sdk_{content_hash(f'{sdk_name}\0{version}')[:24]}"
+            sdk_hash_input = f"{sdk_name}\0{version}"
+            row_id = f"sdk_{content_hash(sdk_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO sdk_release_records (
@@ -1254,7 +1264,8 @@ class SQLiteStore:
             ("cli_command", "Semantic index lifecycle CLI", "1.3.0", "experimental", "cli:aletheia index", "docs/M11_Embedding_Integration_contract.md"),
         ]
         for contract_type, name, version, stability, schema_ref, docs_ref in contracts:
-            contract_id = f"contract_{content_hash(f'{contract_type}\0{name}\0{version}')[:24]}"
+            contract_hash_input = f"{contract_type}\0{name}\0{version}"
+            contract_id = f"contract_{content_hash(contract_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO public_contracts (
@@ -1284,7 +1295,8 @@ class SQLiteStore:
             ("cli", "aletheia", "1.3.0", "supported", "Semantic index lifecycle commands"),
         ]
         for component_type, component_name, version, status, notes in matrix:
-            row_id = f"compat_{content_hash(f'm11\0{component_type}\0{component_name}\0{version}')[:24]}"
+            compatibility_hash_input = f"m11\0{component_type}\0{component_name}\0{version}"
+            row_id = f"compat_{content_hash(compatibility_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO compatibility_matrix_entries (
@@ -1328,7 +1340,8 @@ class SQLiteStore:
             ("privacy_enforced", "Protected-mode semantic indexing policy is enforced", "critical"),
         ]
         for case_name, description, severity in cases:
-            case_id = f"case_{content_hash(f'{suite_id}\0{case_name}')[:24]}"
+            case_hash_input = f"{suite_id}\0{case_name}"
+            case_id = f"case_{content_hash(case_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO conformance_cases (
@@ -1358,7 +1371,8 @@ class SQLiteStore:
             ("cli_command", "Governed LLM CLI commands", "1.3.0", "experimental", "cli:aletheia llm", "docs/M12_LLM_Integration_contract.md"),
         ]
         for contract_type, name, version, stability, schema_ref, docs_ref in contracts:
-            contract_id = f"contract_{content_hash(f'{contract_type}\0{name}\0{version}')[:24]}"
+            contract_hash_input = f"{contract_type}\0{name}\0{version}"
+            contract_id = f"contract_{content_hash(contract_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO public_contracts (
@@ -1387,7 +1401,8 @@ class SQLiteStore:
             ("cli", "aletheia", "1.3.0", "supported", "Governed LLM command group"),
         ]
         for component_type, component_name, version, status, notes in matrix:
-            row_id = f"compat_{content_hash(f'm12\0{component_type}\0{component_name}\0{version}')[:24]}"
+            compatibility_hash_input = f"m12\0{component_type}\0{component_name}\0{version}"
+            row_id = f"compat_{content_hash(compatibility_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO compatibility_matrix_entries (
@@ -1431,7 +1446,8 @@ class SQLiteStore:
             ("privacy_enforced", "LLM privacy leak checks are available", "critical"),
         ]
         for case_name, description, severity in cases:
-            case_id = f"case_{content_hash(f'{suite_id}\0{case_name}')[:24]}"
+            case_hash_input = f"{suite_id}\0{case_name}"
+            case_id = f"case_{content_hash(case_hash_input)[:24]}"
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO conformance_cases (
