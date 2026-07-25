@@ -464,24 +464,15 @@ Build the package:
 uv build
 ```
 
-## Public Repository Checklist
+## Release Verification
 
-Before publishing a new public repository, verify:
+Before cutting a release, run:
 
-- The default branch is `main`.
-- The repository does not include local databases, generated support bundles,
-  credentials, tokens, private logs, or environment files.
-- The Git remote URL does not contain embedded credentials.
-- Historical design docs are acceptable to publish, or are moved to a private
-  branch before the public import.
-- `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, and `CHANGELOG.md` are present
-  and match the intended public policy.
-- The PyPI package is published before `pip install aletheia-memory` is
-  presented as the default installation path.
-- `uv run --extra dev pytest` passes.
-- `python scripts/release_gate.py --branch main` passes.
-- The package metadata in `pyproject.toml` has the intended name, version,
-  license, authorship, classifiers, and project URLs.
+```bash
+uv run --extra dev pytest
+python scripts/release_gate.py --branch main
+uv build
+```
 
 ## Community And Security
 
