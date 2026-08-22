@@ -62,9 +62,9 @@ addopts = "-q"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aletheia"]
-include = ["aletheia_client.py"]
 
 [tool.hatch.build.targets.wheel.force-include]
+"aletheia_client.py" = "aletheia_client.py"
 "docs" = "aletheia/docs"
 
 [tool.hatch.build.targets.sdist]
