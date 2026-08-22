@@ -1,6 +1,6 @@
 # Installation
 
-This guide covers installing Aletheia v1.3.0, verifying the command line,
+This guide covers installing Aletheia v1.3.1, verifying the command line,
 initializing a local database, and finding the help documents that ship with
 the package.
 
@@ -31,7 +31,7 @@ aletheia docs list
 
 ## Install From PyPI
 
-When the `aletheia-memory` package has been published to PyPI, install it with:
+Install the published `aletheia-memory` package from PyPI:
 
 ```bash
 python -m pip install aletheia-memory
@@ -45,7 +45,7 @@ release wheel instead.
 Install a downloaded release artifact into your environment:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.3.0-py3-none-any.whl
+python -m pip install ./dist/aletheia_memory-1.3.1-py3-none-any.whl
 ```
 
 Then verify the CLI:

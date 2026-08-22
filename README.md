@@ -25,7 +25,7 @@ clear audit trail.
 
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
-- Current version: `1.3.0`
+- Current version: `1.3.1`
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](LICENSE)
@@ -76,7 +76,7 @@ python -m pip install aletheia-memory
 Or install a release wheel:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.3.0-py3-none-any.whl
+python -m pip install ./dist/aletheia_memory-1.3.1-py3-none-any.whl
 ```
 
 Verify the CLI and bundled docs:

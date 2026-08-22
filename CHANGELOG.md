@@ -2,6 +2,16 @@
 
 All notable public changes to Aletheia are tracked here.
 
+## 1.3.1
+
+Patch release to align the PyPI distribution with the current GitHub release
+state.
+
+- Includes the documented `aletheia_client.py` compatibility import module in
+  the wheel distribution.
+- Adds the GitHub Actions Trusted Publishing workflow for TestPyPI and PyPI.
+- No runtime behavior changes.
+
 ## 1.3.0
 
 Initial public release of `aletheia-memory`.

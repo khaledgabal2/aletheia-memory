@@ -1,6 +1,6 @@
 # Aletheia Documentation Index
 
-This is the public help map for Aletheia v1.3.0 on `main`.
+This is the public help map for Aletheia v1.3.1 on `main`.
 Aletheia is a local, auditable memory system for AI agents. The production
 baseline is intentionally generic: product-specific integration layers belong
 on their own branches or forks.
