@@ -1,9 +1,34 @@
 # 1.4.0 Phase 0: scope, baseline and contract decisions
 
-Status: **ready for G0 review; proposed decisions, not implemented contracts**.
+Status: **G0 accepted by the maintainer on 2026-08-30; implementation may proceed**.
 Prepared 2026-08-30. The [release plan](v1_4_0_contract_hardening_and_developer_experience_plan.md)
 is the source of truth. This record makes its Phase 0 choices concrete; it does
 not authorize release, deployment, direct pushes to main, or protection changes.
+
+## Decisions in plain language
+
+The maintainer accepted these recommendations in the project conversation and
+asked that future uncertainty be explained simply before requesting a choice.
+
+1. Start with a small, clearly tested set of features for reading memory,
+   reviewing candidates and connecting agents. Other existing features stay available.
+2. Report the right software version without breaking older clients.
+3. Let a connected client see who it is and what it is allowed to access,
+   without exposing credentials or other users' information.
+4. Start with a simple local browser connection and periodic refresh. Avoid
+   opening broader network access merely to make a demo work.
+5. Refuse a review decision if the memory changed after it was inspected.
+   Retrying the same successful decision must not apply it twice. The first
+   implementation may sometimes ask for review again after unrelated changes.
+6. Let clients load candidate lists in manageable batches without silently
+   skipping records when the list changes.
+7. Use the existing Python methods for the first tutorial. Add another helper
+   only if a real walkthrough shows that it is needed. Review stays explicit.
+8. Generate client types from Memory's own API description and test them
+   against a running service. Desktop remains completely optional.
+
+G0 acceptance is permission to proceed with these choices, not permission to
+merge a PR, publish a release, or change branch protection.
 
 ## Baseline and ownership
 
@@ -308,10 +333,9 @@ tightening. Complete sibling-path analysis belongs to the respective gate.
 - [x] Existing API lifecycle prototyped with explicit automated review.
 - [x] Generator pinned, compiled and exercised over real HTTP.
 - [x] Baseline and new harness checks recorded in the evidence document.
-- [ ] Maintainer accepts D1–D8, the gap register and compatibility matrix through review.
+- [x] Maintainer accepted the recommendations in the project conversation on 2026-08-30.
 
-G0 is **not marked passed by generating this document**. The first PR is the
-reviewable scope/decision package. After acceptance, Phase 1 implements version
+G0 is accepted; G1–G6 still need their implementation evidence. Phase 1 implements version
 reporting/legacy compatibility and principal discovery in small PRs; Phase 2
 establishes safe typed reads and real-browser proof. Phase 3 delivers the public
 first-run experience; Phase 4 implements the separately reviewed storage/write

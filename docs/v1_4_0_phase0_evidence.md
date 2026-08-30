@@ -103,7 +103,7 @@ The copied driver is a test harness, not a new public package API.
 
 ## What is not passed
 
-G0 still requires maintainer acceptance of the concrete scope/decisions. G1–G6
+The maintainer accepted G0 on 2026-08-30 in the project conversation. G1–G6
 are not certified by these checks. In particular, typed domain schemas,
 principal discovery, privacy/permission corrections, browser topology, atomic
 revisions/replay, reverse compatibility, migration/restore behavior, the human
