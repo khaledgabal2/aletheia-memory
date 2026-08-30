@@ -29,8 +29,7 @@ clear audit trail.
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](LICENSE)
-- Distribution: GitHub/source install and wheel builds are supported today;
-  `pip install aletheia-memory` becomes the primary path after PyPI publication.
+- Distribution: published on PyPI; source installs and release wheels are also supported.
 
 ## What Aletheia Provides
 
@@ -61,16 +60,16 @@ clear audit trail.
 
 ## Installation
 
-Install directly from the public GitHub repository:
-
-```bash
-python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
-```
-
-After the PyPI package is published, install from the package index:
+Install the published package from PyPI:
 
 ```bash
 python -m pip install aletheia-memory
+```
+
+For an unreleased source checkout, install from GitHub:
+
+```bash
+python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
 ```
 
 Or install a release wheel:

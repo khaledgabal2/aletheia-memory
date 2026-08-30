@@ -13,6 +13,7 @@ from aletheia.core.errors import ValidationError
 from aletheia.core.time import utc_now
 from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService
+from aletheia.version import software_version
 from aletheia.service.http import AletheiaService, openapi_schema
 
 
@@ -515,7 +516,7 @@ def test_m10_http_cli_openapi_and_sdk_surfaces(tmp_path, capsys):
         assert len(envelope["data"]) == 3
 
         schema = openapi_schema()
-        assert schema["info"]["version"] == "1.3.0"
+        assert schema["info"]["version"] == software_version()
         for path in [
             "/v1/federation/status",
             "/v1/peers/{peer_id}/trust",

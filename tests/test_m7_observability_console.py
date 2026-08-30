@@ -10,6 +10,7 @@ from aletheia import Memory
 from aletheia.core.ids import new_id
 from aletheia.core.time import utc_now, utc_now_iso
 from aletheia.models import ServiceConfig
+from aletheia.version import software_version
 from aletheia.service.http import AletheiaService, openapi_schema
 
 
@@ -302,7 +303,7 @@ def test_dashboard_saved_views_delete_and_openapi_include_m7_paths(tmp_path):
         assert deleted["data"]["deleted"] == view_id
 
         paths = openapi_schema()["paths"]
-        assert openapi_schema()["info"]["version"] == "1.3.0"
+        assert openapi_schema()["info"]["version"] == software_version()
         assert "/v1/dashboard/overview" in paths
         assert "/v1/reviews/{review_task_id}/resolve" in paths
         assert "/v1/traces/retrieval" in paths

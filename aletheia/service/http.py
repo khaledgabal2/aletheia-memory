@@ -21,6 +21,7 @@ from aletheia.core.ids import content_hash, new_id
 from aletheia.core.time import parse_iso, utc_now, utc_now_iso
 from aletheia.models import ApiToken, ServiceConfig, ServiceHealth
 from aletheia.service.auth import AuthContext, AuthService
+from aletheia.service.contracts import DISCOVERY_PATHS, apply_discovery_contracts
 from aletheia.service.errors import (
     ServiceError,
     forbidden,
@@ -32,6 +33,7 @@ from aletheia.service.errors import (
     validation_error,
 )
 from aletheia.storage import SCHEMA_VERSION
+from aletheia.version import discovery_metadata, software_version
 
 
 PUBLIC_ENDPOINTS = {
@@ -289,6 +291,7 @@ class AletheiaService:
         self.config = config
         self.auth = AuthService(memory)
         self.lock = threading.RLock()
+        self.service_identity = new_id("service")
 
     @classmethod
     def open(cls, config: ServiceConfig) -> "AletheiaService":
@@ -417,13 +420,15 @@ class AletheiaService:
         headers: Mapping[str, str],
     ) -> tuple[Any, list[str], dict | None]:
         if method == "GET" and endpoint == "/v1/health":
-            return asdict(self.service_health()), [], None
+            return {**asdict(self.service_health()), **self._discovery_metadata()}, [], None
         if method == "GET" and endpoint == "/v1/ready":
-            return {"ready": True, **asdict(self.service_health())}, [], None
+            return {"ready": True, **asdict(self.service_health()), **self._discovery_metadata()}, [], None
         if method == "GET" and endpoint == "/v1/version":
-            return {"service_version": SCHEMA_VERSION, "api_version": "v1"}, [], None
+            return {"service_version": software_version(), **self._discovery_metadata()}, [], None
         if method == "GET" and endpoint == "/v1/openapi.json":
             return openapi_schema(), [], None
+        if method == "GET" and endpoint == "/v1/auth/me":
+            return {**self.auth.current_principal(auth_context), **self._discovery_metadata()}, [], None
 
         if endpoint.startswith("/v1/console"):
             return self._console_endpoint(method, endpoint, query, payload, auth_context, headers=headers), [], None
@@ -532,6 +537,9 @@ class AletheiaService:
 
         raise not_found(f"Endpoint not found: {method} {endpoint}")
 
+    def _discovery_metadata(self) -> dict:
+        return {**discovery_metadata(), "service_identity": self.service_identity}
+
     def service_health(self) -> ServiceHealth:
         health = self.memory.health()
         warnings = []
@@ -540,7 +548,7 @@ class AletheiaService:
         return ServiceHealth(
             status="ok" if not warnings else "degraded",
             schema_version=health.get("schema_version", "unknown"),
-            service_version=SCHEMA_VERSION,
+            service_version=software_version(),
             auth_required=self.config.auth_required,
             warnings=warnings,
         )
@@ -1516,11 +1524,11 @@ class AletheiaService:
             return self.memory.check_deprecations()
 
         if method == "GET" and endpoint == "/v1/compatibility/report":
-            return self.memory.compatibility_report(
+            return {**self.memory.compatibility_report(
                 include_plugins=self._query_bool(query, "include_plugins", default=True),
                 include_sdks=self._query_bool(query, "include_sdks", default=True),
                 include_runtime=self._query_bool(query, "include_runtime", default=True),
-            )
+            ), **self._discovery_metadata()}
         if method == "GET" and endpoint == "/v1/compatibility/matrix":
             return [
                 asdict(item)
@@ -2157,6 +2165,22 @@ class AletheiaService:
             self.auth.require_namespace(auth_context, namespace=namespace, project_id=payload.get("project_id"))
 
     def _authenticate(self, method: str, endpoint: str, headers: Mapping[str, str]) -> AuthContext:
+        if endpoint == "/v1/auth/me":
+            raw_auth = self._header(headers, "Authorization")
+            # Supplied credentials must be validated even in local tokenless mode.
+            if raw_auth is not None:
+                return self.auth.authenticate(raw_auth, auth_required=True)
+            if self._header(headers, "X-Console-Session") or self._cookie(headers, "aletheia_console"):
+                return self._authenticate_console_or_api(method, endpoint, headers)
+            protected = self.memory.store.connection.execute(
+                "SELECT enabled FROM protected_mode_config WHERE id = 'protected_default'"
+            ).fetchone()
+            return self.auth.authenticate(
+                None,
+                auth_required=self.config.auth_required or protected is None or bool(protected["enabled"]),
+                default_namespace_grants=[self.memory.namespace],
+                default_privacy_ceiling=self.config.default_privacy_ceiling,
+            )
         if endpoint == "/v1/console/login":
             return AuthContext(token=None, client=None, auth_required=False)
         if self._is_console_api(endpoint):
@@ -3053,6 +3077,11 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
 
     def _send_payload(self, status: int, payload: dict) -> None:
         response_headers = payload.pop("_headers", {}) if isinstance(payload, dict) else {}
+        if self.path.split("?", 1)[0] in DISCOVERY_PATHS:
+            response_headers["Cache-Control"] = "no-store"
+            request_id = payload.get("request_id") if isinstance(payload, dict) else None
+            if isinstance(request_id, str) and len(request_id) <= 200 and all(32 <= ord(c) < 127 for c in request_id):
+                response_headers["X-Request-ID"] = request_id
         if isinstance(payload, dict) and "_raw_body" in payload:
             raw = str(payload.get("_raw_body", "")).encode("utf-8")
             content_type = str(payload.get("_content_type", "text/plain; charset=utf-8"))
@@ -3079,6 +3108,7 @@ def openapi_schema() -> dict:
         ("GET", "/v1/ready", None),
         ("GET", "/v1/version", None),
         ("GET", "/v1/openapi.json", None),
+        ("GET", "/v1/auth/me", None),
         ("POST", "/v1/context", "memory:context"),
         ("POST", "/v1/context-pack", "memory:context"),
         ("POST", "/v1/retrieve", "memory:read"),
@@ -3326,9 +3356,9 @@ def openapi_schema() -> dict:
                 "content": {"application/json": {"schema": {"type": "object", "additionalProperties": True}}},
             }
         paths.setdefault(path, {})[method.lower()] = operation
-    return {
+    schema = {
         "openapi": "3.1.0",
-        "info": {"title": "Aletheia Local Memory API", "version": SCHEMA_VERSION},
+        "info": {"title": "Aletheia Local Memory API", "version": software_version()},
         "security": [{"bearerAuth": []}],
         "components": {
             "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer"}},
@@ -3379,3 +3409,4 @@ def openapi_schema() -> dict:
         },
         "paths": paths,
     }
+    return apply_discovery_contracts(schema)

@@ -45,6 +45,7 @@ from aletheia.models import (
     V1ReleaseGateRun,
 )
 from aletheia.storage import SCHEMA_VERSION
+from aletheia.version import discovery_metadata, software_version
 
 
 PLUGIN_TYPES = {
@@ -185,7 +186,7 @@ def register_public_contract(
                 name,
                 version,
                 stability,
-                SCHEMA_VERSION,
+                software_version(),
                 schema_ref,
                 documentation_ref,
                 now,
@@ -842,9 +843,13 @@ def compatibility_report(memory, *, include_plugins: bool = True, include_sdks: 
     plugins = list_plugins(memory) if include_plugins else []
     plugin_warnings = [f"Plugin {plugin['name']} is {plugin['status']}." for plugin in plugins if plugin["status"] in {"incompatible", "blocked", "failed", "quarantined"}]
     report = {
+        # Historical alias required by the published 1.3.1 SDK equality check.
         "aletheia_version": SCHEMA_VERSION,
         "schema_version": memory.health()["schema_version"],
-        "api_version": "v1",
+        **discovery_metadata(),
+        "deprecated_fields": {
+            "aletheia_version": "Historical expected-schema version; use software_version for the software release."
+        },
         "python_version": py_platform.python_version() if include_runtime else None,
         "platform": py_platform.platform() if include_runtime else None,
         "sqlite_version": sqlite3.sqlite_version if include_runtime else None,
@@ -978,7 +983,7 @@ def build_docs(
             """,
             (
                 build_id,
-                SCHEMA_VERSION,
+                software_version(),
                 str(out),
                 int(validate_examples),
                 warning_count,
@@ -1036,7 +1041,7 @@ def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
         if status == "failed":
             warnings.append(detail)
 
-    add("package_version", "passed", f"Aletheia {SCHEMA_VERSION}")
+    add("package_version", "passed", f"Aletheia {software_version()}")
     add("python_version", "passed", py_platform.python_version())
     add("sqlite_available", "passed", sqlite3.sqlite_version)
     health = memory.health()
@@ -1217,7 +1222,7 @@ def v1_gate_run(
             """,
             (
                 run_id,
-                SCHEMA_VERSION,
+                software_version(),
                 status,
                 json.dumps(checks, sort_keys=True),
                 json.dumps(critical_failures, sort_keys=True),

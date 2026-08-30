@@ -13,6 +13,7 @@ from aletheia.cli.main import main
 from aletheia.core.errors import NotFoundError, ValidationError
 from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService
+from aletheia.version import software_version
 from aletheia.service.http import AletheiaService, openapi_schema
 
 
@@ -941,7 +942,7 @@ def test_m8_cli_and_http_surfaces(tmp_path, capsys):
             read_only_service.close()
 
         schema = openapi_schema()
-        assert schema["info"]["version"] == "1.3.0"
+        assert schema["info"]["version"] == software_version()
         assert "/v1/backups/create" in schema["paths"]
         assert "/v1/readiness/check" in schema["paths"]
     finally:

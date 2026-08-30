@@ -49,7 +49,9 @@ cli = []
 server = []
 mcp = []
 dev = [
-  "pytest"
+  "pytest",
+  "jsonschema>=4.23,<5",
+  "openapi-spec-validator>=0.7,<0.9",
 ]
 
 [project.scripts]

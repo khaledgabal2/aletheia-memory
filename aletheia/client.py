@@ -42,6 +42,10 @@ class AletheiaServerError(AletheiaClientError):
     pass
 
 
+class AletheiaUnsupportedFeatureError(AletheiaClientError):
+    pass
+
+
 ERROR_TYPES = {
     "unauthorized": AletheiaUnauthorizedError,
     "forbidden": AletheiaForbiddenError,
@@ -68,17 +72,47 @@ class AletheiaClient:
     def version(self, *, request_id: str | None = None) -> dict:
         return self._request("GET", "/v1/version", request_id=request_id)
 
-    def check_compatibility(self) -> dict:
+    def current_principal(self, *, request_id: str | None = None) -> dict:
+        try:
+            return self._request("GET", "/v1/auth/me", request_id=request_id)
+        except AletheiaClientError as exc:
+            if exc.status_code != 404:
+                raise
+            raise AletheiaUnsupportedFeatureError(
+                "This service does not provide current-principal discovery. Use a service with the current-principal feature.",
+                code="unsupported_operation", status_code=404,
+                details={"required_feature": "current-principal"},
+            ) from exc
+
+    def check_compatibility(self, *, required_profiles: list[str] | None = None) -> dict:
+        if required_profiles is not None and (
+            not isinstance(required_profiles, (list, tuple))
+            or not all(isinstance(profile, str) and profile for profile in required_profiles)
+        ):
+            raise ValueError("required_profiles must be a list of non-empty profile names")
         report = self.compatibility_report()
         version = self.version()
         api_version = version.get("api_version")
-        compatible = api_version == "v1" and report.get("schema_version") == report.get("aletheia_version")
+        profiles = version.get("supported_profiles")
+        has_profile_discovery = isinstance(profiles, list) and all(isinstance(item, str) for item in profiles)
+        supported = sorted(set(profiles)) if has_profile_discovery else []
+        missing = sorted(set(required_profiles or []) - set(supported))
+        warnings = list(report.get("warnings") or [])
+        if not has_profile_discovery:
+            warnings.append("Legacy service: profile support is unknown; only existing v1 operations are available.")
+        if missing:
+            warnings.append("Required profiles unavailable: " + ", ".join(missing))
+        compatible = api_version == "v1" and report.get("api_version", api_version) == "v1" and not missing
         return {
             "compatible": compatible,
             "client_api_version": "v1",
             "server_api_version": api_version,
-            "server_version": version.get("service_version"),
-            "warnings": report.get("warnings", []),
+            "server_version": version.get("software_version", version.get("service_version")),
+            "supported_profiles": supported,
+            "missing_profiles": missing,
+            "limited_capabilities": not has_profile_discovery,
+            "service_identity": version.get("service_identity"),
+            "warnings": warnings,
             "report": report,
         }
 
@@ -406,8 +440,11 @@ class AsyncAletheiaClient:
     async def version(self, **kwargs) -> dict:
         return await asyncio.to_thread(self._sync.version, **kwargs)
 
-    async def check_compatibility(self) -> dict:
-        return await asyncio.to_thread(self._sync.check_compatibility)
+    async def current_principal(self, **kwargs) -> dict:
+        return await asyncio.to_thread(self._sync.current_principal, **kwargs)
+
+    async def check_compatibility(self, **kwargs) -> dict:
+        return await asyncio.to_thread(self._sync.check_compatibility, **kwargs)
 
     async def context_pack(self, **payload) -> dict:
         return await asyncio.to_thread(self._sync.context_pack, **payload)

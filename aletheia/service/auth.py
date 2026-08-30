@@ -316,6 +316,31 @@ class AuthService:
             return
         raise forbidden(f"Capability required: {capability}", {"required_capability": capability})
 
+    def current_principal(self, context: AuthContext) -> dict:
+        """Allowlist self metadata; never serialize ApiToken or arbitrary metadata."""
+        mode = "bearer" if context.token else "local_tokenless"
+        principal = None
+        if context.client is not None:
+            principal = {
+                "id": context.client.id,
+                "name": context.client.name,
+                "client_type": context.client.client_type,
+            }
+        elif context.token and context.token.metadata.get("console_session"):
+            mode = "console_session"
+            # A console session need not represent a registered API client.
+        granted = sorted(set(context.capabilities))
+        return {
+            "authentication_mode": mode,
+            "authenticated": context.token is not None,
+            "principal": principal,
+            "granted_capabilities": granted,
+            "capabilities": sorted(CAPABILITIES) if "memory:admin" in granted else granted,
+            "namespace_grants": sorted(set(context.namespace_grants)),
+            "privacy_ceiling": context.privacy_ceiling,
+            "expires_at": context.token.expires_at if context.token else None,
+        }
+
     def require_namespace(
         self,
         context: AuthContext,

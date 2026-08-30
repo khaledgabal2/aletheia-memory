@@ -5,6 +5,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "generate": "openapi-typescript ../../tests/fixtures/v1_3_1/openapi.json -o generated/baseline.d.ts",
+    "generate:discovery": "openapi-typescript generated/discovery.json -o generated/discovery.d.ts",
     "check": "tsc --noEmit",
     "build": "tsc"
   },

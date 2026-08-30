@@ -92,10 +92,12 @@ Compatibility-report transition:
 | `software_version` | Installed software version, canonical. |
 | `api_version` | Protocol family, `v1`. |
 | `schema_version` | Actual persisted schema version. |
-| `aletheia_version` | Deprecated historical schema alias, retained equal to actual `schema_version` for the old SDK check. Not software version. |
+| `aletheia_version` | Deprecated historical expected-schema value. Equals actual `schema_version` on compatible storage; a mismatch still fails the old SDK check. Not software version. |
 | `supported_profiles` | Only profiles whose gates passed. |
 | `service_identity` | Opaque identity for this running service instance. |
 
+Phase 1 clarified the bridge against the published SDK: preserve its rejection
+of unsupported storage, rather than making the equality check pass unconditionally.
 The alias receives explicit deprecation documentation; removal is outside this
 release. The 1.3.1 SDK fixture remains byte-identical to the published package.
 The new SDK checks API compatibility and explicitly requested profile support,

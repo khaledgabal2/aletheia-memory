@@ -14,12 +14,12 @@ the package.
 The Python package name is `aletheia-memory`. The console script is named
 `aletheia`.
 
-## Install From GitHub
+## Install From PyPI
 
-Install the public repository directly:
+Install the published package:
 
 ```bash
-python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
+python -m pip install aletheia-memory
 ```
 
 Then verify the CLI:
@@ -29,16 +29,16 @@ aletheia --help
 aletheia docs list
 ```
 
-## Install From PyPI
+## Install From GitHub
 
-Install the published `aletheia-memory` package from PyPI:
+For an unreleased source checkout, install the public repository directly:
 
 ```bash
-python -m pip install aletheia-memory
+python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
 ```
 
-If pip reports that no matching distribution exists, install from GitHub or a
-release wheel instead.
+The source checkout can contain unreleased changes. Prefer the PyPI package for
+the published version.
 
 ## Install From A Release Wheel
 
