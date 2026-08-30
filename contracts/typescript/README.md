@@ -1,4 +1,4 @@
-# Memory contract-toolchain baseline
+# Memory contract tooling
 
 Private, development-only tooling owned by Memory. No Desktop checkout or code
 is used. Nothing here is installed by `pip install aletheia-memory`.
@@ -10,10 +10,14 @@ npm ci --prefix contracts/typescript --ignore-scripts --no-audit --no-fund
 npm run generate --prefix contracts/typescript
 python -m scripts.v1_4_discovery_contract --output contracts/typescript/generated/discovery.json
 npm run generate:discovery --prefix contracts/typescript
+python -m scripts.v1_4_read_contract --output contracts/typescript/generated/read.json
+npm run generate:read --prefix contracts/typescript
 npm run check --prefix contracts/typescript
 npm run build --prefix contracts/typescript
 python scripts/v1_4_phase0.py --typescript
 python -m scripts.v1_4_discovery_contract --typescript
+python -m scripts.v1_4_read_contract --typescript
+npm test --prefix contracts/typescript
 ```
 
 Tested with Node 26.0.0. Tool versions are pinned in package.json and package-lock.json.
@@ -36,7 +40,34 @@ the same Memory-owned local-service harness.
 Phase 1 additionally captures and strictly validates the six current discovery
 operations before generation. `discovery.ts` exercises software/schema versions,
 principal identity, permission metadata and errors with generated domain types.
-The rest of the read/review profiles remain unadvertised pending their gates.
+Phase 2 implements and advertises `memory-read-v1` on the development branch;
+review/onboarding remain unadvertised. The canonical read schema is captured
+from the running Memory service. Its generated request defaults remain optional
+(`--default-non-nullable false`); no handwritten payload substitutes are used.
+See [read contract](../../docs/v1_4_0_read_contract.md) for scope, limits and redaction.
+
+## Actual browser check
+
+After generation/build above:
+
+```sh
+python -m scripts.v1_4_read_contract --browser
+```
+
+Open the printed loopback URL and select **Run browser checks**. This starts a
+Memory-owned page and fixed same-origin proxy with a disposable database and
+synthetic credentials. The page checks actual authenticated reads, cache and
+correlation headers, privacy changes, revocation, cancellation, reconnect and
+absence of domain writes. **Connect demo**, **Narrow demo privacy**, **Revoke demo
+credentials** and **Disconnect** exercise the live poller and cache clearing.
+The Node tests additionally cover stalled bodies, background/offline lifecycle,
+non-overlap, late results, changed access during a request and bounded retries.
+
+The fixture is a development test harness, not a deployment proxy or credential
+provisioning API. Do not point it at a real database. Stop it with Ctrl-C; its
+database and credentials are discarded. No token is written to browser storage.
+The source distribution includes this tooling; the Python wheel has no Node
+runtime dependency. A packaged end-user TypeScript starter remains Phase 5 work.
 
 Reverse compatibility is a separate installed-service check:
 

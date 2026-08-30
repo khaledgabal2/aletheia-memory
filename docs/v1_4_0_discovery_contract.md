@@ -37,7 +37,9 @@ schema representation; discovery coverage is not complete read/review coverage.
 - `api_version`: `v1`, independent of the software release number.
 - `schema_version`: actual persistent schema, unchanged by this work.
 - `supported_features`: currently includes `current-principal`.
-- `supported_profiles`: remains empty until each complete profile passes its gate.
+- `supported_profiles`: advertises a profile only after its complete gate passes.
+  Phase 1 advertised none; the Phase 2 branch adds `memory-read-v1` (see the
+  [read contract](v1_4_0_read_contract.md)). Review/onboarding remain unavailable.
 - `service_identity`: random identity stable for one running service instance.
   Restarting the service changes it. It contains no path, token or hardware identity.
 

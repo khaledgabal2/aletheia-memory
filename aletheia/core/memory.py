@@ -6784,58 +6784,40 @@ class Memory:
             omitted=omitted,
         )
         if record_usage:
-            with self.store.transaction():
-                self._write_context_pack_log(
-                    context_pack_id=context_pack_id,
-                    namespace=namespace,
-                    query=query,
-                    session_id=session_id,
-                    project_id=project_id,
-                    token_budget=token_budget,
-                    item_count=len(pack.items()),
-                    metadata={
-                        "omitted_count": len(omitted),
-                        "include_confidence": include_confidence,
-                        "include_reflections": include_reflections,
-                        "include_inferences": include_inferences,
-                        "include_derivation_metadata": include_derivation_metadata,
-                        "ranking_policy_version_id": ranking_policy_version_id,
-                        "context_policy_version_id": context_policy_version_id,
-                    },
-                )
-                self._record_context_usage_in_transaction(
-                    namespace=namespace,
-                    context_pack_id=context_pack_id,
-                    query=query,
-                    session_id=session_id,
-                    project_id=project_id,
-                    item_count=len(pack.items()),
-                    token_estimate=used_tokens,
-                    metadata=pack.metadata,
-                )
-                for index, item in enumerate(pack.items(), start=1):
-                    target_type = "claim"
-                    target_id = item.claim_id
-                    if item.reflection_id:
-                        target_type = "reflection"
-                        target_id = item.reflection_id
-                    elif item.inference_id:
-                        target_type = "inference"
-                        target_id = item.inference_id
-                    self._record_usage_in_transaction(
-                        namespace=namespace,
-                        target_id=target_id,
-                        target_type=target_type,
-                        usage_type="included_in_context",
-                        query=query,
-                        session_id=session_id,
-                        project_id=project_id,
-                        context_pack_id=context_pack_id,
-                        rank=index,
-                        score=None,
-                        metadata={"section": item.reason, "source_kind": item.source_kind},
-                    )
+            self._record_context_pack_usage(pack, token_estimate=used_tokens, metadata={
+                "include_confidence": include_confidence,
+                "include_reflections": include_reflections,
+                "include_inferences": include_inferences,
+                "include_derivation_metadata": include_derivation_metadata,
+            })
         return pack
+
+    def _record_context_pack_usage(self, pack: ContextPack, *, metadata: dict, token_estimate: int | None = None) -> None:
+        """Record the pack actually delivered, after any service access filtering."""
+        with self.store.transaction():
+            self._write_context_pack_log(
+                context_pack_id=pack.id, namespace=pack.namespace, query=pack.query,
+                session_id=pack.session_id, project_id=pack.project_id, token_budget=pack.token_budget,
+                item_count=len(pack.items()), metadata={
+                    **metadata, "omitted_count": len(pack.omitted),
+                    "ranking_policy_version_id": pack.ranking_policy_version_id,
+                    "context_policy_version_id": pack.context_policy_version_id,
+                },
+            )
+            self._record_context_usage_in_transaction(
+                namespace=pack.namespace, context_pack_id=pack.id, query=pack.query,
+                session_id=pack.session_id, project_id=pack.project_id, item_count=len(pack.items()),
+                token_estimate=token_estimate if token_estimate is not None else sum(self._estimate_tokens(item.text) for item in pack.items()),
+                metadata=pack.metadata,
+            )
+            for index, item in enumerate(pack.items(), start=1):
+                target_type = "reflection" if item.reflection_id else "inference" if item.inference_id else "claim"
+                self._record_usage_in_transaction(
+                    namespace=pack.namespace, target_id=item.reflection_id or item.inference_id or item.claim_id,
+                    target_type=target_type, usage_type="included_in_context", query=pack.query,
+                    session_id=pack.session_id, project_id=pack.project_id, context_pack_id=pack.id,
+                    rank=index, score=None, metadata={"section": item.reason, "source_kind": item.source_kind},
+                )
 
     def resolve_claim(
         self,

@@ -138,7 +138,7 @@ def apply_discovery_contracts(schema):
                 "schema": {"type": "boolean", "default": True},
                 "description": "Legacy truthy spellings 1, true, yes, on are accepted; other supplied values are false.",
             } for key in ["include_plugins", "include_sdks", "include_runtime"]]
-        statuses = [200, 400, 413, 429, 500]
+        statuses = [200, 400, 403, 413, 429, 500]
         if not public:
             statuses.append(401)
         if capability:

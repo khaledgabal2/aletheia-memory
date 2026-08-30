@@ -121,6 +121,8 @@ The proposed 1.4.0 release is tracked separately from the installed v1.3.1 API:
 - [Phase 0 verification evidence](v1_4_0_phase0_evidence.md)
 - [Discovery foundation](v1_4_0_discovery_contract.md)
 - [Phase 1 verification evidence](v1_4_0_phase1_evidence.md)
+- [Read contract](v1_4_0_read_contract.md)
+- [Phase 2 verification evidence](v1_4_0_phase2_evidence.md)
 - [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 
 The milestone contracts are included for maintainers and advanced users who

@@ -375,13 +375,13 @@ def test_http_boundary_rejects_oversized_and_malformed_lengths_before_body_read(
         thread.start()
 
         with socket.create_connection((host, port), timeout=2) as sock:
-            sock.sendall(b"POST /v1/remember HTTP/1.1\r\nHost: localhost\r\nContent-Length: 9\r\n\r\n")
+            sock.sendall(f"POST /v1/remember HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Length: 9\r\n\r\n".encode())
             response = b"".join(iter(lambda: sock.recv(4096), b""))
         assert b"413" in response
         assert b"payload_too_large" in response
 
         with socket.create_connection((host, port), timeout=2) as sock:
-            sock.sendall(b"POST /v1/remember HTTP/1.1\r\nHost: localhost\r\nContent-Length: nope\r\n\r\n")
+            sock.sendall(f"POST /v1/remember HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Length: nope\r\n\r\n".encode())
             response = b"".join(iter(lambda: sock.recv(4096), b""))
         assert b"400" in response
         assert b"validation_error" in response
@@ -440,8 +440,9 @@ def test_http_api_envelopes_idempotency_rate_limit_audit_and_admin_gates(tmp_pat
     assert status == 403
 
     status, audit = _get(service, f"/v1/audit/candidate/{candidate_id}", token)
-    assert status == 200
-    assert any(entry["action"] == "service.remember_candidate" for entry in audit["data"]["audit"])
+    # Candidate inspection, including the audit view, requires review capability.
+    assert status == 403
+    assert audit["error"]["code"] == "forbidden"
     status, health_report = _get(service, f"/v1/health-report?namespace={NAMESPACE}", token)
     assert status == 403
     assert health_report["error"]["code"] == "forbidden"
@@ -508,8 +509,9 @@ def test_mcp_tools_are_candidate_first_logged_and_namespace_capability_aware(tmp
     )
     assert candidate["write_mode"] == "candidate"
     assert service.memory.list_claims(namespace=NAMESPACE) == []
-    audit = registry.invoke("memory_audit", {"target_type": "candidate", "target_id": candidate["candidate"]["id"]})
-    assert audit["audit"]
+    with pytest.raises(ServiceError) as denied:
+        registry.invoke("memory_audit", {"target_type": "candidate", "target_id": candidate["candidate"]["id"]})
+    assert denied.value.status_code == 403
 
     with pytest.raises(PermissionError):
         registry.invoke("memory_remember", {**_remember_payload(namespace=NAMESPACE), "write_mode": "active"})

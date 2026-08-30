@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,6 +22,8 @@ from aletheia.core.time import parse_iso, utc_now, utc_now_iso
 from aletheia.models import ApiToken, ServiceConfig, ServiceHealth
 from aletheia.service.auth import AuthContext, AuthService
 from aletheia.service.contracts import DISCOVERY_PATHS, apply_discovery_contracts
+from aletheia.service.reads import READ_POST_PATHS, ReadAccess, is_read_path
+from aletheia.service.read_contracts import apply_read_contracts, validate_read_input
 from aletheia.service.errors import (
     ServiceError,
     forbidden,
@@ -307,6 +309,14 @@ class AletheiaService:
         self.memory.close()
 
     def handle_http(
+        self, *, method: str, path: str, headers: Mapping[str, str], body: bytes = b"",
+    ) -> tuple[int, dict]:
+        # HTTP handlers share one SQLite connection. Keep authentication writes
+        # and request logging out of another request's read transaction.
+        with self.lock:
+            return self._handle_http(method=method, path=path, headers=headers, body=body)
+
+    def _handle_http(
         self,
         *,
         method: str,
@@ -356,7 +366,7 @@ class AletheiaService:
                 else:
                     replay = None
             if replay is None:
-                data, warnings, pagination = self._route(
+                data, warnings, pagination = self._route_consistent(
                     method=method,
                     endpoint=endpoint,
                     query=query,
@@ -407,6 +417,17 @@ class AletheiaService:
                 response=response if "response" in locals() else None,
             )
         return status, response
+
+    def _route_consistent(self, **kwargs):
+        endpoint, method = kwargs["endpoint"], kwargs["method"]
+        if is_read_path(endpoint) and (method == "GET" or endpoint in READ_POST_PATHS):
+            # One SQLite snapshot for authorization, provenance and serialization;
+            # the store lock also excludes other writers on this connection.
+            with self.lock, self.memory.store.transaction():
+                kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"])
+                validate_read_input(endpoint, kwargs["query"], kwargs["payload"], self._header(kwargs["headers"], "X-Aletheia-Contract"))
+                return self._route(**kwargs)
+        return self._route(**kwargs)
 
     def _route(
         self,
@@ -479,7 +500,7 @@ class AletheiaService:
 
         if method == "GET" and endpoint == "/v1/candidates":
             namespace = self._query_value(query, "namespace")
-            self._require(auth_context, "memory:review", {"namespace": namespace})
+            self._require(auth_context, "memory:review", {"namespace": namespace, "project_id": self._query_value(query, "project_id", none_if_missing=True)})
             candidates = self.memory.list_candidates(
                 namespace,
                 status=self._query_value(query, "status", none_if_missing=True),
@@ -487,14 +508,16 @@ class AletheiaService:
                 project_id=self._query_value(query, "project_id", none_if_missing=True),
                 limit=self._limit(query),
             )
+            access = ReadAccess(self, auth_context)
+            candidates = [candidate for candidate in candidates if access.allowed("candidate_claim", candidate.id)]
             return [asdict(candidate) for candidate in candidates], [], self._pagination(len(candidates), query)
         if method == "GET" and endpoint.startswith("/v1/candidates/"):
             parts = endpoint.split("/")
             candidate_id = parts[3]
             if len(parts) == 4:
                 self.auth.require_capability(auth_context, "memory:review")
+                ReadAccess(self, auth_context).require("candidate_claim", candidate_id)
                 candidate = self.memory.read_candidate(candidate_id)
-                self._require(auth_context, "memory:review", {"namespace": candidate.namespace})
                 return asdict(candidate), [], None
             if len(parts) == 5 and method == "GET":
                 raise not_found(f"Unsupported candidate endpoint: {endpoint}")
@@ -519,10 +542,7 @@ class AletheiaService:
                 raise not_found(endpoint)
             target_type, target_id = parts[3], parts[4]
             self.auth.require_capability(auth_context, "memory:audit")
-            namespace = self._namespace_for_target(target_type, target_id)
-            if namespace:
-                self.auth.require_namespace(auth_context, namespace=namespace)
-            return self.memory.audit(target_id) | {"requested_target_type": target_type}, [], None
+            return ReadAccess(self, auth_context).audit(target_type, target_id), [], None
 
         if endpoint.startswith("/v1/sessions"):
             return self._sessions_endpoint(method, endpoint, query, payload, auth_context), [], None
@@ -557,6 +577,7 @@ class AletheiaService:
         namespace = self._required(payload, "namespace")
         project_id = payload.get("project_id")
         self.auth.require_namespace(auth_context, namespace=namespace, project_id=project_id)
+        self._require_read_session(payload, auth_context)
         pack = self.memory.context_pack(
             namespace=namespace,
             query=payload.get("query", ""),
@@ -568,9 +589,16 @@ class AletheiaService:
             include_inferences=bool(payload.get("include_inferences", False)),
             include_derivation_metadata=bool(payload.get("include_derivation_metadata", False)),
             policy_version_id=payload.get("policy_version_id"),
-            record_usage=bool(payload.get("record_usage", False)),
+            record_usage=False,
         )
-        pack, omitted_by_policy = self._filtered_context_pack_privacy(pack, auth_context)
+        pack, omitted_by_policy = ReadAccess(self, auth_context).filter_context(pack)
+        if payload.get("record_usage", False):
+            self.memory._record_context_pack_usage(pack, metadata={
+                "include_confidence": True,
+                "include_reflections": bool(payload.get("include_reflections", True)),
+                "include_inferences": bool(payload.get("include_inferences", False)),
+                "include_derivation_metadata": False,
+            })
         warnings = ["Some memories were omitted due to access policy."] if omitted_by_policy else []
         data = {
             "context_pack_id": pack.id,
@@ -600,6 +628,7 @@ class AletheiaService:
         namespace = self._required(payload, "namespace")
         project_id = payload.get("project_id")
         self.auth.require_namespace(auth_context, namespace=namespace, project_id=project_id)
+        self._require_read_session(payload, auth_context)
         results = self.memory.retrieve(
             namespace=namespace,
             query=payload.get("query", ""),
@@ -611,8 +640,23 @@ class AletheiaService:
             include_disputed=bool(payload.get("include_disputed", False)),
             include_archived=bool(payload.get("include_archived", False)),
         )
-        visible = [result for result in results if self._evidence_allowed(result.evidence_ids, auth_context)]
-        return [asdict(result) for result in visible]
+        access = ReadAccess(self, auth_context)
+        visible = [result for result in results if access.allowed("claim", result.claim_id)]
+        return [{**asdict(result),
+                 "project_ids": [project for project in result.project_ids if access.namespace(result.namespace, [project])],
+                 "conflict_ids": [value for value in result.conflict_ids if access.allowed("conflict", value)]}
+                for result in visible]
+
+    def _require_read_session(self, payload, auth_context):
+        session_id = payload.get("session_id")
+        if not session_id:
+            return
+        row = self.memory.store.connection.execute("SELECT namespace, project_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if row is None:
+            raise not_found("Session not found.")
+        if row["namespace"] != payload["namespace"] or (payload.get("project_id") and row["project_id"] != payload["project_id"]):
+            raise forbidden("Session does not belong to the requested scope.")
+        self.auth.require_namespace(auth_context, namespace=row["namespace"], project_id=row["project_id"])
 
     def _llm_endpoint(
         self,
@@ -804,10 +848,11 @@ class AletheiaService:
         parts = endpoint.split("/")
         claim_id = parts[3]
         self.auth.require_capability(auth_context, "memory:read")
+        access = ReadAccess(self, auth_context)
+        access.require("claim", claim_id)
         claim = self.memory.read_claim(claim_id)
-        self.auth.require_namespace(auth_context, namespace=claim.namespace)
         if len(parts) == 5 and parts[4] == "explain":
-            return asdict(self.memory.explain_claim(claim_id))
+            return access.explanation(claim_id)
         if len(parts) != 4:
             raise not_found(endpoint)
         return asdict(claim)
@@ -1051,19 +1096,11 @@ class AletheiaService:
 
     def _dashboard_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
         namespace = self._query_value(query, "namespace", none_if_missing=True) or payload.get("namespace") or self.memory.namespace
-        self._require(auth_context, "memory:read", {"namespace": namespace})
         if method == "GET" and endpoint == "/v1/dashboard/overview":
-            snapshot = self.memory.latest_metric_snapshot(namespace=namespace) or self.memory.metrics_snapshot(namespace=namespace, source="dashboard")
-            health = self.memory.health_report(namespace=namespace)
-            return {
-                "metrics": snapshot.metrics,
-                "health": asdict(health),
-                "review_tasks": [asdict(task) for task in self.memory.list_review_tasks(namespace=namespace, status="open", limit=10)],
-                "candidates": [asdict(candidate) for candidate in self.memory.list_candidates(namespace, status="pending_review", limit=10)],
-                "conflicts": [asdict(conflict) for conflict in self.memory.list_conflict_families(namespace=namespace, status="unresolved", limit=10)],
-                "jobs": [asdict(job) for job in self.memory.list_jobs(namespace=namespace, limit=10)],
-                "service_requests": self.service_requests(limit=10),
-            }
+            project = self._query_value(query, "project_id", none_if_missing=True)
+            self._require(auth_context, "memory:read", {"namespace": namespace, "project_id": project})
+            return ReadAccess(self, auth_context).overview(namespace, project)
+        self._require(auth_context, "memory:read", {"namespace": namespace})
         if method == "GET" and endpoint == "/v1/dashboard/preferences":
             return self._dashboard_preferences(namespace)
         if method == "POST" and endpoint == "/v1/dashboard/preferences":
@@ -2280,7 +2317,7 @@ class AletheiaService:
         namespace: str | None,
         client_id: str | None,
     ) -> dict | None:
-        if method not in STATE_CHANGING_METHODS:
+        if method not in STATE_CHANGING_METHODS or endpoint in READ_POST_PATHS:
             return None
         key = self._header(headers, "Idempotency-Key")
         if not key:
@@ -2314,7 +2351,7 @@ class AletheiaService:
         status_code: int,
         response: dict,
     ) -> None:
-        if method not in STATE_CHANGING_METHODS or status_code >= 400:
+        if method not in STATE_CHANGING_METHODS or endpoint in READ_POST_PATHS or status_code >= 400:
             return
         key = self._header(headers, "Idempotency-Key")
         if not key:
@@ -2367,8 +2404,8 @@ class AletheiaService:
         if self.config.request_log_mode == "hashes":
             log_request_hash = request_hash
             response_hash = content_hash(json.dumps(response or {}, sort_keys=True))
-        with self.memory.store.transaction():
-            with self.lock:
+        with self.lock:
+            with self.memory.store.transaction():
                 self.memory.store.connection.execute(
                     """
                     INSERT INTO service_request_log (
@@ -2508,43 +2545,6 @@ class AletheiaService:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
-
-    def _filtered_context_pack_privacy(self, pack, auth_context: AuthContext):
-        omitted = 0
-
-        def visible(items):
-            nonlocal omitted
-            kept = []
-            for item in items:
-                if self._evidence_allowed(item.evidence_ids, auth_context):
-                    kept.append(item)
-                else:
-                    omitted += 1
-            return kept
-
-        filtered = replace(
-            pack,
-            core_memory=visible(pack.core_memory),
-            project_memory=visible(pack.project_memory),
-            session_memory=visible(pack.session_memory),
-            procedural_memory=visible(pack.procedural_memory),
-            reflection_memory=visible(pack.reflection_memory),
-            relevant_memory=visible(pack.relevant_memory),
-        )
-        return filtered, omitted
-
-    def _evidence_allowed(self, evidence_ids: list[str], auth_context: AuthContext) -> bool:
-        if not evidence_ids:
-            return self.auth.privacy_allows(auth_context, "personal")
-        rows = self.memory.store.connection.execute(
-            f"""
-            SELECT privacy_level
-            FROM evidence_events
-            WHERE id IN ({','.join('?' for _ in evidence_ids)})
-            """,
-            evidence_ids,
-        ).fetchall()
-        return all(self.auth.privacy_allows(auth_context, row["privacy_level"]) for row in rows)
 
     def _provenance_for_items(self, items) -> list[dict]:
         provenance = []
@@ -3043,6 +3043,9 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         request_id = self.headers.get("X-Request-ID") or new_id("req")
+        if not self._origin_allowed():
+            self._send_payload(403, self.service._error(forbidden("Host or Origin is not allowed for this local service."), request_id))
+            return
         raw_length = self.headers.get("Content-Length", "0")
         try:
             length = int(raw_length)
@@ -3075,9 +3078,33 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
         )
         self._send_payload(status, payload)
 
+    def _origin_allowed(self) -> bool:
+        # Remote deployments retain their explicit external TLS/proxy policy.
+        # Local services never trust client-provided forwarding headers.
+        if self.service.config.allow_remote:
+            return True
+        try:
+            host = self.headers.get("Host", "")
+            authority = urlparse("http://" + host)
+            if (len(self.headers.get_all("Host", [])) != 1 or len(self.headers.get_all("Origin", [])) > 1
+                    or any(char.isspace() for char in host)
+                    or authority.hostname not in {"127.0.0.1", "localhost", "::1"}
+                    or authority.username is not None or authority.password is not None
+                    or authority.path or authority.query or authority.fragment
+                    or (authority.port or 80) != self.server.server_port):
+                return False
+            origin = self.headers.get("Origin")
+            if origin is None:
+                return True
+            parsed = urlparse(origin)
+            return (parsed.scheme == "http" and parsed.netloc == authority.netloc
+                    and not parsed.path and not parsed.query and not parsed.fragment)
+        except ValueError:
+            return False
+
     def _send_payload(self, status: int, payload: dict) -> None:
         response_headers = payload.pop("_headers", {}) if isinstance(payload, dict) else {}
-        if self.path.split("?", 1)[0] in DISCOVERY_PATHS:
+        if self.path.split("?", 1)[0] in DISCOVERY_PATHS or is_read_path(self.path.split("?", 1)[0]):
             response_headers["Cache-Control"] = "no-store"
             request_id = payload.get("request_id") if isinstance(payload, dict) else None
             if isinstance(request_id, str) and len(request_id) <= 200 and all(32 <= ord(c) < 127 for c in request_id):
@@ -3409,4 +3436,4 @@ def openapi_schema() -> dict:
         },
         "paths": paths,
     }
-    return apply_discovery_contracts(schema)
+    return apply_read_contracts(apply_discovery_contracts(schema))

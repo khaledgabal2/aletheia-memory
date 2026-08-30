@@ -70,10 +70,14 @@ jobs:
           npm run generate --prefix contracts/typescript
           python -m scripts.v1_4_discovery_contract --output contracts/typescript/generated/discovery.json
           npm run generate:discovery --prefix contracts/typescript
+          python -m scripts.v1_4_read_contract --output contracts/typescript/generated/read.json
+          npm run generate:read --prefix contracts/typescript
           npm run check --prefix contracts/typescript
           npm run build --prefix contracts/typescript
       - name: Exercise generated consumer against Memory
         run: |
           python scripts/v1_4_phase0.py --typescript
           python -m scripts.v1_4_discovery_contract --typescript
+          python -m scripts.v1_4_read_contract --typescript
+          npm test --prefix contracts/typescript
           python scripts/v1_4_compatibility_check.py --legacy-package .legacy-1.3.1

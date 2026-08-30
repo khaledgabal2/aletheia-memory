@@ -84,7 +84,7 @@ def test_software_schema_and_legacy_bridge_are_independent(tmp_path, monkeypatch
         for path in ["/v1/health", "/v1/ready", "/v1/version", "/v1/compatibility/report", "/v1/auth/me"]:
             result = request(url, "GET", path, token=tokens["agent"])
             assert result["body"]["data"]["service_identity"] == version["service_identity"]
-            assert result["body"]["data"]["supported_profiles"] == []
+            assert result["body"]["data"]["supported_profiles"] == ["memory-read-v1"]
         assert openapi_schema()["info"]["version"] == "1.4.0"
         doctor = service.memory.doctor_run()
         assert next(check for check in doctor.checks if check["name"] == "package_version")["detail"] == "Aletheia 1.4.0"

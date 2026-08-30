@@ -6,6 +6,8 @@
   "scripts": {
     "generate": "openapi-typescript ../../tests/fixtures/v1_3_1/openapi.json -o generated/baseline.d.ts",
     "generate:discovery": "openapi-typescript generated/discovery.json -o generated/discovery.d.ts",
+    "generate:read": "openapi-typescript generated/read.json --default-non-nullable false -o generated/read.d.ts",
+    "test": "node --test dist/poll.test.js",
     "check": "tsc --noEmit",
     "build": "tsc"
   },

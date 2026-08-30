@@ -7,5 +7,5 @@
     "noUncheckedIndexedAccess": true,
     "outDir": "dist"
   },
-  "include": ["smoke.ts", "discovery.ts", "generated/*.d.ts"]
+  "include": ["*.ts", "generated/*.d.ts"]
 }
