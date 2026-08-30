@@ -46,9 +46,12 @@ synthetic data. No user database or credential was used.
 The network decision was recorded in design issue #3 before implementation.
 Security-related regression details are kept private under `SECURITY.md`; the
 review branch must not be pushed to a public PR before coordinated remediation.
-The implementation is committed locally. Creating the private advisory/fork was
-blocked by auto-review pending explicit authorization to upload the security
-details. No advisory, private fork or Phase 2 PR has been created or uploaded.
+The verified implementation is commit `967983650574cbd3dbc5a29faa0dca56d300bcde`.
+The maintainer explicitly authorized a private advisory, temporary fork and draft
+PR in the project conversation after auto-review requested that authorization.
+Private review is tracked in draft advisory
+[GHSA-v96m-pj74-648h](https://github.com/khaledgabal2/aletheia-memory/security/advisories/GHSA-v96m-pj74-648h)
+and its temporary private fork. This approval covers private upload for review only.
 No advisory publication, CVE request, private-reporting setting change, main
 push, merge or package publication is authorized by this evidence.
 
