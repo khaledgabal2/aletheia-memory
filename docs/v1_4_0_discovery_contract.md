@@ -110,6 +110,8 @@ usable profile-discovery metadata. On 1.3.1, old v1 reads/context still work,
 requested new profiles are refused, and `current_principal()` raises
 `AletheiaUnsupportedFeatureError` instead of inventing identity or access.
 Authentication errors are propagated, never treated as missing feature support.
+The new error is importable from `aletheia.client` and the existing
+`aletheia_client` compatibility module.
 
 ## Transport and verification
 

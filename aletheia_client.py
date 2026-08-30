@@ -8,6 +8,7 @@ from aletheia.client import (
     AletheiaRateLimitError,
     AletheiaServerError,
     AletheiaUnauthorizedError,
+    AletheiaUnsupportedFeatureError,
     AletheiaValidationError,
     AsyncAletheiaClient,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "AletheiaRateLimitError",
     "AletheiaServerError",
     "AletheiaUnauthorizedError",
+    "AletheiaUnsupportedFeatureError",
     "AletheiaValidationError",
     "AsyncAletheiaClient",
 ]

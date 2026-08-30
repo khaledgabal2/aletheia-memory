@@ -32,7 +32,7 @@ versions remain pinned by the Phase 0 lockfile.
 | Local/console behavior | Explicit local tokenless scope, supplied-credential validation, fail-closed protected state, console header/cookie authentication, legacy session shape, CSRF enforcement and logout regression checks pass. |
 | Actual HTTP schemas | OpenAPI 3.1 validation passes for the six-operation projection; real responses validate against published schemas, including populated plugin/SDK/matrix arrays, nullable runtime fields, authentication errors and rate limiting. |
 | Generated TypeScript | Generated domain fields compile without casts and execute against a real authenticated service. Baseline consumer continues to pass. |
-| Packaging | Wheel and sdist build; discovery modules, docs and source harness files are present. Node dependencies, generated TypeScript output, Python caches and tests are excluded from the wheel. Core install does not require schema validators or Node. |
+| Packaging | Wheel and sdist build; all 166 tests also pass from the extracted sdist. Discovery modules, docs and source harness files are present. Node dependencies, generated TypeScript output, Python caches and tests are excluded from the wheel. Core install does not require schema validators or Node. |
 | Installed tutorial | Exact packaged Python block runs outside the source checkout with network connections blocked, for both approval and refusal. Provenance/reopen checks pass, and repeated runs preserve the existing database. |
 | Repository safety | Generic release-boundary and diff-whitespace checks pass. Original checkout remains unchanged; work is isolated from it and from main. |
 
