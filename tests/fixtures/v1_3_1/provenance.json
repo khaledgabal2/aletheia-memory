@@ -1,0 +1,18 @@
+{
+  "distribution": "aletheia-memory",
+  "version": "1.3.1",
+  "source": "https://pypi.org/project/aletheia-memory/1.3.1/",
+  "retrieved": "2026-08-30",
+  "file": "aletheia/client.py",
+  "sha256": "6422cf9cbd6bb25d19b8c471ae764fd4d76ad0ef8f0c4d6d6755f39401bcc928",
+  "matches_repository_revision": "1cb3e607450b2d0d345cc3c06d73223b7f3e3fe4",
+  "license": "MIT",
+  "policy": "Unmodified published SDK fixture. Never update this file to make a new-service test pass.",
+  "runtime_sha256": {
+    "aletheia.core.memory": "9b93b5418ce9fb0989e28599bb195e73d22b84660c8dbf0a7fab70e77ad0c972",
+    "aletheia.core.platform": "c5130accb27198e9e33f84a65f996d3e851ec550e16e5308a52ed2dc2bbc0ef6",
+    "aletheia.service.http": "fb7873399141f554def5255bbd1a6f5a763f33ff57f848218d69844adc56c57d",
+    "aletheia.service.auth": "c56c9d357111c35e28431102e36a258349d577034125ec7289d6d937bbba8c18",
+    "aletheia.storage.sqlite": "c8e29b43bf5f26d9e7d395ed40d00a48ee3bc66c113c76bf910c62e5395892e0"
+  }
+}

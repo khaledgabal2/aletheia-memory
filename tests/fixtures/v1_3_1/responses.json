@@ -1,0 +1,1505 @@
+{
+  "audit": {
+    "body": {
+      "data": {
+        "audit": [
+          {
+            "action": "claim.write",
+            "created_at": "2026-08-30T21:12:36.702465+00:00",
+            "details": "{\"memory_type\": \"preference\", \"object\": \"careful architecture notes\", \"predicate\": \"prefers\", \"status\": \"active\", \"subject\": \"user\"}",
+            "id": "aud_e9f6f9f0c2754824b941",
+            "namespace": "user/phase0-demo",
+            "target_id": "clm_f77e2c7d2f4a4c6aa452",
+            "target_type": "claim"
+          },
+          {
+            "action": "candidate.promoted_to_claim",
+            "created_at": "2026-08-30T21:12:36.703471+00:00",
+            "details": "{\"candidate_id\": \"cand_1870cf87f05a4de2bd18\", \"reason\": \"Explicit Phase 0 fixture review\"}",
+            "id": "aud_14ff7da51e03401bb2e5",
+            "namespace": "user/phase0-demo",
+            "target_id": "clm_f77e2c7d2f4a4c6aa452",
+            "target_type": "claim"
+          }
+        ],
+        "claim": {
+          "confidence_base": 0.75,
+          "confidence_effective": 0.7499999999833198,
+          "created_at": "2026-08-30T21:12:36.702314+00:00",
+          "evidence_ids": [
+            "evt_d58fc2df390abdafa599"
+          ],
+          "half_life_days": 180.0,
+          "id": "clm_f77e2c7d2f4a4c6aa452",
+          "importance": 0.5,
+          "last_accessed_at": null,
+          "last_verified_at": null,
+          "memory_type": "preference",
+          "namespace": "user/phase0-demo",
+          "object": "careful architecture notes",
+          "predicate": "prefers",
+          "status": "active",
+          "subject": "user",
+          "valid_from": null,
+          "valid_to": null,
+          "volatility": "medium"
+        },
+        "conflicts": [],
+        "evidence": [
+          {
+            "content": "User prefers careful architecture notes.",
+            "content_hash": "0e2f39ca6cd44ce5913064c15e789f41251249f15acf2ffa53f6248a1c556c0c",
+            "created_at": "2026-08-30T21:12:36.624706+00:00",
+            "id": "evt_d58fc2df390abdafa599",
+            "namespace": "user/phase0-demo",
+            "observed_at": null,
+            "privacy_level": "personal",
+            "retention_policy": "default",
+            "session_id": null,
+            "source_type": "agent_observation",
+            "source_uri": null,
+            "trust_level": "user_asserted"
+          }
+        ],
+        "requested_target_type": "claim",
+        "target_id": "clm_f77e2c7d2f4a4c6aa452",
+        "target_type": "claim"
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/audit/claim/clm_f77e2c7d2f4a4c6aa452",
+    "role": "agent",
+    "status": 200
+  },
+  "candidate": {
+    "body": {
+      "data": {
+        "candidate_status": "pending_review",
+        "contradiction_risk": 0.0,
+        "created_at": "2026-08-30T21:12:36.625170+00:00",
+        "duplicate_risk": 0.0,
+        "evidence_ids": [
+          "evt_d58fc2df390abdafa599"
+        ],
+        "evidence_spans": [
+          {
+            "created_at": "2026-08-30T21:12:36.625170+00:00",
+            "end_char": 40,
+            "evidence_id": "evt_d58fc2df390abdafa599",
+            "id": "span_74f89b14ec8d42a48e63",
+            "role": "supporting",
+            "start_char": 0,
+            "text": "User prefers careful architecture notes."
+          }
+        ],
+        "extraction_run_id": "run_dccd0d27196047459f66",
+        "id": "cand_1870cf87f05a4de2bd18",
+        "memory_type": "preference",
+        "metadata": {
+          "client_id": "cli_a606e6024367467090de",
+          "service_candidate": true
+        },
+        "namespace": "user/phase0-demo",
+        "object": "careful architecture notes",
+        "predicate": "prefers",
+        "privacy_level": "personal",
+        "subject": "user",
+        "suggested_categories": [],
+        "suggested_confidence": 0.75,
+        "suggested_entities": [],
+        "suggested_half_life_days": null,
+        "suggested_importance": 0.5,
+        "suggested_scope": null
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/candidates/cand_1870cf87f05a4de2bd18",
+    "role": "reviewer",
+    "status": 200
+  },
+  "candidate_denied": {
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "details": {
+          "required_capability": "memory:review"
+        },
+        "message": "Capability required: memory:review"
+      },
+      "request_id": "req_phase0"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/candidates/cand_1870cf87f05a4de2bd18",
+    "role": "reader",
+    "status": 403
+  },
+  "candidates": {
+    "body": {
+      "data": [
+        {
+          "candidate_status": "pending_review",
+          "contradiction_risk": 0.0,
+          "created_at": "2026-08-30T21:12:36.625170+00:00",
+          "duplicate_risk": 0.0,
+          "evidence_ids": [
+            "evt_d58fc2df390abdafa599"
+          ],
+          "evidence_spans": [
+            {
+              "created_at": "2026-08-30T21:12:36.625170+00:00",
+              "end_char": 40,
+              "evidence_id": "evt_d58fc2df390abdafa599",
+              "id": "span_74f89b14ec8d42a48e63",
+              "role": "supporting",
+              "start_char": 0,
+              "text": "User prefers careful architecture notes."
+            }
+          ],
+          "extraction_run_id": "run_dccd0d27196047459f66",
+          "id": "cand_1870cf87f05a4de2bd18",
+          "memory_type": "preference",
+          "metadata": {
+            "client_id": "cli_a606e6024367467090de",
+            "service_candidate": true
+          },
+          "namespace": "user/phase0-demo",
+          "object": "careful architecture notes",
+          "predicate": "prefers",
+          "privacy_level": "personal",
+          "subject": "user",
+          "suggested_categories": [],
+          "suggested_confidence": 0.75,
+          "suggested_entities": [],
+          "suggested_half_life_days": null,
+          "suggested_importance": 0.5,
+          "suggested_scope": null
+        }
+      ],
+      "pagination": {
+        "limit": 1,
+        "next_cursor": null
+      },
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/candidates?namespace=user/phase0-demo&limit=1",
+    "role": "reviewer",
+    "status": 200
+  },
+  "claim": {
+    "body": {
+      "data": {
+        "confidence_base": 0.75,
+        "confidence_effective": 0.7499999999833198,
+        "created_at": "2026-08-30T21:12:36.702314+00:00",
+        "evidence_ids": [
+          "evt_d58fc2df390abdafa599"
+        ],
+        "half_life_days": 180.0,
+        "id": "clm_f77e2c7d2f4a4c6aa452",
+        "importance": 0.5,
+        "last_accessed_at": null,
+        "last_verified_at": null,
+        "memory_type": "preference",
+        "namespace": "user/phase0-demo",
+        "object": "careful architecture notes",
+        "predicate": "prefers",
+        "status": "active",
+        "subject": "user",
+        "valid_from": null,
+        "valid_to": null,
+        "volatility": "medium"
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/claims/clm_f77e2c7d2f4a4c6aa452",
+    "role": "agent",
+    "status": 200
+  },
+  "claim_missing": {
+    "body": {
+      "error": {
+        "code": "not_found",
+        "details": {},
+        "message": "Claim not found: missing"
+      },
+      "request_id": "req_phase0"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/claims/missing",
+    "role": "agent",
+    "status": 404
+  },
+  "compatibility": {
+    "body": {
+      "data": {
+        "aletheia_version": "1.3.0",
+        "api_version": "v1",
+        "archive_formats": [
+          "1"
+        ],
+        "matrix": [
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.0.0",
+            "component_name": "aletheia-archive",
+            "component_type": "archive",
+            "component_version": "1",
+            "id": "compat_bfe9c5241ea7441b5aa86baa",
+            "metadata": {
+              "source": "M9 defaults"
+            },
+            "notes": "M8/M9 .alet archives",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531621+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "aletheia",
+            "component_type": "cli",
+            "component_version": "1.3.0",
+            "id": "compat_ab3af9ba450d2c10132f7c92",
+            "metadata": {
+              "source": "M10 defaults"
+            },
+            "notes": "Federation and semantic index command groups",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531869+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "aletheia",
+            "component_type": "cli",
+            "component_version": "1.3.0",
+            "id": "compat_4d2645d3fb7e529f245fbae2",
+            "metadata": {
+              "source": "M11 defaults"
+            },
+            "notes": "Semantic index lifecycle commands",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.532075+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "aletheia",
+            "component_type": "cli",
+            "component_version": "1.3.0",
+            "id": "compat_bd021679a1b3eaeff8199d2b",
+            "metadata": {
+              "source": "M12 defaults"
+            },
+            "notes": "Governed LLM command group",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.532123+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.0.0",
+            "component_name": "aletheia-memory",
+            "component_type": "core",
+            "component_version": "1.0.0",
+            "id": "compat_0df4bc46cb5059c500c37d57",
+            "metadata": {
+              "source": "M9 defaults"
+            },
+            "notes": "v1 GA platform",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531621+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "aletheia-memory",
+            "component_type": "core",
+            "component_version": "1.3.0",
+            "id": "compat_dc96b82e6ae782bb229cf493",
+            "metadata": {
+              "source": "M10 defaults"
+            },
+            "notes": "M11 production semantic retrieval platform",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531869+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "aletheia-memory",
+            "component_type": "core",
+            "component_version": "1.3.0",
+            "id": "compat_cad861f2a243e5debb94e0b8",
+            "metadata": {
+              "source": "M11 defaults"
+            },
+            "notes": "M11 production semantic retrieval",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.532075+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "aletheia-memory",
+            "component_type": "core",
+            "component_version": "1.3.0",
+            "id": "compat_6217710c8ed217b4dce1bbdb",
+            "metadata": {
+              "source": "M12 defaults"
+            },
+            "notes": "M12 governed LLM memory formation",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.532123+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "local_hash",
+            "component_type": "embedding_provider",
+            "component_version": "1.0",
+            "id": "compat_aacfd87896621ce70fe8375d",
+            "metadata": {
+              "source": "M11 defaults"
+            },
+            "notes": "Local-safe configurable embedding provider",
+            "status": "beta",
+            "tested_at": "2026-08-30T21:12:36.532075+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "federation",
+            "component_type": "federation_protocol",
+            "component_version": "v1",
+            "id": "compat_d7e9ad1f62f182142cd74b15",
+            "metadata": {
+              "source": "M10 defaults"
+            },
+            "notes": "Local-first federation protocol",
+            "status": "beta",
+            "tested_at": "2026-08-30T21:12:36.531869+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.0.0",
+            "component_name": "http",
+            "component_type": "http_api",
+            "component_version": "v1",
+            "id": "compat_392e0d1b00038c08e323bbdb",
+            "metadata": {
+              "source": "M9 defaults"
+            },
+            "notes": "OpenAPI v1 contract",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531621+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "mock_llm",
+            "component_type": "llm_provider",
+            "component_version": "1.0",
+            "id": "compat_afeb53944cd45cb5988641d0",
+            "metadata": {
+              "source": "M12 defaults"
+            },
+            "notes": "Deterministic structured-output LLM provider",
+            "status": "beta",
+            "tested_at": "2026-08-30T21:12:36.532123+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.0.0",
+            "component_name": "mcp-tools",
+            "component_type": "mcp",
+            "component_version": "v1",
+            "id": "compat_ae3b935da45564a569216193",
+            "metadata": {
+              "source": "M9 defaults"
+            },
+            "notes": "Local MCP-style tools",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531621+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.0.0",
+            "component_name": "plugin-interface",
+            "component_type": "plugin_api",
+            "component_version": "1.0.0",
+            "id": "compat_ceba1c1fea0c350892d85196",
+            "metadata": {
+              "source": "M9 defaults"
+            },
+            "notes": "Manifest and permission model",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531621+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.0.0",
+            "component_name": "aletheia.client",
+            "component_type": "python_sdk",
+            "component_version": "1.0.0",
+            "id": "compat_250ed5469244a899d75dc213",
+            "metadata": {
+              "source": "M9 defaults"
+            },
+            "notes": "Sync and async clients",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531621+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "aletheia.client",
+            "component_type": "python_sdk",
+            "component_version": "1.3.0",
+            "id": "compat_1dde849548d063ba6ca4e28a",
+            "metadata": {
+              "source": "M10 defaults"
+            },
+            "notes": "Federation and memory helper methods",
+            "status": "supported",
+            "tested_at": "2026-08-30T21:12:36.531869+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "aletsync",
+            "component_type": "sync_bundle",
+            "component_version": "1.0",
+            "id": "compat_4e85ada4bed9d58c4eff6944",
+            "metadata": {
+              "source": "M10 defaults"
+            },
+            "notes": "Encrypted file-based sync bundle",
+            "status": "beta",
+            "tested_at": "2026-08-30T21:12:36.531869+00:00"
+          },
+          {
+            "aletheia_max_version": null,
+            "aletheia_min_version": "1.3.0",
+            "component_name": "sqlite_local",
+            "component_type": "vector_store",
+            "component_version": "1.0",
+            "id": "compat_f15e0bad0d5486f83cd3a009",
+            "metadata": {
+              "source": "M11 defaults"
+            },
+            "notes": "Embedded SQLite vector storage",
+            "status": "beta",
+            "tested_at": "2026-08-30T21:12:36.532075+00:00"
+          }
+        ],
+        "migration_support": {
+          "from": "1.0.x",
+          "safe": true,
+          "to": "1.3.0"
+        },
+        "platform": null,
+        "plugins": [],
+        "python_version": null,
+        "schema_version": "1.3.0",
+        "sdk_versions": [],
+        "sqlite_version": null,
+        "warnings": []
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/compatibility/report?include_plugins=false&include_sdks=false&include_runtime=false",
+    "role": "agent",
+    "status": 200
+  },
+  "context": {
+    "body": {
+      "data": {
+        "context_pack_id": "ctx_cbb2e666629843c5aa2a",
+        "items": [
+          {
+            "abstraction_level": null,
+            "claim_id": "clm_f77e2c7d2f4a4c6aa452",
+            "confidence_effective": 0.7499999999833198,
+            "derivation": null,
+            "evidence_ids": [
+              "evt_d58fc2df390abdafa599"
+            ],
+            "inference_id": null,
+            "is_inferred": false,
+            "is_reflected": false,
+            "is_stale": false,
+            "memory_type": "preference",
+            "reason": "relevant to query",
+            "reflection_id": null,
+            "scope": null,
+            "source_kind": "direct_claim",
+            "status": "active",
+            "text": "User prefers careful architecture notes."
+          }
+        ],
+        "markdown": "## Memory Context\n### Relevant Memory\n- User prefers careful architecture notes.\n  confidence: 0.75 | claim: clm_f77e2c7d2f4a4c6aa452 | reason: relevant to query",
+        "policy": {
+          "context_policy_version_id": "cpv_default_v1",
+          "ranking_policy_version_id": "rpv_default_v1"
+        },
+        "provenance": [
+          {
+            "claim_id": "clm_f77e2c7d2f4a4c6aa452",
+            "evidence_ids": [
+              "evt_d58fc2df390abdafa599"
+            ],
+            "source_kind": "direct_claim",
+            "target_id": "clm_f77e2c7d2f4a4c6aa452"
+          }
+        ],
+        "sections": {
+          "core_memory": [],
+          "procedural_memory": [],
+          "project_memory": [],
+          "reflections": [],
+          "relevant_memory": [
+            {
+              "abstraction_level": null,
+              "claim_id": "clm_f77e2c7d2f4a4c6aa452",
+              "confidence_effective": 0.7499999999833198,
+              "derivation": null,
+              "evidence_ids": [
+                "evt_d58fc2df390abdafa599"
+              ],
+              "inference_id": null,
+              "is_inferred": false,
+              "is_reflected": false,
+              "is_stale": false,
+              "memory_type": "preference",
+              "reason": "relevant to query",
+              "reflection_id": null,
+              "scope": null,
+              "source_kind": "direct_claim",
+              "status": "active",
+              "text": "User prefers careful architecture notes."
+            }
+          ],
+          "session_memory": [],
+          "warnings": []
+        },
+        "warnings": []
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/context-pack",
+    "role": "agent",
+    "status": 200
+  },
+  "dashboard": {
+    "body": {
+      "data": {
+        "candidates": [
+          {
+            "candidate_status": "pending_review",
+            "contradiction_risk": 0.0,
+            "created_at": "2026-08-30T21:12:36.625170+00:00",
+            "duplicate_risk": 0.0,
+            "evidence_ids": [
+              "evt_d58fc2df390abdafa599"
+            ],
+            "evidence_spans": [
+              {
+                "created_at": "2026-08-30T21:12:36.625170+00:00",
+                "end_char": 40,
+                "evidence_id": "evt_d58fc2df390abdafa599",
+                "id": "span_74f89b14ec8d42a48e63",
+                "role": "supporting",
+                "start_char": 0,
+                "text": "User prefers careful architecture notes."
+              }
+            ],
+            "extraction_run_id": "run_dccd0d27196047459f66",
+            "id": "cand_1870cf87f05a4de2bd18",
+            "memory_type": "preference",
+            "metadata": {
+              "client_id": "cli_a606e6024367467090de",
+              "service_candidate": true
+            },
+            "namespace": "user/phase0-demo",
+            "object": "careful architecture notes",
+            "predicate": "prefers",
+            "privacy_level": "personal",
+            "subject": "user",
+            "suggested_categories": [],
+            "suggested_confidence": 0.75,
+            "suggested_entities": [],
+            "suggested_half_life_days": null,
+            "suggested_importance": 0.5,
+            "suggested_scope": null
+          }
+        ],
+        "conflicts": [],
+        "health": {
+          "generated_at": "2026-08-30T21:12:36.691688+00:00",
+          "id": "health_a8b005916a8c42bc8f9a",
+          "metrics": {
+            "active_claim_count": 0,
+            "candidate_count": 1,
+            "core_memory_count": 0,
+            "high_salience_low_confidence_count": 0,
+            "invalidated_derived_count": 0,
+            "last_evaluation_score": null,
+            "low_confidence_active_count": 0,
+            "orphaned_evidence_count": 1,
+            "pending_review_count": 1,
+            "recent_failure_count": 0,
+            "retrieval_judgment_count": 0,
+            "stale_memory_count": 0,
+            "unindexed_claim_count": 0,
+            "unresolved_conflict_count": 0
+          },
+          "namespace": "user/phase0-demo",
+          "project_id": null,
+          "recommendations": [
+            "Review candidate and inference queues."
+          ],
+          "warnings": [
+            "Pending candidates or inferences need review."
+          ]
+        },
+        "jobs": [],
+        "metrics": {
+          "active_claim_count": 0,
+          "average_context_pack_latency": 0,
+          "average_retrieval_latency": 0,
+          "candidate_count": 1,
+          "context_packs_generated": 0,
+          "core_memory_count": 0,
+          "critical_review_task_count": 0,
+          "evaluation_pass_rate": 1.0,
+          "failed_job_count": 0,
+          "failed_jobs": 0,
+          "invalidated_reflection_count": 0,
+          "last_eval_run_status": "ok",
+          "last_health_report_status": "ok",
+          "memory_health_warning_count": 0,
+          "open_review_task_count": 0,
+          "pending_job_count": 0,
+          "pending_jobs": 0,
+          "pending_review_count": 1,
+          "policy_proposals_pending": 0,
+          "project_id": null,
+          "recent_context_pack_count": 0,
+          "recent_service_request_count": 13,
+          "service_requests_by_endpoint": {
+            "/v1/auth/me": 1,
+            "/v1/candidates": 1,
+            "/v1/candidates/cand_1870cf87f05a4de2bd18": 2,
+            "/v1/compatibility/report": 1,
+            "/v1/console/session": 1,
+            "/v1/health": 1,
+            "/v1/openapi.json": 1,
+            "/v1/ready": 1,
+            "/v1/remember": 3,
+            "/v1/version": 1
+          },
+          "stale_claim_count": 0,
+          "unresolved_conflict_count": 0
+        },
+        "review_tasks": [],
+        "service_requests": [
+          {
+            "agent_id": null,
+            "client_id": "cli_8df8f81cdc33411baea3",
+            "created_at": "2026-08-30T21:12:36.680687+00:00",
+            "duration_ms": 11,
+            "id": "sreq_bb0a3ec32ecf487fbec7",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "GET",
+            "namespace": null,
+            "path": "/v1/candidates/cand_1870cf87f05a4de2bd18",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 403
+          },
+          {
+            "agent_id": null,
+            "client_id": "cli_a5be860d008544bd9e79",
+            "created_at": "2026-08-30T21:12:36.668229+00:00",
+            "duration_ms": 10,
+            "id": "sreq_78cc7f3bafa54d5994c8",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "GET",
+            "namespace": null,
+            "path": "/v1/candidates/cand_1870cf87f05a4de2bd18",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 200
+          },
+          {
+            "agent_id": null,
+            "client_id": "cli_a5be860d008544bd9e79",
+            "created_at": "2026-08-30T21:12:36.657206+00:00",
+            "duration_ms": 9,
+            "id": "sreq_04acba7c1b274bd695f0",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "GET",
+            "namespace": "user/phase0-demo",
+            "path": "/v1/candidates",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 200
+          },
+          {
+            "agent_id": null,
+            "client_id": "cli_a606e6024367467090de",
+            "created_at": "2026-08-30T21:12:36.646332+00:00",
+            "duration_ms": 9,
+            "id": "sreq_a3f3801424b1418c8c1c",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "POST",
+            "namespace": "user/phase0-demo",
+            "path": "/v1/remember",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 409
+          },
+          {
+            "agent_id": null,
+            "client_id": "cli_a606e6024367467090de",
+            "created_at": "2026-08-30T21:12:36.635909+00:00",
+            "duration_ms": 9,
+            "id": "sreq_763e48cdc5f64a3fa05e",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "POST",
+            "namespace": "user/phase0-demo",
+            "path": "/v1/remember",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 200
+          },
+          {
+            "agent_id": null,
+            "client_id": "cli_a606e6024367467090de",
+            "created_at": "2026-08-30T21:12:36.625546+00:00",
+            "duration_ms": 11,
+            "id": "sreq_4ce90eadcace4990932c",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "POST",
+            "namespace": "user/phase0-demo",
+            "path": "/v1/remember",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 200
+          },
+          {
+            "agent_id": null,
+            "client_id": null,
+            "created_at": "2026-08-30T21:12:36.612723+00:00",
+            "duration_ms": 0,
+            "id": "sreq_a874b9cc3a8d4479a868",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "GET",
+            "namespace": null,
+            "path": "/v1/openapi.json",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 200
+          },
+          {
+            "agent_id": null,
+            "client_id": "cli_a606e6024367467090de",
+            "created_at": "2026-08-30T21:12:36.611661+00:00",
+            "duration_ms": 9,
+            "id": "sreq_75099ae2769e4b07b6ec",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "GET",
+            "namespace": null,
+            "path": "/v1/auth/me",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 404
+          },
+          {
+            "agent_id": null,
+            "client_id": "cli_a606e6024367467090de",
+            "created_at": "2026-08-30T21:12:36.600997+00:00",
+            "duration_ms": 9,
+            "id": "sreq_ac38c95fff2f4e1a8426",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "GET",
+            "namespace": null,
+            "path": "/v1/compatibility/report",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 200
+          },
+          {
+            "agent_id": null,
+            "client_id": "cli_a606e6024367467090de",
+            "created_at": "2026-08-30T21:12:36.590270+00:00",
+            "duration_ms": 9,
+            "id": "sreq_d565cf655c0b4621acd1",
+            "log_mode": "metadata_only",
+            "metadata_json": "{}",
+            "method": "GET",
+            "namespace": null,
+            "path": "/v1/console/session",
+            "request_hash": null,
+            "request_id": "req_phase0",
+            "response_hash": null,
+            "status_code": 200
+          }
+        ]
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/dashboard/overview?namespace=user/phase0-demo",
+    "role": "reviewer",
+    "status": 200
+  },
+  "explain": {
+    "body": {
+      "data": {
+        "audit": [
+          {
+            "action": "claim.write",
+            "created_at": "2026-08-30T21:12:36.702465+00:00",
+            "details": "{\"memory_type\": \"preference\", \"object\": \"careful architecture notes\", \"predicate\": \"prefers\", \"status\": \"active\", \"subject\": \"user\"}",
+            "id": "aud_e9f6f9f0c2754824b941",
+            "namespace": "user/phase0-demo",
+            "target_id": "clm_f77e2c7d2f4a4c6aa452",
+            "target_type": "claim"
+          },
+          {
+            "action": "candidate.promoted_to_claim",
+            "created_at": "2026-08-30T21:12:36.703471+00:00",
+            "details": "{\"candidate_id\": \"cand_1870cf87f05a4de2bd18\", \"reason\": \"Explicit Phase 0 fixture review\"}",
+            "id": "aud_14ff7da51e03401bb2e5",
+            "namespace": "user/phase0-demo",
+            "target_id": "clm_f77e2c7d2f4a4c6aa452",
+            "target_type": "claim"
+          }
+        ],
+        "claim": {
+          "confidence_base": 0.75,
+          "confidence_effective": 0.7499999999833198,
+          "created_at": "2026-08-30T21:12:36.702314+00:00",
+          "evidence_ids": [
+            "evt_d58fc2df390abdafa599"
+          ],
+          "half_life_days": 180.0,
+          "id": "clm_f77e2c7d2f4a4c6aa452",
+          "importance": 0.5,
+          "last_accessed_at": null,
+          "last_verified_at": null,
+          "memory_type": "preference",
+          "namespace": "user/phase0-demo",
+          "object": "careful architecture notes",
+          "predicate": "prefers",
+          "status": "active",
+          "subject": "user",
+          "valid_from": null,
+          "valid_to": null,
+          "volatility": "medium"
+        },
+        "claim_id": "clm_f77e2c7d2f4a4c6aa452",
+        "confidence": {
+          "age_days": 2.6332175925925924e-07,
+          "base_confidence": 0.75,
+          "claim_id": "clm_f77e2c7d2f4a4c6aa452",
+          "computed_at": "2026-08-30T21:12:36.725065+00:00",
+          "contradiction_factor": 1.0,
+          "decay_factor": 0.9999999989859959,
+          "effective_confidence": 0.7499999992394969,
+          "explanation": "Base confidence 0.75; decay 1.00 over 0.0 days; source reliability 1.00; feedback 1.00; contradiction 1.00; verification 1.00; final effective confidence 0.75; retrieval salience 0.40.",
+          "feedback_factor": 1.0,
+          "half_life_days": 180.0,
+          "retrieval_salience": 0.3999999964890433,
+          "source_reliability_factor": 1.0,
+          "truth_confidence": 0.7499999992394969,
+          "verification_factor": 1.0
+        },
+        "conflicts": [],
+        "evidence": [
+          {
+            "content": "User prefers careful architecture notes.",
+            "content_hash": "0e2f39ca6cd44ce5913064c15e789f41251249f15acf2ffa53f6248a1c556c0c",
+            "created_at": "2026-08-30T21:12:36.624706+00:00",
+            "id": "evt_d58fc2df390abdafa599",
+            "namespace": "user/phase0-demo",
+            "observed_at": null,
+            "privacy_level": "personal",
+            "retention_policy": "default",
+            "session_id": null,
+            "source_type": "agent_observation",
+            "source_uri": null,
+            "trust_level": "user_asserted"
+          }
+        ],
+        "history": [
+          {
+            "changed_by": "system",
+            "claim_id": "clm_f77e2c7d2f4a4c6aa452",
+            "created_at": "2026-08-30T21:12:36.702475+00:00",
+            "id": "hist_66e7320bcb1f4a0a8adb",
+            "namespace": "user/phase0-demo",
+            "new_status": "active",
+            "old_status": null,
+            "reason": "claim.write"
+          }
+        ],
+        "relationships": [],
+        "scopes": []
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/claims/clm_f77e2c7d2f4a4c6aa452/explain",
+    "role": "agent",
+    "status": 200
+  },
+  "health": {
+    "body": {
+      "data": {
+        "auth_required": true,
+        "database": "connected",
+        "schema_version": "1.3.0",
+        "service_version": "1.3.0",
+        "status": "ok",
+        "warnings": []
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/health",
+    "role": "agent",
+    "status": 200
+  },
+  "idempotency_conflict": {
+    "body": {
+      "error": {
+        "code": "idempotency_conflict",
+        "details": {},
+        "message": "Idempotency key reused with a different payload."
+      },
+      "request_id": "req_phase0"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/remember",
+    "role": "agent",
+    "status": 409
+  },
+  "legacy_principal": {
+    "body": {
+      "data": {
+        "authenticated": true,
+        "capabilities": [
+          "memory:audit",
+          "memory:context",
+          "memory:read",
+          "memory:write_candidate"
+        ],
+        "namespace_grants": [
+          "user/phase0-demo"
+        ]
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/console/session",
+    "role": "agent",
+    "status": 200
+  },
+  "namespace_denied": {
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "details": {},
+        "message": "Token does not grant access to this namespace."
+      },
+      "request_id": "req_phase0"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/retrieve",
+    "role": "agent",
+    "status": 403
+  },
+  "principal_unavailable": {
+    "body": {
+      "error": {
+        "code": "not_found",
+        "details": {},
+        "message": "Endpoint not found: GET /v1/auth/me"
+      },
+      "request_id": "req_phase0"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/auth/me",
+    "role": "agent",
+    "status": 404
+  },
+  "promote": {
+    "body": {
+      "data": {
+        "confidence_base": 0.75,
+        "confidence_effective": 0.7499999999989972,
+        "created_at": "2026-08-30T21:12:36.702314+00:00",
+        "evidence_ids": [
+          "evt_d58fc2df390abdafa599"
+        ],
+        "half_life_days": 180.0,
+        "id": "clm_f77e2c7d2f4a4c6aa452",
+        "importance": 0.5,
+        "last_accessed_at": null,
+        "last_verified_at": null,
+        "memory_type": "preference",
+        "namespace": "user/phase0-demo",
+        "object": "careful architecture notes",
+        "predicate": "prefers",
+        "status": "active",
+        "subject": "user",
+        "valid_from": null,
+        "valid_to": null,
+        "volatility": "medium"
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/candidates/cand_1870cf87f05a4de2bd18/promote",
+    "role": "reviewer",
+    "status": 200
+  },
+  "ready": {
+    "body": {
+      "data": {
+        "auth_required": true,
+        "database": "connected",
+        "ready": true,
+        "schema_version": "1.3.0",
+        "service_version": "1.3.0",
+        "status": "ok",
+        "warnings": []
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/ready",
+    "role": "agent",
+    "status": 200
+  },
+  "reject": {
+    "body": {
+      "data": {
+        "candidate_id": "cand_cf7b902d676445429e49",
+        "created_at": "2026-08-30T21:12:36.791473+00:00",
+        "decision": "reject",
+        "edits": null,
+        "id": "xdec_d89eaf9a95ce49c3b333",
+        "namespace": "user/phase0-demo",
+        "reason": "Explicit Phase 0 fixture rejection",
+        "reviewer": "user"
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/candidates/cand_cf7b902d676445429e49/reject",
+    "role": "reviewer",
+    "status": 200
+  },
+  "remember": {
+    "body": {
+      "data": {
+        "candidate": {
+          "candidate_status": "pending_review",
+          "contradiction_risk": 0.0,
+          "created_at": "2026-08-30T21:12:36.625170+00:00",
+          "duplicate_risk": 0.0,
+          "evidence_ids": [
+            "evt_d58fc2df390abdafa599"
+          ],
+          "evidence_spans": [
+            {
+              "created_at": "2026-08-30T21:12:36.625170+00:00",
+              "end_char": 40,
+              "evidence_id": "evt_d58fc2df390abdafa599",
+              "id": "span_74f89b14ec8d42a48e63",
+              "role": "supporting",
+              "start_char": 0,
+              "text": "User prefers careful architecture notes."
+            }
+          ],
+          "extraction_run_id": "run_dccd0d27196047459f66",
+          "id": "cand_1870cf87f05a4de2bd18",
+          "memory_type": "preference",
+          "metadata": {
+            "client_id": "cli_a606e6024367467090de",
+            "service_candidate": true
+          },
+          "namespace": "user/phase0-demo",
+          "object": "careful architecture notes",
+          "predicate": "prefers",
+          "privacy_level": "personal",
+          "subject": "user",
+          "suggested_categories": [],
+          "suggested_confidence": 0.75,
+          "suggested_entities": [],
+          "suggested_half_life_days": null,
+          "suggested_importance": 0.5,
+          "suggested_scope": null
+        },
+        "write_mode": "candidate"
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/remember",
+    "role": "agent",
+    "status": 200
+  },
+  "remember_replay": {
+    "body": {
+      "data": {
+        "candidate": {
+          "candidate_status": "pending_review",
+          "contradiction_risk": 0.0,
+          "created_at": "2026-08-30T21:12:36.625170+00:00",
+          "duplicate_risk": 0.0,
+          "evidence_ids": [
+            "evt_d58fc2df390abdafa599"
+          ],
+          "evidence_spans": [
+            {
+              "created_at": "2026-08-30T21:12:36.625170+00:00",
+              "end_char": 40,
+              "evidence_id": "evt_d58fc2df390abdafa599",
+              "id": "span_74f89b14ec8d42a48e63",
+              "role": "supporting",
+              "start_char": 0,
+              "text": "User prefers careful architecture notes."
+            }
+          ],
+          "extraction_run_id": "run_dccd0d27196047459f66",
+          "id": "cand_1870cf87f05a4de2bd18",
+          "memory_type": "preference",
+          "metadata": {
+            "client_id": "cli_a606e6024367467090de",
+            "service_candidate": true
+          },
+          "namespace": "user/phase0-demo",
+          "object": "careful architecture notes",
+          "predicate": "prefers",
+          "privacy_level": "personal",
+          "subject": "user",
+          "suggested_categories": [],
+          "suggested_confidence": 0.75,
+          "suggested_entities": [],
+          "suggested_half_life_days": null,
+          "suggested_importance": 0.5,
+          "suggested_scope": null
+        },
+        "write_mode": "candidate"
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/remember",
+    "role": "agent",
+    "status": 200
+  },
+  "remember_second": {
+    "body": {
+      "data": {
+        "candidate": {
+          "candidate_status": "pending_review",
+          "contradiction_risk": 0.0,
+          "created_at": "2026-08-30T21:12:36.780636+00:00",
+          "duplicate_risk": 0.0,
+          "evidence_ids": [
+            "evt_d58fc2df390abdafa599"
+          ],
+          "evidence_spans": [
+            {
+              "created_at": "2026-08-30T21:12:36.780636+00:00",
+              "end_char": 40,
+              "evidence_id": "evt_d58fc2df390abdafa599",
+              "id": "span_1807f2355f0f476fa6db",
+              "role": "supporting",
+              "start_char": 0,
+              "text": "User prefers careful architecture notes."
+            }
+          ],
+          "extraction_run_id": "run_c4c51e010ba444baa38b",
+          "id": "cand_cf7b902d676445429e49",
+          "memory_type": "preference",
+          "metadata": {
+            "client_id": "cli_a606e6024367467090de",
+            "service_candidate": true
+          },
+          "namespace": "user/phase0-demo",
+          "object": "another note",
+          "predicate": "prefers",
+          "privacy_level": "personal",
+          "subject": "user",
+          "suggested_categories": [],
+          "suggested_confidence": 0.75,
+          "suggested_entities": [],
+          "suggested_half_life_days": null,
+          "suggested_importance": 0.5,
+          "suggested_scope": null
+        },
+        "write_mode": "candidate"
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/remember",
+    "role": "agent",
+    "status": 200
+  },
+  "retrieve": {
+    "body": {
+      "data": [
+        {
+          "claim_id": "clm_f77e2c7d2f4a4c6aa452",
+          "confidence_base": 0.75,
+          "confidence_effective": 0.7499999999833198,
+          "conflict_ids": [],
+          "created_at": "2026-08-30T21:12:36.702314+00:00",
+          "evidence_ids": [
+            "evt_d58fc2df390abdafa599"
+          ],
+          "importance": 0.5,
+          "last_verified_at": null,
+          "lexical_score": 1.0,
+          "memory_type": "preference",
+          "namespace": "user/phase0-demo",
+          "object": "careful architecture notes",
+          "predicate": "prefers",
+          "project_ids": [],
+          "retrieval_mode": "lexical",
+          "score": 0.7899999991204295,
+          "semantic_score": 0.0,
+          "status": "active",
+          "subject": "user",
+          "text": "User prefers careful architecture notes."
+        }
+      ],
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/retrieve",
+    "role": "agent",
+    "status": 200
+  },
+  "search_alias": {
+    "body": {
+      "data": [
+        {
+          "claim_id": "clm_f77e2c7d2f4a4c6aa452",
+          "confidence_base": 0.75,
+          "confidence_effective": 0.7499999999833198,
+          "conflict_ids": [],
+          "created_at": "2026-08-30T21:12:36.702314+00:00",
+          "evidence_ids": [
+            "evt_d58fc2df390abdafa599"
+          ],
+          "importance": 0.5,
+          "last_verified_at": null,
+          "lexical_score": 1.0,
+          "memory_type": "preference",
+          "namespace": "user/phase0-demo",
+          "object": "careful architecture notes",
+          "predicate": "prefers",
+          "project_ids": [],
+          "retrieval_mode": "lexical",
+          "score": 0.7899999989190599,
+          "semantic_score": 0.0,
+          "status": "active",
+          "subject": "user",
+          "text": "User prefers careful architecture notes."
+        }
+      ],
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/search",
+    "role": "agent",
+    "status": 200
+  },
+  "unauthenticated": {
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "details": {},
+        "message": "Authentication required."
+      },
+      "request_id": "req_phase0"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/retrieve",
+    "role": null,
+    "status": 401
+  },
+  "validation": {
+    "body": {
+      "error": {
+        "code": "validation_error",
+        "details": {},
+        "message": "The field 'namespace' is required."
+      },
+      "request_id": "req_phase0"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "POST",
+    "path": "/v1/retrieve",
+    "role": "agent",
+    "status": 400
+  },
+  "version": {
+    "body": {
+      "data": {
+        "api_version": "v1",
+        "service_version": "1.3.0"
+      },
+      "pagination": null,
+      "request_id": "req_phase0",
+      "warnings": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "method": "GET",
+    "path": "/v1/version",
+    "role": "agent",
+    "status": 200
+  }
+}

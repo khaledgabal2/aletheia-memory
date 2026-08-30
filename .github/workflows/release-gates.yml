@@ -46,3 +46,27 @@ jobs:
         run: python -m pip install build
       - name: Build package
         run: python -m build
+
+  contract-toolchain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.0.0"
+          cache: npm
+          cache-dependency-path: contracts/typescript/package-lock.json
+      - name: Install Memory and isolated contract tooling
+        run: |
+          python -m pip install -e ".[dev]"
+          npm ci --prefix contracts/typescript --ignore-scripts --no-audit --no-fund
+      - name: Generate and compile baseline consumer
+        run: |
+          npm run generate --prefix contracts/typescript
+          npm run check --prefix contracts/typescript
+          npm run build --prefix contracts/typescript
+      - name: Exercise generated consumer against Memory
+        run: python scripts/v1_4_phase0.py --typescript

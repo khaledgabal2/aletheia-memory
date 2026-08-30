@@ -114,6 +114,12 @@ Aletheia is easiest to understand as layers:
 
 ## Contracts And Historical Design Docs
 
+The proposed 1.4.0 release is tracked separately from the installed v1.3.1 API:
+
+- [Release plan](v1_4_0_contract_hardening_and_developer_experience_plan.md)
+- [Phase 0 scope and decisions](v1_4_0_phase0_decisions.md)
+- [Phase 0 verification evidence](v1_4_0_phase0_evidence.md)
+
 The milestone contracts are included for maintainers and advanced users who
 need to understand why the implemented surfaces exist. They are not the fastest
 starting point for normal usage.

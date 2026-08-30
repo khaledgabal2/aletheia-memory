@@ -68,12 +68,20 @@ packages = ["aletheia"]
 "docs" = "aletheia/docs"
 
 [tool.hatch.build.targets.sdist]
+exclude = [
+  "/contracts/typescript/node_modules",
+  "/contracts/typescript/generated",
+  "/contracts/typescript/dist",
+  "**/__pycache__",
+  "**/*.py[cod]",
+]
 include = [
   "/aletheia",
   "/aletheia_client.py",
   "/docs",
   "/scripts",
   "/tests",
+  "/contracts",
   "/README.md",
   "/LICENSE",
   "/CONTRIBUTING.md",
