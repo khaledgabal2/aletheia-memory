@@ -87,14 +87,14 @@ stores_data = false
 def test_m9_migration_backfills_stable_platform_contracts(tmp_path):
     memory = Memory.open(str(tmp_path / "m9.db"), namespace=NAMESPACE)
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         contracts = memory.list_public_contracts()
         names = {contract.name for contract in contracts}
         assert {"HTTP API v1", "Python SDK v1", "Plugin interface v1", "MCP tools v1"} <= names
         assert memory.check_deprecations()["status"] == "passed"
         report = memory.compatibility_report(include_runtime=False)
         assert report["api_version"] == "v1"
-        assert report["schema_version"] == "1.3.0"
+        assert report["schema_version"] == "1.3.1"
         assert any(entry["component_type"] == "plugin_api" for entry in report["matrix"])
         sdk_names = {record.sdk_name for record in memory.list_sdk_releases()}
         assert {"python-sync", "python-async"} <= sdk_names

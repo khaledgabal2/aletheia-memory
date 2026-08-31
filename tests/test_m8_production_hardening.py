@@ -63,7 +63,7 @@ def _get(service: AletheiaService, path: str, token: str):
 def test_m8_migration_adds_hardening_tables_without_enabling_protection(tmp_path):
     memory = Memory.open(str(tmp_path / "migrate.db"), namespace=NAMESPACE)
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         tables = {
             row["name"]
             for row in memory.store.connection.execute(
@@ -814,7 +814,8 @@ def test_export_import_support_benchmark_release_readiness_and_compaction(tmp_pa
         }
 
         release = source.release_manifest(output_path=str(manifest_path))
-        assert release.version == "1.3.0"
+        from aletheia.version import software_version
+        assert release.version == software_version()
         assert manifest_path.exists()
 
         readiness = source.readiness_check(namespace=NAMESPACE)
@@ -851,7 +852,7 @@ def test_m8_cli_and_http_surfaces(tmp_path, capsys):
     backup_path = tmp_path / "cli.alet"
     assert main(["init", "--db", str(db_path), "--protected"]) == 0
     init_status = json.loads(capsys.readouterr().out)
-    assert init_status["schema_version"] == "1.3.0"
+    assert init_status["schema_version"] == "1.3.1"
     assert main(["encrypt", "status", "--db", str(db_path)]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["enabled"] is True

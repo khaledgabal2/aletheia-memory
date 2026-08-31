@@ -41,7 +41,7 @@ Phase 1 additionally captures and strictly validates the six current discovery
 operations before generation. `discovery.ts` exercises software/schema versions,
 principal identity, permission metadata and errors with generated domain types.
 Phase 2 implements and advertises `memory-read-v1` on the development branch;
-review/onboarding remain unadvertised. The canonical read schema is captured
+onboarding remains unadvertised until Phase 5. The canonical read schema is captured
 from the running Memory service. Its generated request defaults remain optional
 (`--default-non-nullable false`); no handwritten payload substitutes are used.
 See [read contract](../../docs/v1_4_0_read_contract.md) for scope, limits and redaction.
@@ -79,3 +79,27 @@ python scripts/v1_4_compatibility_check.py --legacy-package .legacy-1.3.1
 This test starts only the downloaded 1.3.1 service in an isolated subprocess,
 checks its source hashes, and uses the current SDK as the consumer. It does not
 substitute the current service with a mocked version string.
+
+## Governed review
+
+Phase 4 adds `memory-review-v1`. Generate before compiling all clients:
+
+```sh
+python -m scripts.v1_4_review_contract --output contracts/typescript/generated/review.json
+npm run generate:review --prefix contracts/typescript
+npm run check --prefix contracts/typescript
+npm run build --prefix contracts/typescript
+python -m scripts.v1_4_review_contract --typescript
+python -m scripts.v1_4_migration_check --legacy-package .legacy-1.3.1
+python -m scripts.v1_4_review_contract --browser
+```
+
+The browser command serves a separate disposable same-origin page. Select
+**Run governed review checks** to inspect two synthetic candidates, reject one,
+prove the earlier approval is stale, make a new explicit test decision, promote,
+replay and verify that revocation denies replay. This does not exercise any user
+database. No key is generated or write retried automatically by `Reviewer`.
+Keep the same operation key and complete payload after an uncertain response;
+a 412 requires a fresh inspection and new explicit decision. Read the
+[contract](../../docs/v1_4_0_review_contract.md) for key retention, cursor bounds,
+legacy differences and migration requirements.

@@ -75,16 +75,16 @@ def test_software_schema_and_legacy_bridge_are_independent(tmp_path, monkeypatch
     with local_service(tmp_path) as (service, url, tokens):
         version = AletheiaClient(url, tokens["agent"]).version()
         assert version["software_version"] == version["service_version"] == "1.4.0"
-        assert service.memory.health()["schema_version"] == "1.3.0"
+        assert service.memory.health()["schema_version"] == "1.3.1"
         assert load_legacy_client()(url, tokens["agent"]).check_compatibility()["compatible"] is True
         report = AletheiaClient(url, tokens["agent"]).compatibility_report()
-        assert report["aletheia_version"] == report["schema_version"] == "1.3.0"
+        assert report["aletheia_version"] == report["schema_version"] == "1.3.1"
         assert report["software_version"] == "1.4.0"
         assert "aletheia_version" in report["deprecated_fields"]
         for path in ["/v1/health", "/v1/ready", "/v1/version", "/v1/compatibility/report", "/v1/auth/me"]:
             result = request(url, "GET", path, token=tokens["agent"])
             assert result["body"]["data"]["service_identity"] == version["service_identity"]
-            assert result["body"]["data"]["supported_profiles"] == ["memory-read-v1"]
+            assert result["body"]["data"]["supported_profiles"] == list(versions.SUPPORTED_PROFILES)
         assert openapi_schema()["info"]["version"] == "1.4.0"
         doctor = service.memory.doctor_run()
         assert next(check for check in doctor.checks if check["name"] == "package_version")["detail"] == "Aletheia 1.4.0"
@@ -285,9 +285,9 @@ def test_async_sdk_discovers_principal_and_missing_profiles(tmp_path):
     with local_service(tmp_path) as (_, url, tokens):
         client = AsyncAletheiaClient(url, tokens["agent"])
         assert asyncio.run(client.current_principal())["authenticated"] is True
-        result = asyncio.run(client.check_compatibility(required_profiles=["memory-review-v1"]))
+        result = asyncio.run(client.check_compatibility(required_profiles=["memory-stream-v1"]))
         assert result["compatible"] is False
-        assert result["missing_profiles"] == ["memory-review-v1"]
+        assert result["missing_profiles"] == ["memory-stream-v1"]
         with pytest.raises(AletheiaUnauthorizedError):
             asyncio.run(AsyncAletheiaClient(url, "invalid-test-token").current_principal())
 

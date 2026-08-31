@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -294,6 +295,8 @@ class AletheiaService:
         self.auth = AuthService(memory)
         self.lock = threading.RLock()
         self.service_identity = new_id("service")
+        from aletheia.service.reviews import ReviewProtocol
+        self.review_protocol = ReviewProtocol(self)
 
     @classmethod
     def open(cls, config: ServiceConfig) -> "AletheiaService":
@@ -301,6 +304,9 @@ class AletheiaService:
         if not config.auto_migrate:
             cls._assert_current_schema(config.db_path)
         memory = Memory.open(config.db_path, auto_migrate=config.auto_migrate)
+        if not memory.store._schema_current():
+            memory.close()
+            raise ServiceError("stale_schema", "Review schema integrity check failed; inspect the migration.", status_code=503)
         service = cls(memory, config)
         service._record_config(source="service_open")
         return service
@@ -335,6 +341,7 @@ class AletheiaService:
         status = 200
         response: dict[str, Any]
         try:
+            self.review_protocol.state()
             if method == "GET" and (endpoint == "/console" or endpoint.startswith("/console/")):
                 status, response = self._console_static(endpoint)
                 return status, response
@@ -350,34 +357,12 @@ class AletheiaService:
             if self.config.rate_limit_enabled:
                 with self.lock:
                     self._check_rate_limit(self._rate_limit_identity(auth_context, headers))
-            with self.lock:
-                replay = self._idempotency_replay(
-                    method=method,
-                    endpoint=endpoint,
-                    headers=headers,
-                    payload=payload,
-                    request_hash=request_hash,
-                    namespace=namespace_for_log,
-                    client_id=client_id,
-                )
-                if replay is not None:
-                    status = int(replay.get("_status_code", 200))
-                    response = {key: value for key, value in replay.items() if key != "_status_code"}
-                else:
-                    replay = None
-            if replay is None:
-                data, warnings, pagination = self._route_consistent(
-                    method=method,
-                    endpoint=endpoint,
-                    query=query,
-                    payload=payload,
-                    auth_context=auth_context,
-                    request_id=request_id,
-                    headers=headers,
-                )
-                response = self._success(data=data, request_id=request_id, warnings=warnings, pagination=pagination)
+            if self.review_protocol.handles(method, endpoint, self._header(headers, "X-Aletheia-Contract")):
+                status, response = self.review_protocol.process(method=method, endpoint=endpoint, query=query,
+                    payload=payload, headers=headers, request_id=request_id, request_hash=request_hash)
+            else:
                 with self.lock:
-                    self._idempotency_store(
+                    replay = self._idempotency_replay(
                         method=method,
                         endpoint=endpoint,
                         headers=headers,
@@ -385,9 +370,35 @@ class AletheiaService:
                         request_hash=request_hash,
                         namespace=namespace_for_log,
                         client_id=client_id,
-                        status_code=status,
-                        response=response,
                     )
+                    if replay is not None:
+                        status = int(replay.get("_status_code", 200))
+                        response = {key: value for key, value in replay.items() if key != "_status_code"}
+                    else:
+                        replay = None
+                if replay is None:
+                    data, warnings, pagination = self._route_consistent(
+                        method=method,
+                        endpoint=endpoint,
+                        query=query,
+                        payload=payload,
+                        auth_context=auth_context,
+                        request_id=request_id,
+                        headers=headers,
+                    )
+                    response = self._success(data=data, request_id=request_id, warnings=warnings, pagination=pagination)
+                    with self.lock:
+                        self._idempotency_store(
+                            method=method,
+                            endpoint=endpoint,
+                            headers=headers,
+                            payload=payload,
+                            request_hash=request_hash,
+                            namespace=namespace_for_log,
+                            client_id=client_id,
+                            status_code=status,
+                            response=response,
+                        )
         except ServiceError as exc:
             status = exc.status_code
             response = self._error(exc, request_id)
@@ -400,22 +411,33 @@ class AletheiaService:
         except AletheiaError as exc:
             status = 400
             response = self._error(validation_error(str(exc)), request_id)
+        except sqlite3.OperationalError as exc:
+            busy = (getattr(exc, "sqlite_errorcode", 0) & 255) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            status = 503 if busy else 500
+            response = self._error(ServiceError("database_busy" if busy else "internal_error",
+                "Database temporarily busy; retain the same operation key when retrying." if busy else "Internal server error.",
+                status_code=status), request_id)
         except Exception:  # noqa: BLE001 - service boundary must envelope errors.
             status = 500
             response = self._error(ServiceError("internal_error", "Internal server error.", status_code=500), request_id)
         finally:
             duration_ms = int((time.perf_counter() - started) * 1000)
-            self._log_request(
-                request_id=request_id,
-                client_id=client_id,
-                namespace=namespace_for_log,
-                method=method,
-                path=endpoint,
-                status_code=status,
-                duration_ms=duration_ms,
-                request_hash=request_hash,
-                response=response if "response" in locals() else None,
-            )
+            try:
+                self._log_request(
+                    request_id=request_id,
+                    client_id=client_id,
+                    namespace=namespace_for_log,
+                    method=method,
+                    path=endpoint,
+                    status_code=status,
+                    duration_ms=duration_ms,
+                    request_hash=request_hash,
+                    response=response if "response" in locals() else None,
+                )
+            except sqlite3.Error:
+                # Operational logging must not replace a committed receipt or
+                # a structured failure. Governance audit remains transactional.
+                logging.getLogger(__name__).warning("Operational request logging unavailable.")
         return status, response
 
     def _route_consistent(self, **kwargs):
@@ -558,6 +580,7 @@ class AletheiaService:
         raise not_found(f"Endpoint not found: {method} {endpoint}")
 
     def _discovery_metadata(self) -> dict:
+        self.review_protocol.state()
         return {**discovery_metadata(), "service_identity": self.service_identity}
 
     def service_health(self) -> ServiceHealth:
@@ -1024,9 +1047,12 @@ class AletheiaService:
             return {"authenticated": True, "capabilities": auth_context.capabilities, "namespace_grants": auth_context.namespace_grants}
         if method == "POST" and endpoint.startswith("/v1/console/actions/candidates/"):
             self.auth.require_capability(auth_context, "memory:review")
+            if "expected_revision" in payload:
+                raise validation_error("Use the memory-review-v1 candidate endpoint for revision-protected review.")
             parts = endpoint.split("/")
             candidate_id = parts[5]
             action = parts[6] if len(parts) > 6 else ""
+            ReadAccess(self, auth_context).require("candidate_claim", candidate_id)
             reason = self._required(payload, "reason")
             confirmation = self._required(payload, "confirmation")
             if action == "promote":
@@ -3436,4 +3462,5 @@ def openapi_schema() -> dict:
         },
         "paths": paths,
     }
-    return apply_read_contracts(apply_discovery_contracts(schema))
+    from aletheia.service.review_contracts import apply_review_contracts
+    return apply_review_contracts(apply_read_contracts(apply_discovery_contracts(schema)))

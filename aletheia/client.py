@@ -7,7 +7,7 @@ import json
 import urllib.error
 import urllib.request
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 
 class AletheiaClientError(Exception):
@@ -46,6 +46,10 @@ class AletheiaUnsupportedFeatureError(AletheiaClientError):
     pass
 
 
+class AletheiaStaleRevisionError(AletheiaClientError):
+    """Refresh the candidate and obtain another explicit decision; never auto-retry."""
+
+
 ERROR_TYPES = {
     "unauthorized": AletheiaUnauthorizedError,
     "forbidden": AletheiaForbiddenError,
@@ -53,6 +57,11 @@ ERROR_TYPES = {
     "integrity_gate_failed": AletheiaIntegrityGateError,
     "rate_limited": AletheiaRateLimitError,
     "idempotency_conflict": AletheiaValidationError,
+    "precondition_required": AletheiaValidationError,
+    "stale_revision": AletheiaStaleRevisionError,
+    "review_conflict": AletheiaValidationError,
+    "invalid_cursor": AletheiaValidationError,
+    "unsupported_contract": AletheiaUnsupportedFeatureError,
 }
 
 
@@ -182,6 +191,31 @@ class AletheiaClient:
 
     def promote_candidate(self, candidate_id: str, *, reason: str) -> dict:
         return self._request("POST", f"/v1/candidates/{candidate_id}/promote", {"reason": reason})
+
+    def _require_review_profile(self):
+        if "memory-review-v1" not in self.current_principal().get("supported_profiles", []):
+            raise AletheiaUnsupportedFeatureError("The service does not advertise memory-review-v1; guarded review is unavailable.", code="unsupported_operation")
+
+    def get_candidate_for_review(self, candidate_id: str) -> dict:
+        self._require_review_profile()
+        return self._request("GET", "/v1/candidates/" + quote(candidate_id, safe=""), contract="memory-review-v1")
+
+    def list_candidates_for_review(self, *, namespace: str, status: str | None = None,
+                                   memory_type: str | None = None, project_id: str | None = None,
+                                   limit: int = 50, cursor: str | None = None) -> list[dict]:
+        self._require_review_profile()
+        query = {name: value for name, value in dict(namespace=namespace, status=status, memory_type=memory_type,
+            project_id=project_id, limit=limit, cursor=cursor).items() if value is not None}
+        return self._request("GET", "/v1/candidates?" + urlencode(query), contract="memory-review-v1")
+
+    def review_candidate(self, candidate_id: str, *, action: str, reason: str,
+                         expected_revision: str, idempotency_key: str, request_id: str | None = None) -> dict:
+        if action not in {"promote", "reject"}:
+            raise ValueError("Review action must be promote or reject")
+        self._require_review_profile()
+        return self._request("POST", "/v1/candidates/" + quote(candidate_id, safe="") + "/" + action,
+            {"reason": reason, "expected_revision": expected_revision}, idempotency_key=idempotency_key,
+            request_id=request_id, contract="memory-review-v1")
 
     def audit(self, target_type: str, target_id: str, *, request_id: str | None = None) -> dict:
         return self._request("GET", f"/v1/audit/{target_type}/{target_id}", request_id=request_id)
@@ -367,6 +401,7 @@ class AletheiaClient:
         *,
         request_id: str | None = None,
         idempotency_key: str | None = None,
+        contract: str | None = None,
     ) -> Any:
         raw = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
         headers = {"Accept": "application/json"}
@@ -378,6 +413,8 @@ class AletheiaClient:
             headers["X-Request-ID"] = request_id
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        if contract:
+            headers["X-Aletheia-Contract"] = contract
         request = urllib.request.Request(
             self.base_url + path,
             data=raw,
@@ -478,6 +515,15 @@ class AsyncAletheiaClient:
 
     async def promote_candidate(self, candidate_id: str, *, reason: str) -> dict:
         return await asyncio.to_thread(self._sync.promote_candidate, candidate_id, reason=reason)
+
+    async def get_candidate_for_review(self, candidate_id: str) -> dict:
+        return await asyncio.to_thread(self._sync.get_candidate_for_review, candidate_id)
+
+    async def list_candidates_for_review(self, **kwargs) -> list[dict]:
+        return await asyncio.to_thread(self._sync.list_candidates_for_review, **kwargs)
+
+    async def review_candidate(self, candidate_id: str, **kwargs) -> dict:
+        return await asyncio.to_thread(self._sync.review_candidate, candidate_id, **kwargs)
 
     async def audit(self, target_type: str, target_id: str) -> dict:
         return await asyncio.to_thread(self._sync.audit, target_type, target_id)

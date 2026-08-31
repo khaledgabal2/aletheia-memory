@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Memory governed review check</title>
+<style>body{font:16px system-ui;max-width:850px;margin:40px auto;padding:0 20px}button{padding:12px}pre{white-space:pre-wrap;background:#f2f4f5;padding:18px}</style>
+<h1>Memory governed review check</h1>
+<p>Two disposable, synthetic candidates. This check rejects one and promotes the other after testing a stale decision. No real user data or external models.</p>
+<button id="checks">Run governed review checks</button>
+<pre id="result" role="status">Not run</pre>
+<script type="importmap">{"imports":{"openapi-fetch":"/vendor/openapi-fetch.js"}}</script>
+<script type="module">
+import {Reviewer, ReviewError} from '/assets/review-client.js';
+const output=document.querySelector('#result');
+const fixture=async action=>{const response=await fetch('/fixture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action}),cache:'no-store'});if(!response.ok)throw Error('Fixture failed');return response.json();};
+document.querySelector('#checks').onclick=async()=>{
+  document.querySelector('#checks').disabled=true;
+  const results=[],check=(value,label)=>{if(!value)throw Error(label);results.push('✓ '+label);};
+  output.textContent='Running actual browser review requests…';
+  try{
+    const session=await fixture('connect'); let cleared=0;
+    const reviewer=new Reviewer(location.origin,session.token,()=>{cleared++;});
+    const first=await reviewer.inspect(session.candidate_ids[0]), second=await reviewer.inspect(session.candidate_ids[1]);
+    check(first.revision && second.revision,'Generated candidate inspection with opaque revisions');
+    const rejected=await reviewer.decide(second.id,'reject','Synthetic rejection',second.revision,'browser-reject');
+    check(rejected.action==='reject' && rejected.claim_id===null,'Explicit rejection produces an audit receipt');
+    let stale=false;try{await reviewer.decide(first.id,'promote','Old decision',first.revision,'browser-stale');}catch(error){stale=error instanceof ReviewError && error.status===412;}
+    check(stale,'Stale decision refused without automatic resubmission');
+    const fresh=await reviewer.inspect(first.id);
+    const receipt=await reviewer.decide(first.id,'promote','New synthetic approval',fresh.revision,'browser-promote');
+    const replay=await reviewer.decide(first.id,'promote','New synthetic approval',fresh.revision,'browser-promote');
+    check(receipt.operation_id===replay.operation_id && receipt.claim_id,'New decision and uncertain-response replay preserve one outcome');
+    const headers={Authorization:'Bearer '+session.token,'X-Aletheia-Contract':'memory-review-v1','X-Request-ID':'browser-review-headers'};
+    const detail=await fetch('/v1/candidates/'+first.id,{headers,cache:'no-store'});
+    check(detail.headers.get('Cache-Control')==='no-store' && detail.headers.get('X-Request-ID')==='browser-review-headers','Real same-origin contract, cache and correlation headers');
+    await fixture('revoke');let denied=false;
+    try{await reviewer.decide(first.id,'promote','New synthetic approval',fresh.revision,'browser-promote');}catch(error){denied=error instanceof ReviewError && error.status===401;}
+    check(denied && cleared>1,'Revocation denies replay and clears client state');
+    output.textContent='PASS\n'+results.join('\n');
+  }catch(error){output.textContent='FAIL: '+error.message;}
+};
+</script>

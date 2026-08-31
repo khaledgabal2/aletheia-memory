@@ -435,7 +435,7 @@ def test_migration_m2_to_m3_is_idempotent_and_does_not_extract_or_index(tmp_path
     first.close()
     second = Memory.open(db)
     try:
-        assert second.health()["schema_version"] == "1.3.0"
+        assert second.health()["schema_version"] == "1.3.1"
         assert second.read_claim(claim.id).object == "memory integrity"
         names = {
             row["name"]

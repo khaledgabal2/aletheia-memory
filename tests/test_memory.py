@@ -6,7 +6,7 @@ from aletheia import Memory
 def test_health_remember_retrieve_and_audit(tmp_path):
     memory = Memory.open(str(tmp_path / "aletheia.db"))
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         claim = memory.remember(
             namespace="user/default",
             memory_type="preference",
@@ -185,7 +185,7 @@ def test_migrations_are_idempotent_and_create_mvp_tables(tmp_path):
 
     memory = Memory.open(db_path)
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         rows = memory.store.connection.execute(
             """
             SELECT name

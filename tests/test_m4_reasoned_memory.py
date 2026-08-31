@@ -318,13 +318,13 @@ def test_m4_migration_is_idempotent_and_does_not_auto_reason(tmp_path):
             predicate="prefers_response_style",
             object="practical and direct",
         )
-        assert first.health()["schema_version"] == "1.3.0"
+        assert first.health()["schema_version"] == "1.3.1"
     finally:
         first.close()
 
     second = Memory.open(db, namespace=NAMESPACE)
     try:
-        assert second.health()["schema_version"] == "1.3.0"
+        assert second.health()["schema_version"] == "1.3.1"
         assert second.retrieve(namespace=NAMESPACE, query="practical and direct")
         assert second.list_inferences(NAMESPACE) == []
         assert second.list_reflections(namespace=NAMESPACE) == []
@@ -340,7 +340,7 @@ def test_m4_migration_is_idempotent_and_does_not_auto_reason(tmp_path):
 def test_m4_cli_groups_work(tmp_path, capsys):
     db = str(tmp_path / "aletheia.db")
     assert main(["init", "--db", db]) == 0
-    assert '"schema_version": "1.3.0"' in capsys.readouterr().out
+    assert '"schema_version": "1.3.1"' in capsys.readouterr().out
 
     assert main(
         [

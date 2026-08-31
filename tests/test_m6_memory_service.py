@@ -108,7 +108,7 @@ def test_m6_migration_adds_service_tables_without_tokens_or_daemons(tmp_path):
         )
         memory.store.migrate()
         health = memory.health()
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == "1.3.1"
         names = {
             row["name"]
             for row in memory.store.connection.execute(

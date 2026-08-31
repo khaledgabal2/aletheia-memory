@@ -127,6 +127,10 @@ The proposed 1.4.0 release is tracked separately from the installed v1.3.1 API:
 - [Phase 2 verification evidence](v1_4_0_phase2_evidence.md)
 - [Phase 3 implementation decisions](v1_4_0_phase3_decisions.md)
 - [Phase 3 verification evidence](v1_4_0_phase3_evidence.md)
+- [Governed review contract](v1_4_0_review_contract.md)
+- [Review migration design](v1_4_0_review_migration_design.md)
+- [Upgrade and recovery guide](v1_4_0_migration_guide.md)
+- [Phase 4 verification evidence](v1_4_0_phase4_evidence.md)
 - [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 
 The milestone contracts are included for maintainers and advanced users who

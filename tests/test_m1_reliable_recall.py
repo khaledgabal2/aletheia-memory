@@ -385,7 +385,7 @@ def test_project_claim_linking_and_project_isolation(tmp_path):
 def test_cli_context_sessions_projects_and_migrate(tmp_path, capsys):
     db = str(tmp_path / "aletheia.db")
     assert main(["migrate", "--db", db]) == 0
-    assert '"schema_version": "1.3.0"' in capsys.readouterr().out
+    assert '"schema_version": "1.3.1"' in capsys.readouterr().out
 
     assert main(
         [
@@ -501,7 +501,7 @@ def test_migration_from_m0_database_preserves_claims_and_audit(tmp_path):
 
     memory = Memory.open(str(db_path))
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         results = memory.retrieve(namespace="user/default", query="direct")
         assert results
         assert results[0].object == "direct"

@@ -13,7 +13,7 @@ assert(version.data);
 const softwareVersion: string = version.data.data.software_version;
 const profiles: string[] = version.data.data.supported_profiles;
 assert.equal(softwareVersion, version.data.data.service_version);
-assert.deepEqual(profiles, ["memory-read-v1"]); // Review/onboarding are not yet implemented.
+assert(profiles.includes("memory-read-v1")); // Additional independently verified profiles may be advertised.
 
 const principal = await client.GET("/v1/auth/me", options());
 assert(principal.data);

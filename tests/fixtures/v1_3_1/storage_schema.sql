@@ -1,24 +1,5 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS review_state (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    generation TEXT NOT NULL,
-    epoch INTEGER NOT NULL CHECK (typeof(epoch) = 'integer' AND epoch >= 0)
-);
-
-CREATE TABLE IF NOT EXISTS review_replays (
-    id TEXT PRIMARY KEY,
-    credential_id TEXT NOT NULL,
-    method TEXT NOT NULL,
-    endpoint TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    request_hash TEXT NOT NULL,
-    operation_id TEXT NOT NULL,
-    response_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version TEXT NOT NULL,
@@ -518,9 +499,6 @@ CREATE TABLE IF NOT EXISTS candidate_claims (
 
 CREATE INDEX IF NOT EXISTS idx_candidate_claims_review
 ON candidate_claims(namespace, candidate_status, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_candidates_review_page
-ON candidate_claims(namespace, created_at DESC, id ASC);
 
 CREATE TABLE IF NOT EXISTS candidate_evidence_links (
     candidate_id TEXT NOT NULL,

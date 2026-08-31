@@ -31,9 +31,9 @@ def domain_state(memory):
     return result
 
 
-def browser_server(service, upstream, claim):
+def browser_server(service, upstream, claim, *, review_candidates=()):
     before = domain_state(service.memory)
-    state = {}
+    state = {"domain_unchanged": True}
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -76,13 +76,16 @@ def browser_server(service, upstream, claim):
             if path == "/fixture" and self.command == "POST":
                 action = json.loads(body or b"{}").get("action")
                 with service.lock:
+                    # Check reads before the fixture deliberately mutates auth.
+                    state["domain_unchanged"] &= before == domain_state(service.memory)
                     if action == "connect":
                         if "token_id" in state:
                             service.auth.revoke_token(state["token_id"])
                         client = service.auth.create_client(name="Disposable browser fixture", client_type="test")
-                        token, raw = service.auth.create_token(client_id=client.id, capabilities=["memory:read", "memory:context", "memory:audit"], namespace_grants=[NAMESPACE])
+                        token, raw = service.auth.create_token(client_id=client.id, capabilities=["memory:read", "memory:context", "memory:audit"] + (["memory:review"] if review_candidates else []), namespace_grants=[NAMESPACE])
                         state.update(token_id=token.id)
-                        self.reply(200, {"token": raw, "claim_id": claim.id}); return
+                        before["review_state"] = domain_state(service.memory)["review_state"]
+                        self.reply(200, {"token": raw, "claim_id": claim.id, "candidate_ids": [item.id for item in review_candidates]}); return
                     if action == "revoke" and "token_id" in state:
                         service.auth.revoke_token(state["token_id"])
                     elif action == "narrow" and "token_id" in state:
@@ -90,13 +93,15 @@ def browser_server(service, upstream, claim):
                             service.memory.store.connection.execute("UPDATE api_tokens SET privacy_ceiling='public' WHERE id=?", (state["token_id"],))
                     else:
                         self.reply(400, {"error": "Unknown fixture action"}); return
+                    before["review_state"] = domain_state(service.memory)["review_state"]
                 self.reply(200, {"ok": True}); return
             if path == "/fixture-stats" and self.command == "GET":
                 with service.lock:
-                    self.reply(200, {"domain_unchanged": before == domain_state(service.memory)})
+                    self.reply(200, {"domain_unchanged": state["domain_unchanged"] and before == domain_state(service.memory)})
                 return
-            static = {"/": ROOT / "contracts/typescript/browser.html",
+            static = {"/": ROOT / "contracts/typescript" / ("review-browser.html" if review_candidates else "browser.html"),
                       "/assets/read-client.js": ROOT / "contracts/typescript/dist/read-client.js",
+                      "/assets/review-client.js": ROOT / "contracts/typescript/dist/review-client.js",
                       "/vendor/openapi-fetch.js": ROOT / "contracts/typescript/node_modules/openapi-fetch/dist/index.mjs"}
             if path in static and self.command == "GET":
                 self.reply(200, static[path].read_bytes(), "text/html; charset=utf-8" if path == "/" else "text/javascript; charset=utf-8")
@@ -104,7 +109,7 @@ def browser_server(service, upstream, claim):
             if path.startswith("/v1/"):
                 # Fixed upstream, bounded body, explicit forwarding allowlist.
                 # The proxy verifies its own Origin before removing that header.
-                headers = {key: self.headers[key] for key in ["Authorization", "Content-Type", "X-Request-ID", "X-Aletheia-Contract"] if key in self.headers}
+                headers = {key: self.headers[key] for key in ["Authorization", "Content-Type", "X-Request-ID", "X-Aletheia-Contract", "Idempotency-Key"] if key in self.headers}
                 forwarded = Request(upstream + self.path, data=body, headers=headers, method=self.command)
                 try:
                     response = urlopen(forwarded, timeout=10)

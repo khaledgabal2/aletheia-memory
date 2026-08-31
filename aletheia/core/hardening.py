@@ -56,6 +56,7 @@ from aletheia.models import (
     SupportBundle,
 )
 from aletheia.storage import SCHEMA_VERSION
+from aletheia.version import software_version
 
 
 BACKUP_FORMAT_VERSION = "1"
@@ -123,6 +124,7 @@ def create_backup(
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_id = new_id("bkp")
     created_at = utc_now_iso()
+    stored_schema_version = memory.health()["schema_version"]
     with tempfile.TemporaryDirectory(prefix="aletheia-backup-") as temp:
         temp_dir = Path(temp)
         payload_files: dict[str, bytes] = {
@@ -144,7 +146,7 @@ def create_backup(
             "namespace": namespace,
             "backup_type": backup_type,
             "format_version": BACKUP_FORMAT_VERSION,
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": stored_schema_version,
             "created_at": created_at,
             "created_by": created_by,
             "encrypted": encrypt,
@@ -200,7 +202,7 @@ def create_backup(
                 namespace,
                 backup_type,
                 BACKUP_FORMAT_VERSION,
-                SCHEMA_VERSION,
+                stored_schema_version,
                 str(archive_path),
                 int(encrypt),
                 key_id,
@@ -365,6 +367,8 @@ def restore_backup(
     verify_before: bool = True,
     run_integrity_after: bool = True,
 ) -> RestoreRun:
+    if mode not in {"new_database", "overwrite_existing", "in_place"}:
+        raise ValidationError("Restore mode must be new_database, overwrite_existing, or in_place.")
     started_at = utc_now_iso()
     warnings: list[str] = []
     status = "planned" if dry_run else "running"
@@ -401,14 +405,33 @@ def restore_backup(
         )
     if mode == "new_database" and target.exists():
         raise ValidationError("Target database already exists; use overwrite_existing mode explicitly.")
-    if mode in {"overwrite_existing", "in_place"} and target.exists():
-        pre_restore = target.with_suffix(target.suffix + ".pre-restore")
-        shutil.copy2(target, pre_restore)
-        warnings.append(f"Existing target backed up to {pre_restore}.")
     if "database.sqlite" not in payload:
         raise ValidationError("Restore requires a database.sqlite payload.")
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload["database.sqlite"])
+    from aletheia import Memory
+    from aletheia.storage.review import rotate_generation
+    # Prepare the restored generation before it can replace any live state.
+    with tempfile.TemporaryDirectory(prefix="aletheia-restore-") as temp:
+        prepared = Path(temp) / "prepared.sqlite"
+        prepared.write_bytes(payload["database.sqlite"])
+        restored = Memory.open(str(prepared))
+        try:
+            with restored.store.transaction(immediate=True):
+                rotate_generation(restored.store.connection)
+            if mode in {"overwrite_existing", "in_place"} and target.exists():
+                pre_restore = target.with_suffix(target.suffix + ".pre-restore-" + new_id("backup"))
+                source = sqlite3.connect(target)
+                try:
+                    _sqlite_copy(source, pre_restore)
+                finally:
+                    source.close()
+                warnings.append(f"Existing target backed up to {pre_restore}.")
+            if mode == "new_database" or not target.exists():
+                from aletheia.onboarding import reserve_database
+                reserve_database(target)
+            _sqlite_copy(restored.store.connection, target)
+        finally:
+            restored.close()
     restored_counts = manifest.get("item_counts", {})
     integrity_summary: dict[str, Any] | None = None
     if run_integrity_after:
@@ -1270,10 +1293,13 @@ def repair_integrity(memory, *, finding_id: str, dry_run: bool = True) -> Simple
 
 def migration_plan(memory, *, target_version: str = SCHEMA_VERSION) -> MigrationPlan:
     from_version = memory.health()["schema_version"]
-    steps = [{"name": f"Add M8 hardening table {table}", "table": table, "reversible": True} for table in sorted(M8_TABLES)]
+    if target_version != SCHEMA_VERSION:
+        raise ValidationError(f"This binary migrates only to storage {SCHEMA_VERSION}; use a backup for downgrade.")
+    steps = [{"name": "Install transactional review state, replay receipts and complete dependency triggers", "storage_version": SCHEMA_VERSION,
+              "reversible": False, "recovery": "Restore a pre-upgrade backup with the matching binary."}]
     plan_id = new_id("mplan")
     now = utc_now_iso()
-    warnings = ["Backup recommended before applying migration."]
+    warnings = ["Back up before applying migration. In-place downgrade is unsupported; retain the matching older binary for recovery."]
     with memory.store.transaction():
         memory.store.connection.execute(
             """
@@ -1281,7 +1307,7 @@ def migration_plan(memory, *, target_version: str = SCHEMA_VERSION) -> Migration
                 id, from_version, to_version, steps_json, irreversible,
                 backup_required, warnings_json, created_at, metadata_json
             )
-            VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
+            VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)
             """,
             (
                 plan_id,
@@ -1290,7 +1316,7 @@ def migration_plan(memory, *, target_version: str = SCHEMA_VERSION) -> Migration
                 json.dumps(steps, sort_keys=True),
                 json.dumps(warnings, sort_keys=True),
                 now,
-                json.dumps({"estimated_affected_tables": sorted(M8_TABLES)}, sort_keys=True),
+                json.dumps({"review_storage": ["review_state", "review_replays"], "dependency_inventory": "aletheia/storage/migrations/review_tables.json"}, sort_keys=True),
             ),
         )
     row = memory.store.connection.execute("SELECT * FROM migration_plans WHERE id = ?", (plan_id,)).fetchone()
@@ -1809,7 +1835,7 @@ def release_manifest(memory, *, output_path: str | None = None) -> ReleaseManife
             """,
             (
                 manifest_id,
-                SCHEMA_VERSION,
+                software_version(),
                 os.environ.get("GIT_COMMIT"),
                 now,
                 json.dumps([platform.python_version()], sort_keys=True),
@@ -1909,10 +1935,21 @@ def _protected_content_key_configured(memory, protected: ProtectedModeConfig) ->
 
 
 def _sqlite_snapshot(memory, destination: Path) -> None:
+    _sqlite_copy(memory.store.connection, destination)
+
+
+def _sqlite_copy(source: sqlite3.Connection, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    target = sqlite3.connect(destination)
+    target = sqlite3.connect(destination, timeout=0.2)
     try:
-        memory.store.connection.backup(target)
+        last_progress = perf_counter()
+        def progress(status, remaining, total):
+            nonlocal last_progress
+            if status not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                last_progress = perf_counter()
+            if perf_counter() - last_progress >= 10:
+                raise ValidationError("SQLite copy timed out; let active writers finish and retry.")
+        source.backup(target, pages=256, progress=progress, sleep=0.05)
     finally:
         target.close()
 
@@ -2338,6 +2375,8 @@ def _integrity_findings(memory, *, namespace: str | None, deep: bool) -> list[di
     health = memory.health()
     if health["schema_version"] != SCHEMA_VERSION:
         findings.append(_finding("critical", "schema_version", None, None, f"Schema is {health['schema_version']}, expected {SCHEMA_VERSION}.", False, "Run migration."))
+    elif not memory.store._schema_current():
+        findings.append(_finding("critical", "review_schema_integrity", None, None, "Review state or dependency triggers are incomplete.", False, "Back up and inspect the migration before allowing review."))
     tables = {row["name"] for row in memory.store.connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual table')").fetchall()}
     for table in sorted(M8_TABLES - tables):
         findings.append(_finding("critical", "missing_table", table, "table", f"Required table missing: {table}", False, "Run migration."))

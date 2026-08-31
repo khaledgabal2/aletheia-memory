@@ -108,7 +108,7 @@ def test_m7_migration_adds_operational_tables_without_user_side_effects(tmp_path
     memory = Memory.open(str(tmp_path / "migrate.db"), namespace=NAMESPACE)
     try:
         health = memory.health()
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == "1.3.1"
         tables = {
             row["name"]
             for row in memory.store.connection.execute(

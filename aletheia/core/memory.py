@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import asdict, replace
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -462,6 +463,14 @@ RISK_PATTERNS = [
     ("unsafe_instruction", "critical", r"delete\s+all\s+other\s+memories"),
     ("memory_poisoning_attempt", "medium", r"permanent\s+memory"),
 ]
+
+
+def _atomic_review(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.store.transaction(immediate=True):
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class Memory:
@@ -1726,6 +1735,7 @@ class Memory:
         ).fetchall()
         return [self.read_candidate(row["id"]) for row in rows]
 
+    @_atomic_review
     def review_candidate(
         self,
         candidate_id: str,
@@ -1797,6 +1807,7 @@ class Memory:
         ).fetchone()
         return ExtractionDecision.from_row(row)
 
+    @_atomic_review
     def promote_candidate(
         self,
         candidate_id: str,
