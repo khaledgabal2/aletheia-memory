@@ -8,7 +8,7 @@ use the packaged [Python or TypeScript starter](examples.md) and negotiate
 Optional semantic and LLM setup lives in [local recipes](v1_4_0_local_model_recipes.md). The next step is
 the [scoped HTTP agent starter](examples.md), with separate operator review and
 no manually copied IDs or credentials in source. Those new starter commands
-require the unreleased 1.4 development build. The reference patterns below are
+require Memory 1.4.0 or later. The reference patterns below are
 lower-level building blocks; hybrid/semantic retrieval is an optional later step.
 Memory installs and runs independently of Desktop and Relay.
 

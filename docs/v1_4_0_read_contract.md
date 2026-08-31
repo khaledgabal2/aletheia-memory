@@ -1,9 +1,10 @@
 # 1.4.0 read contract
 
-This is the Phase 2 implementation of the [release plan](v1_4_0_contract_hardening_and_developer_experience_plan.md).
-It is unreleased. The development branch advertises `memory-read-v1` after its
-local conformance checks; review and onboarding profiles remain unavailable.
-No package version or database schema is changed by this slice.
+Memory 1.4.0 advertises `memory-read-v1` after its conformance gates.
+[Governed review](v1_4_0_review_contract.md) and
+[agent onboarding](v1_4_0_agent_onboarding_contract.md) are separate profiles.
+The original Phase 2 work introduced this read slice; the complete release also
+includes the [storage upgrade](v1_4_0_migration_guide.md).
 
 Memory owns the contracts, generated consumer, browser fixture and tests. None
 requires Desktop, Relay, a model, a provider account or a user's existing database.

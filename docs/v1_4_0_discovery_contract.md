@@ -11,8 +11,9 @@ version separately from the database schema. A new `GET /v1/auth/me` endpoint
 reports only the caller's identity and effective access. The service also
 publishes typed discovery schemas that generated clients can use directly.
 
-Existing routes, aliases, envelopes and write defaults remain supported. No
-database migration or Desktop installation is required for this foundation.
+Existing routes, aliases, envelopes and write defaults remain supported. The original discovery foundation did not require a database migration or
+Desktop installation. The complete 1.4.0 release has a separate
+[storage upgrade](v1_4_0_migration_guide.md).
 
 | Endpoint | Access | Result |
 | --- | --- | --- |
@@ -25,8 +26,9 @@ database migration or Desktop installation is required for this foundation.
 
 These six operations have operation IDs, parameters, typed envelopes and error
 responses in `aletheia/service/contracts.py`. The published schema is checked
-against actual service responses. Other paths retain their existing legacy
-schema representation; discovery coverage is not complete read/review coverage.
+against actual service responses. The read, review and onboarding registries
+extend these schemas for their selected operations. Other paths retain their existing legacy representation;
+discovery alone does not certify arbitrary administrative operations.
 
 ## Versions and features
 
@@ -35,11 +37,11 @@ schema representation; discovery coverage is not complete read/review coverage.
   explicitly reports that uncertainty. It never falls back to the schema number.
 - `service_version`: preserved field, now accurately reporting the software version.
 - `api_version`: `v1`, independent of the software release number.
-- `schema_version`: actual persistent schema, unchanged by this work.
+- `schema_version`: actual persistent schema: 1.3.1 in Memory 1.4.0 (see the migration guide).
 - `supported_features`: currently includes `current-principal`.
 - `supported_profiles`: advertises a profile only after its complete gate passes.
-  Phase 1 advertised none; the Phase 2 branch adds `memory-read-v1` (see the
-  [read contract](v1_4_0_read_contract.md)). Review/onboarding remain unavailable.
+  Memory 1.4.0 advertises `memory-read-v1`, `memory-review-v1`, and
+  `agent-onboarding-v1`; older discovery-only builds may advertise none.
 - `service_identity`: random identity stable for one running service instance.
   Restarting the service changes it. It contains no path, token or hardware identity.
 
@@ -99,8 +101,8 @@ if not compatibility["compatible"]:
     print("Unavailable:", compatibility["missing_profiles"])
 ```
 
-The example names a required profile to demonstrate refusal: the discovery-only
-implementation does not yet advertise `memory-read-v1`. Existing legacy v1
+The example requires the read profile and refuses a server without it. Memory
+1.4.0 supports it; older discovery-only builds do not. Existing legacy v1
 operations remain usable without asking for a profile. The async SDK offers
 the same methods and arguments.
 

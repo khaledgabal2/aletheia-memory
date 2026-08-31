@@ -85,11 +85,10 @@ folder to rerun. Keep the demo database for inspection; remove only that disposa
 folder when finished. Embedded Python is trusted local code. `Memory.remember()`
 still creates an active claim and is not the recommended untrusted-agent write path.
 
-## Generate this example on a 1.4 development build
+## Generate this example on 1.4.0 or later
 
-These new CLI options are unreleased. They require the reviewed 1.4 development
-wheel; installing public 1.3.1 does not add them. Until release, use the Python
-example above with the published package.
+The packaged generator and read-only diagnostics require Memory 1.4.0 or later.
+The Python example above also remains usable with 1.3.1.
 
 ```sh
 aletheia examples create --type embedded --output ./memory-demo

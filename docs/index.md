@@ -1,7 +1,7 @@
 # Aletheia Documentation Index
 
-This help map covers the public v1.3.1 APIs and the explicitly marked, unpublished
-1.4.0rc1 additions. The primary Python quickstart works on both.
+This help map covers Aletheia 1.4.0 and the compatible public v1.3.1 APIs.
+The primary Python quickstart works on both.
 Aletheia is a local, auditable memory system for AI agents. The production
 baseline is intentionally generic: product-specific integration layers belong
 on their own branches or forks.
@@ -116,7 +116,7 @@ Aletheia is easiest to understand as layers:
 
 ## Contracts And Historical Design Docs
 
-The unpublished 1.4.0rc1 release candidate is tracked separately from public v1.3.1:
+The 1.4.0 design, prerelease evidence and final verification are recorded here:
 
 - [Release plan](v1_4_0_contract_hardening_and_developer_experience_plan.md)
 - [Phase 0 scope and decisions](v1_4_0_phase0_decisions.md)
@@ -135,6 +135,7 @@ The unpublished 1.4.0rc1 release candidate is tracked separately from public v1.
 - [Optional tested local model recipes](v1_4_0_local_model_recipes.md)
 - [Phase 5 verification evidence](v1_4_0_phase5_evidence.md)
 - [Release-candidate verification](v1_4_0_phase6_evidence.md)
+- [Final pre-publication verification](v1_4_0_final_verification.md)
 - [Release approval and handoff](v1_4_0_release_handoff.md)
 - [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 

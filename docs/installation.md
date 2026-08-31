@@ -1,7 +1,6 @@
 # Installation
 
-This guide covers the published Aletheia v1.3.1 baseline and the unpublished
-1.4.0rc1 release candidate, verifying the command line,
+This guide covers Aletheia 1.4.0, verifying the command line,
 initializing a local database, and finding installed help. Follow the
 [zero-model quickstart](quickstart.md) for the primary first-run journey:
 evidence, candidate, explicit review, lexical context, provenance and reopen.
@@ -32,23 +31,16 @@ aletheia --help
 aletheia docs list
 ```
 
-## Unpublished 1.4.0rc1 And New Starters
+## 1.4.0 Upgrade And Packaged Starters
 
-The candidate adds packaged starters, typed profiles and non-mutating diagnostics.
-It is **not on PyPI**. Install the reviewed local artifact in a fresh environment:
+Use `python -m pip install aletheia-memory==1.4.0` for this release, or install
+the reviewed `aletheia_memory-1.4.0-py3-none-any.whl` or matching source archive
+by local path. Before publication, only the reviewed local artifacts are available.
 
-```sh
-python -m venv .venv-rc
-. .venv-rc/bin/activate
-python -m pip install ./aletheia_memory-1.4.0rc1-py3-none-any.whl
-```
-
-Alternatively install the matching `aletheia_memory-1.4.0rc1.tar.gz`. Installing
-public PyPI 1.3.1 or public GitHub main does not provide these private changes.
 Before opening any existing database, read the
 [migration/backup guide](v1_4_0_migration_guide.md). Storage moves from 1.3.0 to
 1.3.1; older software cannot open the upgraded database. Keep the pre-upgrade
-backup and old binary for recovery. From the candidate environment:
+backup and old binary for recovery. From the 1.4.0 environment:
 
 ```bash
 aletheia examples create --type embedded --output ./memory-demo
@@ -76,7 +68,7 @@ the published version.
 Install a downloaded release artifact into your environment:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.3.1-py3-none-any.whl
+python -m pip install ./dist/aletheia_memory-1.4.0-py3-none-any.whl
 ```
 
 Then verify the CLI:

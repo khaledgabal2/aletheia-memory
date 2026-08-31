@@ -23,7 +23,7 @@ export function readClient(baseUrl: string, token: string, timeoutMs = 10_000) {
       const headers = new Headers(request.headers);
       headers.set("X-Request-ID", crypto.randomUUID());
       try {
-        const response = await fetch(new Request(request, { headers, signal: controller.signal, cache: "no-store" }));
+        const response = await fetch(request, { headers, signal: controller.signal, cache: "no-store" });
         if (!response.ok) {
           const hint = response.headers.get("Retry-After");
           const seconds = hint === null ? NaN : Number(hint);

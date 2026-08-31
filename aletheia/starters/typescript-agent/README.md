@@ -1,6 +1,6 @@
 # Scoped TypeScript agent
 
-This starter is for the unpublished 1.4.0rc1 package. It includes declarations
+This starter is for the 1.4.0 package. It includes declarations
 generated from Memory's actual onboarding contract, not handwritten domain types.
 Use Node 22 or later (verified toolchain: Node 26.0.0), plus the Python environment
 containing the matching Memory build. Node is not required for Memory core.

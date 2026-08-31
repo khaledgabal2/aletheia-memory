@@ -75,7 +75,8 @@ for generation and browser fixtures. Model smoke is explicitly optional; its
 prerequisites, license/data implications and limitations are in the
 [recipe guide](v1_4_0_local_model_recipes.md).
 
-**Still pending:** independent required CI including Linux (security forks do not
+**Historical status at the RC checkpoint** (superseded for final preparation by
+[final verification](v1_4_0_final_verification.md) and the current handoff): independent required CI including Linux (security forks do not
 run Actions, and this host has no Docker/Podman/Colima runtime); human five-minute
 onboarding/cold-install timing; final code/security review; owner approval;
 protected-branch/advisory merge and disclosure; final 1.4.0 version-only rebuild;

@@ -2,10 +2,9 @@
 
 All notable public changes to Aletheia are tracked here.
 
-## 1.4.0rc1 (unpublished)
+## 1.4.0
 
-Integration contracts and developer experience release candidate. No public
-release, advisory publication or protected-branch merge has occurred.
+Integration contracts and developer experience release.
 
 - Separate software, API, storage and negotiated profile versions; preserve the
   published 1.3.1 SDK compatibility bridge. Add scoped current-principal discovery.
@@ -30,8 +29,8 @@ Compatibility limits: new profiles require discovery; old clients keep the
 legacy route surface but do not gain negotiated write guarantees. Unknown
 contract headers, invalid profiled fields, unsafe output overwrites and stale
 write preconditions are explicitly refused. No npm package is published.
-See the [release handoff](docs/v1_4_0_release_handoff.md) for evidence, remaining
-checks and approval boundaries.
+See the [release handoff](docs/v1_4_0_release_handoff.md) for evidence and the
+release verification record.
 
 ## 1.3.1
 

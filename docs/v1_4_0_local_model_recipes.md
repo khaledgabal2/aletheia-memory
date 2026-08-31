@@ -1,7 +1,7 @@
 # Optional local model recipes
 
-Start with the [model-free quickstart](quickstart.md). These recipes require an
-unreleased 1.4 build and deliberately selected local models. Python core
+Start with the [model-free quickstart](quickstart.md). These recipes require Memory
+1.4.0 or later and deliberately selected local models. Python core
 installation downloads no model and needs no Node, Ollama or hosted account.
 There is no `[local-ai]` extra: these adapters use the existing HTTP providers
 and Python standard library, with no justified additional Python dependency.

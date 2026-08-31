@@ -46,7 +46,8 @@ test("bounded backoff honors retry hints; authorization and validation stop poll
   assert.equal(new ReadError("bad input", 400).transient, false);
 });
 
-test("deadline includes a stalled response body", async () => {
+for (const cancellation of ["deadline", "caller cancellation"] as const) {
+test(`${cancellation} includes a stalled response body`, { timeout: 10_000 }, async t => {
   let started!: () => void;
   const headersSent = new Promise<void>(resolve => { started = resolve; });
   const server = createServer((_request, response) => {
@@ -54,16 +55,26 @@ test("deadline includes a stalled response body", async () => {
     response.write('{"data":'); started(); // Deliberately never complete the body.
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address(); assert(address && typeof address !== "string");
-  try {
-    const request = readClient(`http://127.0.0.1:${address.port}`, "synthetic", 200).GET("/v1/auth/me");
-    const rejected = assert.rejects(request);
-    await headersSent; await rejected;
-  } finally {
+  t.after(async () => {
+    const closed = new Promise<void>(resolve => server.close(() => resolve()));
     server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-  }
+    await closed;
+  });
+  const address = server.address(); assert(address && typeof address !== "string");
+  const controller = new AbortController();
+  const expected = cancellation === "deadline" ? "Request timed out" : "Caller cancelled";
+  // Fail explicitly on a pre-header failure; wait for real body transfer before
+  // cancelling, and require the expected error rather than any transport error.
+  const request = readClient(`http://127.0.0.1:${address.port}`, "synthetic", cancellation === "deadline" ? 1000 : 20_000)
+    .GET("/v1/auth/me", { signal: controller.signal });
+  await Promise.race([headersSent, request.then(
+    () => assert.fail("The intentionally incomplete response unexpectedly finished"),
+    error => { throw new Error("Request failed before the stalled-body fixture sent headers", { cause: error }); },
+  )]);
+  if (cancellation === "caller cancellation") controller.abort(new ReadError(expected));
+  await assert.rejects(request, error => error instanceof ReadError && error.message === expected);
 });
+}
 
 test("scope changes during a request discard its result, and unsupported profiles stop", async t => {
   let ceiling = "personal", profiles = ["memory-read-v1"], cleared = 0;

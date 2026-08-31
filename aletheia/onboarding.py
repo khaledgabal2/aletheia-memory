@@ -59,6 +59,6 @@ def create_starter(kind, output_path):
     content[".gitignore"] = "*.db\n*.db-*\n*.sqlite*\n.env\n.venv/\n__pycache__/\n"
     if kind == "typescript-agent":
         content[".gitignore"] += "node_modules/\ndist/\n"
-    content["requirements.txt"] = "aletheia-memory>=1.3.1,<2\n" if kind == "embedded" else "aletheia-memory>=1.4.0rc1,<2\n"
+    content["requirements.txt"] = "aletheia-memory>=1.3.1,<2\n" if kind == "embedded" else "aletheia-memory>=1.4.0,<2\n"
     target = write_new_project(output_path, content)
     return {"type": kind, "path": str(target), "files": sorted(content), "database_created": False}

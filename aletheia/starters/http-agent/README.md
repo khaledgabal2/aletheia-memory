@@ -1,6 +1,6 @@
 # A scoped HTTP agent and a separate operator
 
-Use the unpublished 1.4.0rc1 build of Memory and Python 3.11+. This starter needs
+Use the 1.4.0 build of Memory and Python 3.11+. This starter needs
 current-principal discovery, `memory-read-v1`, `agent-onboarding-v1` and
 `memory-review-v1`; it does not work with a 1.3.1 service.
 
@@ -39,7 +39,7 @@ payload, and inspect pending candidates with the operator before continuing.
 Review uses the inspected revision and an explicit operator key. A stale review
 fails rather than carrying the previous approval onto new state.
 
-On the installed release candidate:
+On the installed 1.4.0 package:
 
 ```sh
 aletheia doctor --read-only --db ./aletheia-http-demo.db --namespace user/demo --query architecture

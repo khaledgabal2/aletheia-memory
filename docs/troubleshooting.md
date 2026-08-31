@@ -5,7 +5,7 @@ docs, or release checks do not behave as expected.
 
 ## Start With Diagnostics
 
-On the **unreleased 1.4 development build**, start with a read-only check:
+On **Memory 1.4.0 or later**, start with a read-only check:
 
 ```bash
 aletheia doctor --read-only --db ./aletheia-demo.db --namespace user/demo --query architecture

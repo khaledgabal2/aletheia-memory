@@ -30,7 +30,7 @@ aletheia docs show index
 | `migrate apply` | Apply migrations, optionally with backup and verification. |
 | `migrate verify` | Verify schema and optional namespace integrity. |
 
-The 1.4 development build adds `doctor --read-only`. It inspects a local database
+Memory 1.4.0 adds `doctor --read-only`. It inspects a local database
 without creation, migration or recorded diagnostics. `--config` reads existing
 service settings; `--db` overrides their database path. Use `--namespace` and
 `--query` for lexical first-run checks. Database inspection is trusted operator
