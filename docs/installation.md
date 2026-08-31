@@ -1,8 +1,10 @@
 # Installation
 
 This guide covers installing Aletheia v1.3.1, verifying the command line,
-initializing a local database, and finding the help documents that ship with
-the package.
+initializing a local database, and finding installed help. Follow the
+[zero-model quickstart](quickstart.md) for the primary first-run journey:
+evidence, candidate, explicit review, lexical context, provenance and reopen.
+Memory needs neither Desktop nor Relay, and the core demo needs no models.
 
 ## Requirements
 
@@ -28,6 +30,22 @@ Then verify the CLI:
 aletheia --help
 aletheia docs list
 ```
+
+## New Development Starters
+
+The 1.4 branch adds packaged starters and non-mutating diagnostics. These are
+**unreleased**: use a built development wheel or the intended development
+checkout, not public PyPI 1.3.1. From an environment with that build installed:
+
+```bash
+aletheia examples create --type embedded --output ./memory-demo
+cd memory-demo
+python memory_demo.py
+aletheia doctor --read-only --db ./aletheia-demo.db --namespace user/demo --query architecture
+```
+
+The starter creates a new database itself and refuses an existing one. See
+[examples](examples.md) for the separate scoped HTTP agent/operator demo.
 
 ## Install From GitHub
 
@@ -81,10 +99,13 @@ aletheia init --db ./aletheia.db
 ```
 
 The command creates or migrates the database and prints the current health
-record. For repository development, use:
+record. It is a write operation, including when the file already exists.
+The new 1.4 development mode reserves a fresh path and refuses existing files
+or symlinks; read-only diagnostics never initialize a missing database:
 
 ```bash
-uv run --extra dev aletheia init --db ./aletheia.db
+aletheia init --new --db ./fresh-demo.db
+aletheia doctor --read-only --db ./fresh-demo.db
 ```
 
 ## Verify Installed Help
@@ -114,9 +135,11 @@ aletheia docs build --db ./aletheia.db --output ./site
 The build command also writes `openapi.generated.json` when API reference
 generation is enabled.
 
-## First Memory Check
+## Trusted Operator CLI Reference
 
-Store a reviewed explicit memory:
+For the primary first-run experience, use the Python quickstart above. This
+lower-level CLI example writes an already-reviewed, active memory directly;
+it is not the candidate-first agent workflow:
 
 ```bash
 aletheia remember \
@@ -124,8 +147,8 @@ aletheia remember \
   --namespace user/default \
   --type preference \
   --subject user \
-  --predicate prefers_response_style \
-  --object "practical and direct"
+  --predicate prefers \
+  --object "careful architecture notes"
 ```
 
 Search it:
@@ -134,7 +157,8 @@ Search it:
 aletheia search \
   --db ./aletheia.db \
   --namespace user/default \
-  "response style"
+  --mode lexical \
+  "architecture"
 ```
 
 Build context for an agent:
@@ -143,7 +167,8 @@ Build context for an agent:
 aletheia context-pack \
   --db ./aletheia.db \
   --namespace user/default \
-  "How should I answer?"
+  --mode lexical \
+  "architecture"
 ```
 
 ## Development Verification

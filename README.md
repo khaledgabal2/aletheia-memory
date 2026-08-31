@@ -60,93 +60,98 @@ clear audit trail.
 
 ## Installation
 
-Install the published package from PyPI:
+Use Python 3.11+ and install the published package:
 
 ```bash
 python -m pip install aletheia-memory
 ```
 
-For an unreleased source checkout, install from GitHub:
+Memory is independent of Desktop and Relay. Its core needs no model, account,
+embedding index or running external service.
 
-```bash
-python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
+## Your First Reviewed Memory
+
+In a fresh demo directory, save this as `memory_demo.py` and run
+`python memory_demo.py`. The example works with published 1.3.1 and with this
+1.4 development branch. Read the candidate and source before typing `approve`.
+
+```python
+"""A deterministic evidence → review → memory example; no model required."""
+import os
+from pathlib import Path
+from aletheia import Memory
+
+path = Path("aletheia-demo.db")
+for suffix in ("-wal", "-shm", "-journal"):
+    companion = Path(str(path) + suffix)
+    if companion.exists() or companion.is_symlink():
+        raise SystemExit("Database companion file already exists. Preserve it and choose a new directory.")
+try:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+except FileExistsError:
+    raise SystemExit("Demo database already exists. Choose a new directory; nothing was overwritten.")
+
+namespace = "user/demo"
+memory = Memory.open(str(path), namespace=namespace)
+claim_id = None
+try:
+    batch = memory.ingest(namespace, source_type="manual",
+                          content="User prefers careful architecture notes.", trust_level="user_asserted")
+    run = memory.extract_candidates(namespace, batch_id=batch.id, extractor="rule_based")
+    candidates = memory.list_candidates(namespace, extraction_run_id=run.id)
+    if len(candidates) != 1:
+        raise SystemExit("Expected one candidate from this bounded example; inspect the extraction result.")
+    candidate = candidates[0]
+    print("Pending candidate:", candidate.subject, candidate.predicate, candidate.object)
+    print("Source:", memory.read_event(batch.evidence_ids[0]).content)
+    print("Trusted results before approval:", len(memory.retrieve(namespace, "architecture", mode="lexical")))
+    try:
+        approve = input("Inspect the candidate and source. Type approve to promote it: ").strip() == "approve"
+    except EOFError:
+        approve = False
+    if approve:
+        claim = memory.promote_candidate(candidate.id, reason="I inspected and approved the demo candidate.")
+        claim_id = claim.id
+        print(memory.context_pack(namespace, "architecture", retrieval_mode="lexical", record_usage=False).to_markdown())
+        print("Provenance:", memory.explain_claim(claim.id).evidence[0]["content"])
+    else:
+        print("Nothing promoted. The candidate remains pending review.")
+finally:
+    memory.close()
+
+if claim_id:
+    reopened = Memory.open(str(path), namespace=namespace, auto_migrate=False)
+    try:
+        hits = reopened.retrieve(namespace, "architecture", mode="lexical")
+        assert hits and hits[0].claim_id == claim_id
+        print("Reopened successfully: the reviewed claim and its evidence persist.")
+    finally:
+        reopened.close()
 ```
 
-Or install a release wheel:
+Before approval there are zero trusted matches. Approval produces context,
+source provenance and a successful reopen check. Any other answer leaves the
+candidate pending. The query matches the literal word `architecture`; arbitrary
+paraphrase recall is not promised. Reruns refuse to overwrite the database.
+
+See the [complete quickstart](docs/quickstart.md), then the
+[scoped HTTP agent starter](docs/examples.md). The starter generator and read-only
+diagnostic options are new 1.4 development features, not yet in public 1.3.1:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.3.1-py3-none-any.whl
+aletheia examples create --type embedded --output ./memory-demo
+cd memory-demo
+python memory_demo.py
+aletheia doctor --read-only --db ./aletheia-demo.db --namespace user/demo
 ```
 
-Verify the CLI and bundled docs:
+On the published package, use the copyable Python example above.
+The five-minute human target is not yet measured.
 
-```bash
-aletheia --help
-aletheia docs list
-aletheia docs show introduction
-```
-
-Install from source:
-
-```bash
-git clone https://github.com/khaledgabal2/aletheia-memory.git
-cd aletheia-memory
-python -m pip install -e ".[dev]"
-```
-
-For local development with `uv`:
-
-```bash
-uv run --extra dev aletheia --help
-uv run --extra dev pytest
-```
-
-## Quick Start
-
-Create a local SQLite database:
-
-```bash
-aletheia init --db ./aletheia.db
-```
-
-Store a reviewed explicit memory:
-
-```bash
-aletheia remember \
-  --db ./aletheia.db \
-  --namespace user/default \
-  --type preference \
-  --subject user \
-  --predicate prefers_response_style \
-  --object "practical and direct"
-```
-
-Search memory:
-
-```bash
-aletheia search \
-  --db ./aletheia.db \
-  --namespace user/default \
-  "response style"
-```
-
-Build an agent-ready context pack:
-
-```bash
-aletheia context-pack \
-  --db ./aletheia.db \
-  --namespace user/default \
-  --mode lexical \
-  --token-budget 1200 \
-  "How should the assistant respond?"
-```
-
-During repository development, prefix the same commands with
-`uv run --extra dev`:
-
-```bash
-uv run --extra dev aletheia init --db ./aletheia.db
-```
+The remaining sections are integration/reference workflows. Trusted embedded
+`remember()` retains its active-write behavior; agents should submit candidates
+and leave promotion to a separate operator.
 
 ## Candidate-First Ingestion
 
@@ -486,3 +491,18 @@ operation, evidence-backed memory, candidate-first agent writes, explicit
 review for trust, scoped access, and auditability. Open an issue or discussion
 before introducing new persistent schema, new network behavior, or new
 active-write paths.
+
+## Development Installation
+
+For repository development after the public quickstart:
+
+```bash
+git clone https://github.com/khaledgabal2/aletheia-memory.git
+cd aletheia-memory
+python -m pip install -e ".[dev]"
+python -m pytest
+```
+
+An approved unreleased wheel can instead be installed by its local path. Public
+`main` and PyPI do not contain every feature in the private 1.4 implementation
+branches. Do not publish development artifacts or credentials from this workflow.

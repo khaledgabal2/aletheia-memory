@@ -1,5 +1,8 @@
 # Model-free first-run tutorial draft
 
+Historical Phase 1 prototype. The maintained, executable tutorial is now
+[Your first reviewed memory](quickstart.md); use it for new walkthroughs.
+
 Phase 1 draft for the 1.4.0 onboarding workstream. The APIs below already exist;
 the final presentation, safe starter generation, diagnostics and human timing
 will be verified in G4. No new helper is needed by this prototype.

@@ -899,8 +899,7 @@ def list_sdk_releases(memory) -> list[SDKReleaseRecord]:
 def scaffold_adapter(memory, *, adapter_type: str, name: str, output_path: str) -> dict:
     if adapter_type not in {"generic-http", "mcp-client", "python-sdk"}:
         raise ValidationError("adapter_type must be generic-http, mcp-client, or python-sdk.")
-    out = Path(output_path)
-    out.mkdir(parents=True, exist_ok=True)
+    from aletheia.onboarding import write_new_project
     safe_name = name.replace(" ", "-").lower()
     files = {
         "README.md": f"# {name}\n\nAletheia {adapter_type} adapter scaffold.\n\nRun conformance with:\n\n```bash\naletheia conformance run --suite agent-adapter --target .\n```\n",
@@ -908,8 +907,7 @@ def scaffold_adapter(memory, *, adapter_type: str, name: str, output_path: str) 
         "agent_loop.py": _adapter_loop_source(adapter_type),
         "conformance.py": "def test_candidate_write_default():\n    assert True\n",
     }
-    for rel, text in files.items():
-        (out / rel).write_text(text, encoding="utf-8")
+    out = write_new_project(output_path, files)
     example_id = "ex_" + content_hash(f"{adapter_type}\0{safe_name}\0{out}")[:24]
     with memory.store.transaction():
         memory.store.connection.execute(

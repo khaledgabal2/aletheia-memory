@@ -2,6 +2,13 @@
 
 This guide explains how to integrate the current Aletheia implementation into other systems.
 
+Start with the [model-free Python quickstart](quickstart.md). The next step is
+the [scoped HTTP agent starter](examples.md), with separate operator review and
+no manually copied IDs or credentials in source. Those new starter commands
+require the unreleased 1.4 development build. The reference patterns below are
+lower-level building blocks; hybrid/semantic retrieval is an optional later step.
+Memory installs and runs independently of Desktop and Relay.
+
 Use the integration style that matches your boundary:
 
 - Same Python process: use `Memory`.
@@ -22,9 +29,9 @@ memory = Memory.open("./aletheia.db", namespace="user/default")
 try:
     pack = memory.context_pack(
         namespace="user/default",
-        query="What context matters for this task?",
-        retrieval_mode="hybrid",
-        record_usage=True,
+        query="architecture",
+        retrieval_mode="lexical",
+        record_usage=False,
     )
     context_for_agent = pack.to_markdown()
 
@@ -49,7 +56,7 @@ Choose this when another process, runtime, or language needs memory.
 Start the sidecar:
 
 ```bash
-uv run --extra dev aletheia serve \
+aletheia serve \
   --db ./aletheia.db \
   --host 127.0.0.1 \
   --port 8765
@@ -63,10 +70,10 @@ curl -s http://127.0.0.1:8765/v1/context-pack \
   -H "Authorization: Bearer atl_..." \
   -d '{
     "namespace": "user/default",
-    "query": "How should I answer?",
-    "retrieval_mode": "hybrid",
+    "query": "architecture",
+    "retrieval_mode": "lexical",
     "token_budget": 1200,
-    "record_usage": true
+    "record_usage": false
   }'
 ```
 
@@ -89,6 +96,10 @@ curl -s http://127.0.0.1:8765/v1/remember \
 ```
 
 Promote only after review:
+
+Use a separate operator credential with `memory:review`. The agent credential
+must not have review or active-write access. The placeholders below describe the
+wire format; the runnable starter handles IDs and credentials without copying.
 
 ```bash
 curl -s http://127.0.0.1:8765/v1/candidates/cand_.../promote \

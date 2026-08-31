@@ -5,7 +5,65 @@ docs, or release checks do not behave as expected.
 
 ## Start With Diagnostics
 
-Run:
+On the **unreleased 1.4 development build**, start with a read-only check:
+
+```bash
+aletheia doctor --read-only --db ./aletheia-demo.db --namespace user/demo --query architecture
+```
+
+For a running local service, use a scoped token already supplied in an
+environment variable. Do not paste credentials into command arguments:
+
+```bash
+aletheia doctor --read-only --service-url http://127.0.0.1:8765 --token-env ALETHEIA_TOKEN --namespace user/demo --query architecture
+```
+
+Local inspection uses a SQLite read-only connection and performs no migration,
+repair, promotion, index rebuild, domain-data write or operational-log write.
+It never creates a missing database. Normal SQLite readers can still participate
+in WAL shared-memory coordination; this is not a forensic promise that no
+sidecar file can change. Do not delete live WAL/SHM files to silence an error.
+See [SQLite's read-only WAL notes](https://www.sqlite.org/wal.html#read_only_databases).
+
+Reports print check codes and safe next actions, not stored content, tokens,
+configuration values or provider responses. Service mode checks only the
+current principal's authorized view; admin is not required. URLs must use
+literal `127.0.0.1` or `[::1]`, without credentials or query strings. Redirects
+and proxies are not followed. Service-only mode does not open a local database.
+
+| Check code | Meaning and next action |
+| --- | --- |
+| `package_not_installed`, `python_unsupported` | Use Python 3.11+ and install Memory in that same environment. An older runtime may fail before diagnostics can start. |
+| `database_missing`, `database_path_unwritable`, `database_unreadable`, `database_write_unavailable` | Check the path and permissions; choose a fresh writable demo directory. No write probe was performed. |
+| `database_locked` | Let the current writer finish, then retry. No lock breaking or repair is attempted. |
+| `schema_missing`, `database_invalid` | Inspect the file and preserve a backup; it may not be a Memory database. |
+| `migration_required`, `schema_newer` | Back up, then consult the migration guide or use the matching newer binary. Diagnostics never migrate. |
+| `configuration_invalid`, `configuration_review` | Check syntax/types or review explicit remote, tokenless or automatic-migration settings. Nothing was applied. |
+| `pending_review`, `no_trusted_memory` | Inspect the source and explicitly approve suitable candidates. Pending candidates are not trusted recall. |
+| `empty_namespace` | Check the namespace, then capture the sample if appropriate. |
+| `lexical_no_match` | Trusted memory exists but the query did not match. Try a literal sample word such as `architecture`. |
+| `service_unavailable`, `service_http_error` | Check the intended local service and port; diagnostics do not start it. |
+| `service_incompatible`, `profile_missing`, `service_legacy` | Check discovery and required profiles. Matching package versions alone do not establish compatibility. Legacy discovery does not prove the new review guarantees. |
+| `credentials_invalid`, `capability_missing`, `scope_denied` | Check token validity, required capability and namespace grants with the operator. Do not default to admin. |
+| `resource_scope_or_privacy_denied`, `resource_missing` | With an explicit `--claim ID`, ask the operator to check resource scope, privacy ceiling and existence. |
+| `no_visible_matches` | A scoped service response cannot distinguish hidden, pending or empty memory. Check query words and review state with the operator. |
+| `semantic_index_stale`, `semantic_index_mismatch` | Continue with lexical recall; review stored index state and configured model/dimensions before an explicit rebuild. |
+
+Optional providers are not contacted by default. Select `--embedding-provider`
+or `--llm-provider` to inspect built-in configuration. `_configuration_invalid`
+and `_unavailable` provider checks are warnings: core lexical memory remains
+usable. Diagnostics do not load arbitrary provider plugins.
+`_http_error` means the endpoint responded with a redirect, authentication error
+or another non-success status; check its configuration before any model smoke test.
+
+Only `--probe-provider` explicitly permits a bounded GET to the selected local
+endpoint. No model input is submitted. HTTP reachability does not validate model
+output or quality; full provider recipes are a later, optional workflow. No
+endpoint, key or response body is printed. Error reports exit 1; warnings and
+successful checks exit 0, so automation should inspect `status` and check codes.
+
+On published 1.3.1 the legacy commands remain available, but **they can write
+operational records and create/migrate databases**. Use them only when intended:
 
 ```bash
 aletheia doctor --db ./aletheia.db

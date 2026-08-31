@@ -1,6 +1,7 @@
 # Aletheia Documentation Index
 
-This is the public help map for Aletheia v1.3.1 on `main`.
+This help map covers the public v1.3.1 APIs and the explicitly marked, unreleased
+1.4 development additions. The primary Python quickstart works on both.
 Aletheia is a local, auditable memory system for AI agents. The production
 baseline is intentionally generic: product-specific integration layers belong
 on their own branches or forks.
@@ -26,11 +27,11 @@ aletheia docs build --db ./aletheia.db --output ./site
 New users should read:
 
 1. `installation.md`
-2. `introduction.md`
-3. `core_concepts.md`
-4. `memory_lifecycle.md`
-5. `interfaces.md`
-6. `cli_reference.md`
+2. [`quickstart.md`](quickstart.md): create, inspect, approve and recall the sample
+3. [`examples.md`](examples.md): connect a scoped HTTP agent with a separate operator
+4. `core_concepts.md` and `memory_lifecycle.md`
+5. `integration_guide.md`: optional semantic/LLM paths and other interfaces
+6. `security_privacy_guide.md` and `operations_guide.md` when operating a service
 
 Agent and tool integrators should read:
 
@@ -61,6 +62,7 @@ Plugin authors should read:
 | Document | Purpose |
 | --- | --- |
 | `installation.md` | Install Aletheia, verify the CLI, initialize a database, and locate installed docs. |
+| `quickstart.md` | Complete the model-free, explicitly reviewed Python lifecycle and verify persistence. |
 | `introduction.md` | Explain what Aletheia is, what it is not, and the trust boundaries. |
 | `architecture.md` | Describe the implemented layers, core modules, storage schema, and data flow. |
 | `core_concepts.md` | Define namespaces, evidence, candidates, claims, confidence, conflicts, context packs, and audit. |
@@ -123,6 +125,8 @@ The proposed 1.4.0 release is tracked separately from the installed v1.3.1 API:
 - [Phase 1 verification evidence](v1_4_0_phase1_evidence.md)
 - [Read contract](v1_4_0_read_contract.md)
 - [Phase 2 verification evidence](v1_4_0_phase2_evidence.md)
+- [Phase 3 implementation decisions](v1_4_0_phase3_decisions.md)
+- [Phase 3 verification evidence](v1_4_0_phase3_evidence.md)
 - [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 
 The milestone contracts are included for maintainers and advanced users who

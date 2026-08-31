@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init", help="Create or migrate a database.")
     init_parser.add_argument("--db", default="./aletheia.db")
+    init_parser.add_argument("--new", action="store_true", help="Create a fresh database only; refuse an existing destination.")
     init_parser.add_argument("--protected", action="store_true", help="Enable protected mode after initialization.")
 
     migrate_parser = subparsers.add_parser("migrate", help="Run database migrations.")
@@ -1147,9 +1148,18 @@ def _add_m10_parsers(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_m9_parsers(subparsers: argparse._SubParsersAction) -> None:
     doctor = subparsers.add_parser("doctor", help="Run M9 platform diagnostics.")
-    doctor.add_argument("--db", default="./aletheia.db")
+    doctor.add_argument("--db")
     doctor.add_argument("--service-url")
     doctor.add_argument("--service", dest="service_url")
+    doctor.add_argument("--read-only", action="store_true", help="Inspect setup without creating, migrating or recording domain data.")
+    doctor.add_argument("--config")
+    doctor.add_argument("--namespace", default="user/default")
+    doctor.add_argument("--query")
+    doctor.add_argument("--token-env", default="ALETHEIA_TOKEN", help="Environment variable containing the service token; never printed.")
+    doctor.add_argument("--claim", dest="claim_id")
+    doctor.add_argument("--embedding-provider")
+    doctor.add_argument("--llm-provider")
+    doctor.add_argument("--probe-provider", action="store_true", help="Explicitly check selected local provider endpoint reachability; no model input.")
 
     compatibility = subparsers.add_parser("compatibility", help="Inspect v1 compatibility.")
     compatibility_sub = compatibility.add_subparsers(dest="compatibility_command", required=True)
@@ -1274,8 +1284,8 @@ def _add_m9_parsers(subparsers: argparse._SubParsersAction) -> None:
     examples_list.add_argument("--db", default="./aletheia.db")
     examples_create = examples_sub.add_parser("create")
     examples_create.add_argument("--db", default="./aletheia.db")
-    examples_create.add_argument("--type", dest="example_type", choices=["generic-http", "mcp-client", "python-sdk"], default="generic-http")
-    examples_create.add_argument("--name", required=True)
+    examples_create.add_argument("--type", dest="example_type", choices=["generic-http", "mcp-client", "python-sdk", "embedded", "http-agent"], default="generic-http")
+    examples_create.add_argument("--name", default="memory-demo")
     examples_create.add_argument("--output", required=True)
     examples_test = examples_sub.add_parser("test")
     examples_test.add_argument("--db", default="./aletheia.db")
@@ -1661,7 +1671,27 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "doctor":
+        if args.read_only:
+            from aletheia.diagnostics import diagnose
+            if args.service_url and (args.db or args.config):
+                raise AletheiaError("For read-only diagnostics, choose local --db/--config or --service-url, not both.")
+            report = diagnose(db_path=args.db, config_path=args.config, namespace=args.namespace, query=args.query,
+                service_url=args.service_url, token_env=args.token_env, claim_id=args.claim_id,
+                embedding_provider=args.embedding_provider, llm_provider=args.llm_provider, probe_provider=args.probe_provider)
+            _print_json(report)
+            return 1 if report["status"] == "error" else 0
+        if args.config or args.query is not None or args.claim_id or args.embedding_provider or args.llm_provider or args.probe_provider:
+            raise AletheiaError("Use --read-only with the onboarding diagnostic options.")
+        args.db = args.db or "./aletheia.db"
+    if args.command == "examples" and args.examples_command == "create" and args.example_type in {"embedded", "http-agent"}:
+        from aletheia.onboarding import create_starter
+        _print_json(create_starter(args.example_type, args.output))
+        return 0
     if args.command == "init":
+        if args.new:
+            from aletheia.onboarding import reserve_database
+            args.db = str(reserve_database(args.db))
         memory = Memory.open(args.db)
         try:
             if args.protected:
