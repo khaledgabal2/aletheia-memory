@@ -25,7 +25,8 @@ clear audit trail.
 
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
-- Current version: `1.3.1`
+- This build: `1.4.0rc1` (unpublished release candidate)
+- Published baseline: `1.3.1`
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](LICENSE)
@@ -71,13 +72,14 @@ embedding index or running external service.
 
 For the next steps, use the packaged [Python and TypeScript agent starters](docs/examples.md),
 then optionally [tested local model recipes](docs/v1_4_0_local_model_recipes.md).
-These additions require the unreleased 1.4 build, not public 1.3.1.
+These additions require the unpublished `1.4.0rc1` build, not public 1.3.1.
+Install a reviewed local wheel with `python -m pip install ./aletheia_memory-1.4.0rc1-py3-none-any.whl`; no prerelease has been uploaded to PyPI.
 
 ## Your First Reviewed Memory
 
 In a fresh demo directory, save this as `memory_demo.py` and run
 `python memory_demo.py`. The example works with published 1.3.1 and with this
-1.4 development branch. Read the candidate and source before typing `approve`.
+1.4 release candidate. Read the candidate and source before typing `approve`.
 
 ```python
 """A deterministic evidence → review → memory example; no model required."""

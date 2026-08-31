@@ -21,7 +21,7 @@ Rerunning refuses to overwrite the database, including a symlink at its path.
 Generate another project directory to repeat the demo. Keep the old directory
 for inspection, or remove only that disposable directory when finished.
 
-On a 1.4 development build, inspect without migrating or recording a doctor run:
+On the 1.4.0rc1 build, inspect without migrating or recording a doctor run:
 
 ```sh
 aletheia doctor --read-only --db ./aletheia-demo.db --namespace user/demo --query architecture

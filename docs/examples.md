@@ -2,7 +2,7 @@
 
 Start with the [zero-model quickstart](quickstart.md). Its Python example works
 with published 1.3.1. The generators and read-only diagnostics below require the
-**unreleased 1.4 development build**; installing public 1.3.1 does not add them.
+**unpublished 1.4.0rc1 build**; installing public 1.3.1 does not add them.
 
 ## Embedded Python Starter
 
@@ -21,7 +21,7 @@ the candidate pending. No model, server, account, Desktop or Relay is needed.
 
 ## Scoped HTTP Agent Starter
 
-From a separate working directory using the same installed development build:
+From a separate working directory using the same installed release-candidate build:
 
 ```bash
 aletheia examples create --type http-agent --output ./http-memory-demo
