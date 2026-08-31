@@ -69,6 +69,10 @@ python -m pip install aletheia-memory
 Memory is independent of Desktop and Relay. Its core needs no model, account,
 embedding index or running external service.
 
+For the next steps, use the packaged [Python and TypeScript agent starters](docs/examples.md),
+then optionally [tested local model recipes](docs/v1_4_0_local_model_recipes.md).
+These additions require the unreleased 1.4 build, not public 1.3.1.
+
 ## Your First Reviewed Memory
 
 In a fresh demo directory, save this as `memory_demo.py` and run

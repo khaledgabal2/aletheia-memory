@@ -1,8 +1,8 @@
 # A scoped HTTP agent and a separate operator
 
 Use the 1.4 development build of Memory and Python 3.11+. This starter needs
-current-principal discovery and `memory-read-v1`; it does not work with a 1.3.1
-service. It does not advertise the future governed-review profile.
+current-principal discovery, `memory-read-v1`, `agent-onboarding-v1` and
+`memory-review-v1`; it does not work with a 1.3.1 service.
 
 From this new project directory, run:
 
@@ -27,16 +27,17 @@ No model or external network is used. Loopback HTTP is required. The service is
 stopped automatically, while the database remains for inspection. Repeated runs
 refuse to overwrite it; generate a fresh project to repeat the demonstration.
 
-For a separately operated service, run `python agent.py capture` or
+For a separately operated service, run `python agent.py capture my-operation-key` or
 `python agent.py read` with `ALETHEIA_URL`, `ALETHEIA_AGENT_TOKEN` and
 `ALETHEIA_NAMESPACE` supplied through your secure environment. Use a trusted
 service URL and a scoped token. Never give this process operator credentials.
 Do not put tokens in shell history, URLs or committed files.
 
 The demo performs each candidate write once. It does not automatically replay
-uncertain writes or decisions. If interrupted, inspect pending candidates with
-the operator rather than blindly rerunning capture. Revision preconditions and
-atomic review replay are separate G3 work; this is an existing-API walkthrough.
+uncertain writes or decisions. If interrupted, retain the same key and complete
+payload, and inspect pending candidates with the operator before continuing.
+Review uses the inspected revision and an explicit operator key. A stale review
+fails rather than carrying the previous approval onto new state.
 
 On a 1.4 development build:
 

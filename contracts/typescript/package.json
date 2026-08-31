@@ -8,6 +8,7 @@
     "generate:discovery": "openapi-typescript generated/discovery.json -o generated/discovery.d.ts",
     "generate:read": "openapi-typescript generated/read.json --default-non-nullable false -o generated/read.d.ts",
     "generate:review": "openapi-typescript generated/review.json --default-non-nullable false -o generated/review.d.ts",
+    "generate:onboarding": "openapi-typescript generated/onboarding.json --default-non-nullable false -o generated/onboarding.d.ts",
     "test": "node --test dist/poll.test.js",
     "check": "tsc --noEmit",
     "build": "tsc"

@@ -1284,7 +1284,7 @@ def _add_m9_parsers(subparsers: argparse._SubParsersAction) -> None:
     examples_list.add_argument("--db", default="./aletheia.db")
     examples_create = examples_sub.add_parser("create")
     examples_create.add_argument("--db", default="./aletheia.db")
-    examples_create.add_argument("--type", dest="example_type", choices=["generic-http", "mcp-client", "python-sdk", "embedded", "http-agent"], default="generic-http")
+    examples_create.add_argument("--type", dest="example_type", choices=["generic-http", "mcp-client", "python-sdk", "embedded", "http-agent", "typescript-agent"], default="generic-http")
     examples_create.add_argument("--name", default="memory-demo")
     examples_create.add_argument("--output", required=True)
     examples_test = examples_sub.add_parser("test")
@@ -1684,7 +1684,7 @@ def _run(args: argparse.Namespace) -> int:
         if args.config or args.query is not None or args.claim_id or args.embedding_provider or args.llm_provider or args.probe_provider:
             raise AletheiaError("Use --read-only with the onboarding diagnostic options.")
         args.db = args.db or "./aletheia.db"
-    if args.command == "examples" and args.examples_command == "create" and args.example_type in {"embedded", "http-agent"}:
+    if args.command == "examples" and args.examples_command == "create" and args.example_type in {"embedded", "http-agent", "typescript-agent"}:
         from aletheia.onboarding import create_starter
         _print_json(create_starter(args.example_type, args.output))
         return 0

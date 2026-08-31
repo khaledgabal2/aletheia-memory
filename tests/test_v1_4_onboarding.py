@@ -59,7 +59,7 @@ def test_embedded_source_runs_offline_with_explicit_review_and_safe_rerun(tmp_pa
     assert Path("aletheia-demo.db").read_bytes() == before
 
 
-@pytest.mark.parametrize("kind", ["embedded", "http-agent"])
+@pytest.mark.parametrize("kind", ["embedded", "http-agent", "typescript-agent"])
 def test_cli_starter_generation_creates_no_database_and_never_overwrites(tmp_path, monkeypatch, capsys, kind):
     monkeypatch.chdir(tmp_path)
     def no_open(*args, **kwargs):

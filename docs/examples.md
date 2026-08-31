@@ -38,18 +38,40 @@ claims. Both tokens expire after 30 minutes and are revoked when the demo exits
 normally. Tokens are not printed or written to configuration files. As with
 other local processes, a privileged OS user can inspect process memory or environment.
 
-The agent checks current-principal discovery and `memory-read-v1` before using
-the service. This demonstrates credential separation and explicit review, not
-the forthcoming Phase 4 revision-checked review contract. It performs no
+The agent checks current-principal discovery and both `memory-read-v1` and `agent-onboarding-v1` before using
+the service. The operator uses revision-checked `memory-review-v1` approval.
+Creation and review each retain an explicit operation key. There are no
 automatic write retries; uncertain writes require operator inspection.
 
 The generated README explains how to run the agent against an independently
 operated, trusted Memory service. The self-contained demo needs no other product
-and no model provider. Live-provider and TypeScript recipes follow in Phase 5.
+and no model provider. Optional models have a separate [local recipe guide](v1_4_0_local_model_recipes.md).
+
+## TypeScript Agent Starter
+
+Install Node 22+ (verified with Node 26.0.0) only if using this starter. The
+Python engine itself does not require Node. From another fresh directory:
+
+```sh
+aletheia examples create --type typescript-agent --output ./typescript-memory-demo
+cd typescript-memory-demo
+npm ci --ignore-scripts --no-audit --no-fund
+npm run check
+npm run build
+python operator_demo.py
+```
+
+`npm ci` deliberately downloads the dependencies pinned in the packaged lockfile.
+The starter includes generated contract types; no repository or global generator
+is needed. A separate TypeScript process gets only the agent credential. It
+checks identity/profiles, creates a candidate with an explicit operation key,
+reads empty trusted context before approval, and reads context/provenance after
+the Python operator makes a revision-checked decision. Both languages exercise
+the same real local service. The generated README describes independent use.
 
 ## Inspect And Rerun Safely
 
-Both generators refuse any existing output directory. Both demos refuse any
+All three generators refuse any existing output directory. All demos refuse any
 existing database, including symlinks or orphaned WAL/SHM/journal files. Preserve
 those companion files for possible recovery. To repeat a demo, use a different empty
 directory. Retain the old database until you decide it is no longer needed.
@@ -95,7 +117,7 @@ aletheia docs status --db ./aletheia.db
 `examples test` and `docs test-examples` check registered example metadata;
 they do **not** execute the tutorial. The Phase 3 installed-package gate
 (`scripts/v1_4_onboarding_check.py`) executes the actual packaged documentation
-and both starters outside the checkout, including approval and refusal paths.
+and the Python starters outside the checkout; `--typescript` additionally compiles and runs the installed TypeScript starter, including approval and refusal paths.
 
 List registered legacy examples:
 

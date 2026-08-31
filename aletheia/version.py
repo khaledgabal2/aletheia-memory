@@ -7,7 +7,7 @@ import tomllib
 
 API_VERSION = "v1"
 # Add a profile only after its complete conformance gate passes.
-SUPPORTED_PROFILES: tuple[str, ...] = ("memory-read-v1", "memory-review-v1")
+SUPPORTED_PROFILES: tuple[str, ...] = ("memory-read-v1", "memory-review-v1", "agent-onboarding-v1")
 SUPPORTED_FEATURES = ("current-principal",)
 
 

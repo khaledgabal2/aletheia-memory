@@ -8,7 +8,8 @@ from aletheia.core.errors import ValidationError
 
 
 STARTERS = {"embedded": ("memory_demo.py", "README.md"),
-            "http-agent": ("agent.py", "operator_demo.py", "README.md")}
+            "http-agent": ("agent.py", "operator_demo.py", "README.md"),
+            "typescript-agent": ("agent.ts", "schema.d.ts", "package.json", "package-lock.json", "tsconfig.json", "README.md")}
 
 
 def reserve_database(path):
@@ -53,7 +54,11 @@ def write_new_project(output_path, content):
 def create_starter(kind, output_path):
     root = files("aletheia").joinpath("starters", kind)
     content = {name: root.joinpath(name).read_text(encoding="utf-8") for name in STARTERS[kind]}
+    if kind == "typescript-agent":
+        content["operator_demo.py"] = files("aletheia").joinpath("starters", "http-agent", "operator_demo.py").read_text(encoding="utf-8")
     content[".gitignore"] = "*.db\n*.db-*\n*.sqlite*\n.env\n.venv/\n__pycache__/\n"
+    if kind == "typescript-agent":
+        content[".gitignore"] += "node_modules/\ndist/\n"
     content["requirements.txt"] = "aletheia-memory>=1.3.1,<2\n"
     target = write_new_project(output_path, content)
     return {"type": kind, "path": str(target), "files": sorted(content), "database_created": False}

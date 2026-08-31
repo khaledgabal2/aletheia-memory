@@ -327,3 +327,14 @@ aletheia support bundle --db ./aletheia.db --output ./aletheia-support.zip
 
 Use `--include-raw-content` only in trusted local debugging contexts where raw
 memory content is safe to share.
+
+## Optional model recipe failures
+
+Use the [tested local preset](v1_4_0_local_model_recipes.md) with a literal
+loopback endpoint and the recorded model digest. A changed prefix, model revision
+or dimension requires explicit reindexing before semantic queries. A failed
+provider must not silently trigger a hosted fallback. Invalid LLM output is a
+safe failure: inspect warnings, source and candidate status; never loosen policy
+or auto-promote to make a smoke test pass. The small Qwen model was not reliable
+enough for the advertised extraction recipe. Normal lexical recall and the core
+tutorial need no local model runtime.

@@ -2,7 +2,10 @@
 
 This guide explains how to integrate the current Aletheia implementation into other systems.
 
-Start with the [model-free Python quickstart](quickstart.md). The next step is
+Start with the [model-free Python quickstart](quickstart.md). For scoped agents,
+use the packaged [Python or TypeScript starter](examples.md) and negotiate
+[agent-onboarding-v1](v1_4_0_agent_onboarding_contract.md).
+Optional semantic and LLM setup lives in [local recipes](v1_4_0_local_model_recipes.md). The next step is
 the [scoped HTTP agent starter](examples.md), with separate operator review and
 no manually copied IDs or credentials in source. Those new starter commands
 require the unreleased 1.4 development build. The reference patterns below are

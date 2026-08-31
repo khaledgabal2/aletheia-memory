@@ -42,6 +42,7 @@ CONTEXT_INPUT = _object({**COMMON_INPUT, "retrieval_mode": MODES,
 
 
 def _matches(value, schema):
+    import math
     if "anyOf" in schema:
         return any(_matches(value, option) for option in schema["anyOf"])
     kind = schema.get("type")
@@ -49,11 +50,15 @@ def _matches(value, schema):
         return any(_matches(value, {**schema, "type": item}) for item in kind)
     valid = {"null": value is None, "boolean": type(value) is bool,
              "integer": type(value) is int, "string": isinstance(value, str),
-             "array": isinstance(value, list)}.get(kind, False)
+             "array": isinstance(value, list), "object": isinstance(value, dict),
+             "number": type(value) is int or type(value) is float and math.isfinite(value)}.get(kind, False)
     if not valid or ("enum" in schema and value not in schema["enum"]):
         return False
-    if kind == "integer":
-        return schema.get("minimum", value) <= value <= schema.get("maximum", value)
+    if "const" in schema and value != schema["const"]:
+        return False
+    if kind in {"integer", "number"}:
+        return (schema.get("minimum", value) <= value <= schema.get("maximum", value)
+                and ("exclusiveMinimum" not in schema or value > schema["exclusiveMinimum"]))
     if kind == "string":
         return len(value) >= schema.get("minLength", 0)
     if kind == "array":

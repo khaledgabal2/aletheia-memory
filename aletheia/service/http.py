@@ -357,7 +357,10 @@ class AletheiaService:
             if self.config.rate_limit_enabled:
                 with self.lock:
                     self._check_rate_limit(self._rate_limit_identity(auth_context, headers))
-            if self.review_protocol.handles(method, endpoint, self._header(headers, "X-Aletheia-Contract")):
+            if method == "POST" and endpoint == "/v1/remember":
+                from aletheia.service.onboarding_contract import remember_response
+                status, response = remember_response(self, payload, headers, request_id, request_hash)
+            elif self.review_protocol.handles(method, endpoint, self._header(headers, "X-Aletheia-Contract")):
                 status, response = self.review_protocol.process(method=method, endpoint=endpoint, query=query,
                     payload=payload, headers=headers, request_id=request_id, request_hash=request_hash)
             else:
@@ -3130,7 +3133,7 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
 
     def _send_payload(self, status: int, payload: dict) -> None:
         response_headers = payload.pop("_headers", {}) if isinstance(payload, dict) else {}
-        if self.path.split("?", 1)[0] in DISCOVERY_PATHS or is_read_path(self.path.split("?", 1)[0]):
+        if self.path.split("?", 1)[0] in {*DISCOVERY_PATHS, "/v1/remember"} or is_read_path(self.path.split("?", 1)[0]):
             response_headers["Cache-Control"] = "no-store"
             request_id = payload.get("request_id") if isinstance(payload, dict) else None
             if isinstance(request_id, str) and len(request_id) <= 200 and all(32 <= ord(c) < 127 for c in request_id):
@@ -3463,4 +3466,5 @@ def openapi_schema() -> dict:
         "paths": paths,
     }
     from aletheia.service.review_contracts import apply_review_contracts
-    return apply_review_contracts(apply_read_contracts(apply_discovery_contracts(schema)))
+    from aletheia.service.onboarding_contract import apply_onboarding_contract
+    return apply_onboarding_contract(apply_review_contracts(apply_read_contracts(apply_discovery_contracts(schema))))

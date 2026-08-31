@@ -6141,6 +6141,7 @@ class Memory:
                                 "input_hash": input_digest,
                                 "provider_type": embedding.provider_type,
                                 "provider_version": embedding.provider_version,
+                                "input_signature": getattr(engine, "input_signature", ""),
                                 "privacy_level": privacy_level,
                                 "protected_mode_policy": semantic_policy,
                                 "redacted_input": indexed_text != text,
@@ -11763,7 +11764,7 @@ class Memory:
         engine = provider_for_name(provider)
         latest = self.store.connection.execute(
             """
-            SELECT index_version, model, dimension
+            SELECT index_version, model, dimension, metadata_json
             FROM embeddings
             WHERE namespace = ?
               AND target_type = ?
@@ -11777,7 +11778,14 @@ class Memory:
             (namespace, target_type, engine.name, engine.model),
         ).fetchone()
         if not latest:
+            if getattr(engine, "input_signature", ""):
+                raise ValidationError("No compatible semantic index for this configured model. Index explicitly before semantic retrieval.")
             return {}
+        metadata = json.loads(latest["metadata_json"] or "{}")
+        if getattr(engine, "input_signature", "") or metadata.get("input_signature"):
+            expected = semantic_index_version(provider=engine, redaction_policy=metadata.get("protected_mode_policy", "index_public_and_personal_only"))
+            if latest["index_version"] != expected or latest["dimension"] != engine.dimension:
+                raise ValidationError("Semantic model, dimensions or input preset changed; explicitly reindex before retrieval.")
         engine = provider_for_name(provider, model=latest["model"], dimension=latest["dimension"])
         query_vector = engine.embed_texts(
             [query],

@@ -12,11 +12,17 @@ python -m scripts.v1_4_discovery_contract --output contracts/typescript/generate
 npm run generate:discovery --prefix contracts/typescript
 python -m scripts.v1_4_read_contract --output contracts/typescript/generated/read.json
 npm run generate:read --prefix contracts/typescript
+python -m scripts.v1_4_review_contract --output contracts/typescript/generated/review.json
+npm run generate:review --prefix contracts/typescript
+python -m scripts.v1_4_agent_contract --output contracts/typescript/generated/onboarding.json
+npm run generate:onboarding --prefix contracts/typescript
 npm run check --prefix contracts/typescript
 npm run build --prefix contracts/typescript
 python scripts/v1_4_phase0.py --typescript
 python -m scripts.v1_4_discovery_contract --typescript
 python -m scripts.v1_4_read_contract --typescript
+python -m scripts.v1_4_review_contract --typescript
+python -m scripts.v1_4_agent_contract --typescript
 npm test --prefix contracts/typescript
 ```
 
@@ -41,7 +47,7 @@ Phase 1 additionally captures and strictly validates the six current discovery
 operations before generation. `discovery.ts` exercises software/schema versions,
 principal identity, permission metadata and errors with generated domain types.
 Phase 2 implements and advertises `memory-read-v1` on the development branch;
-onboarding remains unadvertised until Phase 5. The canonical read schema is captured
+Phase 5 adds the candidate-first `agent-onboarding-v1` profile. The canonical read schema is captured
 from the running Memory service. Its generated request defaults remain optional
 (`--default-non-nullable false`); no handwritten payload substitutes are used.
 See [read contract](../../docs/v1_4_0_read_contract.md) for scope, limits and redaction.
@@ -67,7 +73,7 @@ The fixture is a development test harness, not a deployment proxy or credential
 provisioning API. Do not point it at a real database. Stop it with Ctrl-C; its
 database and credentials are discarded. No token is written to browser storage.
 The source distribution includes this tooling; the Python wheel has no Node
-runtime dependency. A packaged end-user TypeScript starter remains Phase 5 work.
+runtime dependency. Generate the packaged TypeScript starter with `aletheia examples create --type typescript-agent --output ts-demo`; its Node toolchain is optional.
 
 Reverse compatibility is a separate installed-service check:
 

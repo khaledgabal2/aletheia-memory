@@ -2,13 +2,13 @@
 import argparse
 import json
 import os
-import uuid
 from aletheia.client import AletheiaClient, AletheiaClientError
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["capture", "read"])
+    parser.add_argument("operation_key", nargs="?")
     args = parser.parse_args()
     token = os.environ.get("ALETHEIA_AGENT_TOKEN")
     url = os.environ.get("ALETHEIA_URL")
@@ -20,19 +20,18 @@ def main():
         raise SystemExit("This starter needs the 1.4 development SDK, not the published 1.3.1 SDK.")
     try:
         principal = client.current_principal()
-        if "memory-read-v1" not in principal.get("supported_profiles", []):
-            raise SystemExit("The service needs memory-read-v1; no candidate was written.")
+        if not {"memory-read-v1", "agent-onboarding-v1"} <= set(principal.get("supported_profiles", [])):
+            raise SystemExit("The service needs memory-read-v1 and agent-onboarding-v1; no candidate was written.")
         capabilities = set(principal["capabilities"])
         needed = {"memory:read", "memory:context", "memory:write_candidate"}
         if not needed <= capabilities or capabilities & {"memory:admin", "memory:review", "memory:write_active"}:
             raise SystemExit("Use a restricted agent token with read/context/write_candidate and without admin, review or active-write access.")
         if args.action == "capture":
-            # One attempt. After an uncertain response, the operator must inspect
-            # pending candidates; rerunning capture would create another operation.
-            key = "demo-" + uuid.uuid4().hex
+            if not args.operation_key:
+                raise SystemExit("Capture requires an explicit operation key as its second argument.")
             result = client.remember_candidate(namespace=namespace, memory_type="preference",
                 subject="user", predicate="prefers", object="careful architecture notes",
-                evidence_text="User prefers careful architecture notes.", idempotency_key=key)
+                evidence_text="User prefers careful architecture notes.", idempotency_key=args.operation_key, contract="agent-onboarding-v1")
             print(json.dumps({"candidate_id": result["candidate"]["id"]}))
         else:
             pack = client.context_pack(namespace=namespace, query="architecture", retrieval_mode="lexical", record_usage=False)

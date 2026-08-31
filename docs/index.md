@@ -131,6 +131,9 @@ The proposed 1.4.0 release is tracked separately from the installed v1.3.1 API:
 - [Review migration design](v1_4_0_review_migration_design.md)
 - [Upgrade and recovery guide](v1_4_0_migration_guide.md)
 - [Phase 4 verification evidence](v1_4_0_phase4_evidence.md)
+- [Candidate-first agent contract](v1_4_0_agent_onboarding_contract.md)
+- [Optional tested local model recipes](v1_4_0_local_model_recipes.md)
+- [Phase 5 verification evidence](v1_4_0_phase5_evidence.md)
 - [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 
 The milestone contracts are included for maintainers and advanced users who

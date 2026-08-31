@@ -134,8 +134,15 @@ class AletheiaClient:
     def remember(self, *, idempotency_key: str | None = None, **payload) -> dict:
         return self._request("POST", "/v1/remember", payload, idempotency_key=idempotency_key)
 
-    def remember_candidate(self, *, idempotency_key: str | None = None, **payload) -> dict:
-        return self.remember(idempotency_key=idempotency_key, write_mode="candidate", **payload)
+    def remember_candidate(self, *, idempotency_key: str | None = None, contract: str | None = None, **payload) -> dict:
+        if "write_mode" in payload:
+            raise TypeError("remember_candidate does not accept a write_mode override.")
+        if contract is not None:
+            if contract != "agent-onboarding-v1":
+                raise ValueError("Candidate creation supports agent-onboarding-v1 or legacy mode.")
+            if contract not in self.current_principal().get("supported_profiles", []):
+                raise AletheiaUnsupportedFeatureError("The service does not support agent-onboarding-v1.")
+        return self._request("POST", "/v1/remember", {"write_mode": "candidate", **payload}, idempotency_key=idempotency_key, contract=contract)
 
     def remember_active(self, *, idempotency_key: str | None = None, **payload) -> dict:
         return self.remember(idempotency_key=idempotency_key, write_mode="active", **payload)

@@ -1,0 +1,281 @@
+{
+  "configuration": {
+    "embedding": {
+      "DIMENSION": "768",
+      "DOCUMENT_PREFIX": "search_document: ",
+      "ENDPOINT": "http://127.0.0.1:11434/api/embed",
+      "LOCAL_ONLY": "true",
+      "MODEL": "nomic-embed-text:latest",
+      "MODEL_REVISION": "0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f",
+      "QUERY_PREFIX": "search_query: "
+    },
+    "llm": {
+      "ENDPOINT": "http://127.0.0.1:11434/api/chat",
+      "KEEP_ALIVE": "0",
+      "LOCAL_ONLY": "true",
+      "MODEL": "llama3.1:8b",
+      "NUM_CTX": "4096",
+      "STRUCTURED_OUTPUT": "true",
+      "TIMEOUT": "60"
+    }
+  },
+  "downloaded_bytes": 0,
+  "embedding": {
+    "checks": [
+      "real vectors and paraphrased retrieval",
+      "stored provenance/index verification",
+      "wrong response dimension refused",
+      "changed preset/dimension refused before query",
+      "explicit reindex preserves compatibility",
+      "unavailable provider fails; lexical remains usable"
+    ],
+    "dimension": 768,
+    "retrieval": [
+      {
+        "query": "riding a bike to work",
+        "semantic_score": 0.6418736463932175,
+        "top_result": "User prefers bicycles for commuting."
+      },
+      {
+        "query": "keeping backup files confidential",
+        "semantic_score": 0.6617357849059838,
+        "top_result": "Database uses encrypted backup archives."
+      }
+    ],
+    "status": "passed"
+  },
+  "input": "Fixed synthetic examples only",
+  "limitations": "Smoke checks, not a quality benchmark. Local runtime is trusted; namespaces/privacy still govern Memory. No hosted fallback.",
+  "llm": {
+    "candidates": [
+      {
+        "candidate_status": "pending_review",
+        "contradiction_risk": 0.0,
+        "created_at": "2026-08-31T02:16:09.095276+00:00",
+        "duplicate_risk": 0.0,
+        "evidence_ids": [
+          "evt_7cc4fdf36b0b6d696257"
+        ],
+        "evidence_spans": [
+          {
+            "created_at": "2026-08-31T02:16:09.095369+00:00",
+            "end_char": 40,
+            "evidence_id": "evt_7cc4fdf36b0b6d696257",
+            "id": "span_cf8b9719520240cab275",
+            "role": "supporting",
+            "start_char": 0,
+            "text": "User prefers careful architecture notes."
+          }
+        ],
+        "extraction_run_id": "run_6bae9d6c73f6434cb7ef",
+        "id": "cand_b5a48345c6784baabf57",
+        "memory_type": "fact",
+        "metadata": {
+          "candidate_reason": null,
+          "extraction_prompt_id": "m12.extract_candidates",
+          "llm_output": true,
+          "llm_run_id": "llm_fee16d2858144b4cbb3c",
+          "llm_task_type": "extract_candidates",
+          "model": "llama3.1:8b",
+          "provider": "ollama_style",
+          "schema_version": "candidate_claim_draft.v1",
+          "temperature": 0.0
+        },
+        "namespace": "user/local-recipe/extraction",
+        "object": "careful architecture notes",
+        "predicate": "prefers",
+        "privacy_level": "personal",
+        "subject": "User",
+        "suggested_categories": [
+          "fact"
+        ],
+        "suggested_confidence": 0.65,
+        "suggested_entities": [],
+        "suggested_half_life_days": null,
+        "suggested_importance": 0.5,
+        "suggested_scope": null
+      },
+      {
+        "candidate_status": "pending_review",
+        "contradiction_risk": 0.0,
+        "created_at": "2026-08-31T02:16:11.716353+00:00",
+        "duplicate_risk": 0.0,
+        "evidence_ids": [
+          "evt_2f4c4b71956246f89b32"
+        ],
+        "evidence_spans": [
+          {
+            "created_at": "2026-08-31T02:16:11.716397+00:00",
+            "end_char": 35,
+            "evidence_id": "evt_2f4c4b71956246f89b32",
+            "id": "span_5380f3b56bab4ee395f3",
+            "role": "supporting",
+            "start_char": 0,
+            "text": "User prefers tea instead of coffee."
+          }
+        ],
+        "extraction_run_id": "run_020447251b9e4edc8fcf",
+        "id": "cand_cfcf04d854a9446eaca6",
+        "memory_type": "fact",
+        "metadata": {
+          "candidate_reason": null,
+          "extraction_prompt_id": "m12.extract_candidates",
+          "llm_output": true,
+          "llm_run_id": "llm_ea3e546fec2b4ab1b635",
+          "llm_task_type": "extract_candidates",
+          "model": "llama3.1:8b",
+          "provider": "ollama_style",
+          "schema_version": "candidate_claim_draft.v1",
+          "temperature": 0.0
+        },
+        "namespace": "user/local-recipe/extraction",
+        "object": "tea",
+        "predicate": "prefers",
+        "privacy_level": "personal",
+        "subject": "User",
+        "suggested_categories": [
+          "fact"
+        ],
+        "suggested_confidence": 0.65,
+        "suggested_entities": [],
+        "suggested_half_life_days": null,
+        "suggested_importance": 0.5,
+        "suggested_scope": null
+      },
+      {
+        "candidate_status": "pending_review",
+        "contradiction_risk": 0.0,
+        "created_at": "2026-08-31T02:16:14.416374+00:00",
+        "duplicate_risk": 0.0,
+        "evidence_ids": [
+          "evt_727b673b0bec416c0b73"
+        ],
+        "evidence_spans": [
+          {
+            "created_at": "2026-08-31T02:16:14.416396+00:00",
+            "end_char": 45,
+            "evidence_id": "evt_727b673b0bec416c0b73",
+            "id": "span_09f4e872a53f4ceead41",
+            "role": "supporting",
+            "start_char": 0,
+            "text": "User prefers concise weekly progress updates."
+          }
+        ],
+        "extraction_run_id": "run_d57a605f3022496bb80f",
+        "id": "cand_4c611a67197149b5bf03",
+        "memory_type": "fact",
+        "metadata": {
+          "candidate_reason": null,
+          "extraction_prompt_id": "m12.extract_candidates",
+          "llm_output": true,
+          "llm_run_id": "llm_fb20991afb094c7183a0",
+          "llm_task_type": "extract_candidates",
+          "model": "llama3.1:8b",
+          "provider": "ollama_style",
+          "schema_version": "candidate_claim_draft.v1",
+          "temperature": 0.0
+        },
+        "namespace": "user/local-recipe/extraction",
+        "object": "concise weekly progress updates",
+        "predicate": "prefers",
+        "privacy_level": "personal",
+        "subject": "User",
+        "suggested_categories": [
+          "fact"
+        ],
+        "suggested_confidence": 0.65,
+        "suggested_entities": [],
+        "suggested_half_life_days": null,
+        "suggested_importance": 0.5,
+        "suggested_scope": null
+      }
+    ],
+    "checks": [
+      "three real structured outputs with exact evidence spans",
+      "pending candidates only",
+      "missing model fails without fallback",
+      "secret evidence remains blocked"
+    ],
+    "new_active_claims": 0,
+    "samples": [
+      {
+        "candidate_count": 1,
+        "candidate_states": [
+          "pending_review"
+        ],
+        "seconds": 2.654,
+        "source": "User prefers careful architecture notes.",
+        "status": "passed",
+        "warnings": []
+      },
+      {
+        "candidate_count": 1,
+        "candidate_states": [
+          "pending_review"
+        ],
+        "seconds": 2.62,
+        "source": "User prefers tea instead of coffee.",
+        "status": "passed",
+        "warnings": []
+      },
+      {
+        "candidate_count": 1,
+        "candidate_states": [
+          "pending_review"
+        ],
+        "seconds": 2.698,
+        "source": "User prefers concise weekly progress updates.",
+        "status": "passed",
+        "warnings": []
+      }
+    ],
+    "status": "passed"
+  },
+  "models": [
+    {
+      "details": {
+        "context_length": 2048,
+        "embedding_length": 768,
+        "families": [
+          "nomic-bert"
+        ],
+        "family": "nomic-bert",
+        "format": "gguf",
+        "parameter_size": "137M",
+        "parent_model": "",
+        "quantization_level": "F16"
+      },
+      "digest": "0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f",
+      "name": "nomic-embed-text:latest",
+      "size": 274302450
+    },
+    {
+      "details": {
+        "context_length": 131072,
+        "embedding_length": 4096,
+        "families": [
+          "llama"
+        ],
+        "family": "llama",
+        "format": "gguf",
+        "parameter_size": "8.0B",
+        "parent_model": "",
+        "quantization_level": "Q4_K_M"
+      },
+      "digest": "46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e",
+      "name": "llama3.1:8b",
+      "size": 4920753328
+    }
+  ],
+  "ollama_version": "0.32.14",
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "python": "3.13.13",
+  "sampled_peak_model_vram_bytes": {
+    "llama3.1:8b": 5263327231,
+    "nomic-embed-text:latest": 370031984
+  },
+  "seconds": 16.055,
+  "software_version": "1.3.1",
+  "status": "passed",
+  "tested_at": "2026-08-31T02:15:58.365098+00:00"
+}

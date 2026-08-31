@@ -23,7 +23,7 @@ import time
 from unittest.mock import patch
 
 
-def worker():
+def worker(*, typescript=False):
     import aletheia
     from aletheia.help import docs_root, find_help_document
     from aletheia.onboarding import create_starter
@@ -94,10 +94,15 @@ def worker():
             checks.append(f"{origin}: {answer or 'empty input'}, offline, persistence, safe rerun, read-only diagnosis")
 
     for answer in ("approve", "decline"):
-        path = Path("http-" + answer)
-        generated = subprocess.run([sys.executable, "-I", "-c", "from aletheia.cli.main import main; raise SystemExit(main())", "examples", "create", "--type", "http-agent", "--output", str(path)], capture_output=True, text=True, timeout=15)
+        kind = "typescript-agent" if typescript else "http-agent"
+        path = Path(kind + "-" + answer)
+        generated = subprocess.run([sys.executable, "-I", "-c", "from aletheia.cli.main import main; raise SystemExit(main())", "examples", "create", "--type", kind, "--output", str(path)], capture_output=True, text=True, timeout=15)
         assert generated.returncode == 0, generated.stderr
         assert not list(path.glob("*.db"))
+        if typescript:
+            for command in (["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], ["npm", "run", "check"], ["npm", "run", "build"]):
+                tool = subprocess.run(command, cwd=path, capture_output=True, text=True, timeout=120)
+                assert tool.returncode == 0, tool.stdout + tool.stderr
         result = subprocess.run([sys.executable, "-I", str((path / "operator_demo.py").resolve())], cwd=path, input=answer + "\n", capture_output=True, text=True, timeout=45)
         assert result.returncode == 0, result.stderr
         assert "Visible context items: 0" in result.stdout
@@ -106,10 +111,10 @@ def worker():
             assert "Visible context items: 1" in result.stdout and "Provenance:" in result.stdout
         state(path / "aletheia-http-demo.db", answer == "approve", http=True)
         before = {file.name: file.read_bytes() for file in path.iterdir() if file.is_file()}
-        again = subprocess.run([sys.executable, "-I", "-c", "from aletheia.cli.main import main; raise SystemExit(main())", "examples", "create", "--type", "http-agent", "--output", str(path)], capture_output=True, text=True, timeout=15)
+        again = subprocess.run([sys.executable, "-I", "-c", "from aletheia.cli.main import main; raise SystemExit(main())", "examples", "create", "--type", kind, "--output", str(path)], capture_output=True, text=True, timeout=15)
         assert again.returncode != 0 and "already exists" in again.stderr
         assert before == {file.name: file.read_bytes() for file in path.iterdir() if file.is_file()}
-        checks.append(f"HTTP: {answer}, separate scoped agent, explicit review, persistence, revoked tokens, safe generation")
+        checks.append(f"{kind}: {answer}, separate scoped agent, explicit review, persistence, revoked tokens, safe generation")
 
     missing = Path("missing") / "memory.db"
     result = subprocess.run([sys.executable, "-I", "-c", "from aletheia.cli.main import main; raise SystemExit(main())", "doctor", "--read-only", "--db", str(missing)], capture_output=True, text=True, timeout=15)
@@ -125,19 +130,20 @@ def worker():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python", help="Python executable in a fresh core-only artifact environment")
+    parser.add_argument("--typescript", action="store_true", help="Exercise the optional Node starter (requires Node/npm; npm ci downloads locked dependencies).")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.worker:
-        worker()
+        worker(typescript=args.typescript)
         return
     if not args.python:
         parser.error("--python is required")
     # Resolving a venv executable symlink can select the base interpreter instead.
     target = str(Path(args.python).absolute())
-    environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATH") if key in os.environ}
+    environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATH", "npm_config_cache") if key in os.environ}
     environment["PYTHONIOENCODING"] = "utf-8"
     with tempfile.TemporaryDirectory(prefix="aletheia-installed-onboarding-") as directory:
-        result = subprocess.run([target, "-I", str(Path(__file__).resolve()), "--worker"], cwd=directory, env=environment, timeout=180)
+        result = subprocess.run([target, "-I", str(Path(__file__).resolve()), "--worker", *(["--typescript"] if args.typescript else [])], cwd=directory, env=environment, timeout=400 if args.typescript else 180)
     raise SystemExit(result.returncode)
 
 

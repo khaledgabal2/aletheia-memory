@@ -2,20 +2,30 @@
 from datetime import timedelta
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
 import threading
+import uuid
 from urllib.request import build_opener, install_opener, ProxyHandler
 
 from aletheia import Memory
-from aletheia.client import AletheiaClient
+from aletheia.client import AletheiaClient, AletheiaClientError, AletheiaStaleRevisionError
 from aletheia.core.time import utc_now
 from aletheia.models import ServiceConfig
 from aletheia.service.http import AletheiaDaemon
 
 
 def main():
+    base = Path(__file__).resolve().parent
+    if (base / "agent.ts").is_file():
+        node = shutil.which("node")
+        if not node or not (base / "dist" / "agent.js").is_file():
+            raise SystemExit("Install Node 22+ and run npm ci, npm run check, npm run build first. No database created.")
+        agent_command = [node, str(base / "dist" / "agent.js")]
+    else:
+        agent_command = [sys.executable, "-I", str(base / "agent.py")]
     path = Path("aletheia-http-demo.db")
     for suffix in ("-wal", "-shm", "-journal"):
         companion = Path(str(path) + suffix)
@@ -53,16 +63,18 @@ def main():
         environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP") if key in os.environ}
         environment.update(ALETHEIA_URL=url, ALETHEIA_AGENT_TOKEN=agent_token,
                            ALETHEIA_NAMESPACE=namespace, PYTHONIOENCODING="utf-8")
+        capture_key = "demo-capture-" + uuid.uuid4().hex
+        print("Candidate operation key (retain after an uncertain response):", capture_key)
         def agent(action):
-            result = subprocess.run([sys.executable, "-I", str(Path(__file__).with_name("agent.py")), action],
+            result = subprocess.run([*agent_command, action, *([capture_key] if action == "capture" else [])],
                                     env=environment, capture_output=True, text=True, timeout=30)
             if result.returncode:
                 raise SystemExit("Agent step failed. Inspect the retained demo database with doctor --read-only; do not blindly replay a write.")
             return result.stdout
         receipt = json.loads(agent("capture"))
         reviewer = AletheiaClient(url, operator_token, timeout=10)
+        candidate = reviewer.get_candidate_for_review(receipt["candidate_id"])
         audit = reviewer.audit("candidate", receipt["candidate_id"])
-        candidate = audit["candidate"]
         print("Pending candidate:", candidate["subject"], candidate["predicate"], candidate["object"])
         print("Source:", audit["evidence"][0]["content"])
         print("Agent before review:")
@@ -72,8 +84,17 @@ def main():
         except EOFError:
             approve = False
         if approve:
-            claim = reviewer.promote_candidate(candidate["id"], reason="Operator inspected and approved this demo candidate.")
-            claim_id = claim["id"]
+            review_key = "demo-review-" + uuid.uuid4().hex
+            print("Review operation key (retain after an uncertain response):", review_key)
+            try:
+                outcome = reviewer.review_candidate(candidate["id"], action="promote",
+                    reason="Operator inspected and approved this demo candidate.", expected_revision=candidate["revision"],
+                    idempotency_key=review_key)
+            except AletheiaStaleRevisionError:
+                raise SystemExit("Memory changed since inspection. No automatic retry; inspect again before a new decision.")
+            except AletheiaClientError:
+                raise SystemExit("Review was not confirmed. Retain the operation key and payload; inspect the database before another decision.")
+            claim_id = outcome["claim_id"]
             print("Agent after operator approval:")
             print(agent("read"))
         else:

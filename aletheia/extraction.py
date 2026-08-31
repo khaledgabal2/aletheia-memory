@@ -44,6 +44,7 @@ class LLMExtractor:
 
     name = "llm"
     version = "m12"
+    prompt_version = "2"
 
     def __init__(
         self,
@@ -78,6 +79,9 @@ class LLMExtractor:
         )
         input_payload = [_event_payload(event) for event in evidence]
         schema = _candidate_schema()
+        item_schema = schema["properties"]["candidates"]["items"]["properties"]
+        item_schema["memory_type"]["enum"] = list(policy.allowed_memory_types)
+        item_schema["evidence_span"]["properties"]["evidence_id"]["enum"] = [event.id for event in evidence]
         if blocked:
             self.last_invocation = LLMInvocation(
                 task_type="extract_candidates",
@@ -85,7 +89,7 @@ class LLMExtractor:
                 provider_type=getattr(self.provider, "provider_type", "unknown"),
                 model=self.provider.model,
                 prompt_template_id="m12.extract_candidates",
-                prompt_version="1",
+                prompt_version=self.prompt_version,
                 temperature=self.temperature,
                 schema_version="candidate_claim_draft.v1",
                 input_evidence_ids=[event.id for event in evidence],
@@ -102,6 +106,9 @@ class LLMExtractor:
                 "content": (
                     "Extract candidate memories only. Return strict JSON matching the schema. "
                     "Every candidate must include a supporting evidence_span. Do not create trusted facts."
+                    " Copy evidence_id and evidence text exactly. Offsets are zero-based Unicode character "
+                    "positions; end_char is exclusive. For a short sentence, use its complete content with "
+                    "start_char=0 and end_char=content_length. Do not count words as characters."
                 ),
             },
             {"role": "user", "content": json.dumps({"namespace": namespace, "evidence": input_payload}, sort_keys=True)},
@@ -128,7 +135,7 @@ class LLMExtractor:
             provider_type=getattr(self.provider, "provider_type", "unknown"),
             model=self.provider.model,
             prompt_template_id="m12.extract_candidates",
-            prompt_version="1",
+            prompt_version=self.prompt_version,
             temperature=self.temperature,
             schema_version="candidate_claim_draft.v1",
             input_evidence_ids=[event.id for event in evidence],
@@ -495,6 +502,7 @@ def _event_payload(event: EvidenceEvent) -> dict:
         "id": event.id,
         "namespace": event.namespace,
         "content": event.content,
+        "content_length": len(event.content),
         "privacy_level": event.privacy_level,
         "source_type": event.source_type,
     }
@@ -534,6 +542,15 @@ def _candidate_schema() -> dict:
                 "items": {
                     "type": "object",
                     "required": ["subject", "predicate", "object", "memory_type", "evidence_span"],
+                    "properties": {
+                        **{field: {"type": "string", "minLength": 1} for field in ["subject", "predicate", "object", "memory_type", "candidate_reason"]},
+                        "evidence_span": {"type": "object", "required": ["evidence_id", "start_char", "end_char", "text"],
+                            "properties": {"evidence_id": {"type": "string"}, "start_char": {"type": "integer", "minimum": 0},
+                                "end_char": {"type": "integer", "minimum": 1}, "text": {"type": "string"}, "role": {"const": "supporting"}}},
+                        "suggested_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "suggested_importance": {"type": "number", "minimum": 0, "maximum": 1},
+                        "privacy_level": {"type": "string", "enum": list(PRIVACY_ORDER)},
+                    },
                 },
             }
         },
