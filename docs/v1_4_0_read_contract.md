@@ -59,6 +59,10 @@ support. This additive negotiation validates known input types and these limits:
 | Extension fields | Accepted; unknown fields do not become new supported behavior |
 
 Without the header, existing coercions and extension inputs remain accepted.
+An explicit unknown, empty or different profile returns `409 unsupported_contract`
+before running the read. Shared read operations in the review and onboarding
+projections also use `memory-read-v1`; those profile names apply to their own
+candidate review/creation operations, as declared by each operation's schema.
 New examples explicitly choose lexical mode and `record_usage: false`; lexical
 retrieval matches words and does not promise arbitrary paraphrase understanding.
 
@@ -66,7 +70,8 @@ Retrieval is ranked top-N, not exhaustive enumeration. Authorization filtering
 can reduce the returned count without refilling it. There is no cursor or total
 count guarantee. Context has a token budget and the existing bounded candidate
 selection. Overview returns at most ten items per available section. These
-responses have null pagination; review-list continuation belongs to G3.
+responses have null pagination; review-list continuation is defined by the
+[review contract](v1_4_0_review_contract.md).
 
 ## Redaction and overview limits
 
@@ -103,7 +108,9 @@ or change console sessions/CSRF policy.
 
 Read and discovery responses use `Cache-Control: no-store` and carry an opaque
 `X-Request-ID` alongside the existing envelope request ID. Canonical service
-errors include 400, 401, 403, 404, 413, 429 and 500. Correlation IDs with unsafe
+errors include 400, 401, 403, 404, 409, 413, 429, 500 and 503 as declared per
+operation. `503 database_busy` indicates SQLite lock contention; a failed usage
+write is rolled back. Correlation IDs with unsafe
 header characters are not echoed as headers. Tokens and sensitive results stay
 in memory, outside browser persistent storage and URLs.
 
@@ -126,8 +133,8 @@ Background reads make no domain writes. Operational request/rate-limit records
 remain permitted. Context `record_usage: true` is an explicit side effect and
 records only the filtered pack actually delivered; do not use it for polling.
 Read POSTs ignore idempotency replay caches so each call rechecks access. This
-does not promise exactly-once usage recording. Mutation replay is unchanged and
-awaits G3.
+does not promise exactly-once usage recording. Governed mutation replay is
+defined separately by the review and agent onboarding contracts.
 
 HTTP handlers serialize access to their shared SQLite connection. Selected reads
 evaluate authorization, provenance and result construction in one transaction.

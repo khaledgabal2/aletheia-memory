@@ -8,9 +8,16 @@ database that way. Stop ordinary writers during a planned upgrade.
 
 The new CLI's `backup` and `migrate` commands open existing nonempty databases
 without an implicit upgrade. `migrate apply --backup-before` therefore captures
-the previous schema before changing it. Migration is atomic; a failure rolls
+the previous schema before changing it. Absolute paths and quoted `~` paths use
+the same expansion before deciding whether storage already exists. Migration is atomic; a failure rolls
 back schema creation, backfills, triggers and version marking. Planning records
 an operational plan row; use `doctor --read-only` for a non-mutating inspection.
+
+Discovery advertises the tested storage **1.3.0 → 1.3.1** upgrade, its required
+pre-upgrade backup and recovery by restoring that archive with the retained
+older binary. It does not claim a tested upgrade from every historical schema
+or an in-place downgrade. Its `safe` flag describes support for the current
+schema under this procedure, not whether the operator has completed it.
 
 For passphrase entry without putting it in shell history or process arguments,
 run this with the **new** Python environment and your existing database path:

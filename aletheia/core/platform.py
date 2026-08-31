@@ -842,10 +842,11 @@ def compatibility_report(memory, *, include_plugins: bool = True, include_sdks: 
     entries = list_compatibility_matrix(memory)
     plugins = list_plugins(memory) if include_plugins else []
     plugin_warnings = [f"Plugin {plugin['name']} is {plugin['status']}." for plugin in plugins if plugin["status"] in {"incompatible", "blocked", "failed", "quarantined"}]
+    current_schema = memory.health()["schema_version"]
     report = {
         # Historical alias required by the published 1.3.1 SDK equality check.
         "aletheia_version": SCHEMA_VERSION,
-        "schema_version": memory.health()["schema_version"],
+        "schema_version": current_schema,
         **discovery_metadata(),
         "deprecated_fields": {
             "aletheia_version": "Historical expected-schema version; use software_version for the software release."
@@ -856,7 +857,12 @@ def compatibility_report(memory, *, include_plugins: bool = True, include_sdks: 
         "plugins": plugins,
         "sdk_versions": [asdict(record) for record in list_sdk_releases(memory)] if include_sdks else [],
         "archive_formats": [entry.component_version for entry in entries if entry.component_type == "archive"],
-        "migration_support": {"from": "1.0.x", "to": "1.3.0", "safe": True},
+        # Published 1.3.1 uses storage 1.3.0. Do not advertise untested older
+        # upgrades or an in-place downgrade; recovery uses the retained archive.
+        "migration_support": {"from": "1.3.0", "to": SCHEMA_VERSION,
+            "safe": current_schema in {"1.3.0", SCHEMA_VERSION},
+            "requires_pre_upgrade_backup": True, "in_place_downgrade": False,
+            "recovery": "restore_pre_upgrade_backup"},
         "matrix": [asdict(entry) for entry in entries],
         "warnings": plugin_warnings,
     }

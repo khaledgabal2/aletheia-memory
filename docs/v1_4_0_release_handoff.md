@@ -6,6 +6,9 @@ and runtime paths. Desktop and Relay are optional downstream consumers and do
 not gate this release.
 
 Final pre-publication checks are recorded in [final verification](v1_4_0_final_verification.md).
+The subsequent five findings and their verified corrections are recorded in
+[final-review corrections](v1_4_0_review_closure.md), which supersedes the earlier
+readiness claim and identifies the expanded gates for the corrected build.
 This document prepares Phase 7. It does not authorize merging, advisory
 publication, GitHub release creation, TestPyPI/PyPI uploads or branch-rule changes.
 The owner asked to review approvals only after implementation and verification.
@@ -44,6 +47,7 @@ against `codex/v1.4-discovery`; review the phase-specific ranges recorded below.
 | Phase 5 providers/examples | `codex/v1.4-providers-and-examples` | `0c48452e93f02c614ab1aef04e6829cc50bfa9ee` |
 | Phase 6 candidate integration | `codex/v1.4-release-candidate` | `6bba7f83697aa7ab67a97f2c6d9e2afc6616fae9` |
 | Final release preparation | `codex/v1.4-final-release` | `1a68eed4687054d927bf44d12493c913fcd467a4` |
+| Final-review corrections | `codex/v1.4-final-release` | `d0515980de763d554ad08d9ca1e657ddf1224951` |
 
 GitHub security forks do not execute Actions. GitHub also documents that its
 advisory merge action does not enforce branch protection. Do not use that action
@@ -58,10 +62,12 @@ represent this ruleset. No protection setting was changed for this release.
 
 ## Completed final preparation
 
-Final 1.4.0 metadata/docs and artifacts are prepared. Linux Python 3.11–3.13,
-macOS regression, all generated HTTP clients, six Node lifecycle checks, actual
-browser reads, old-binary upgrade/recovery, and installed wheel/sdist examples
-pass. The new Linux cancellation finding was fixed and verified. A cold-install
+Final 1.4.0 metadata/docs and corrected artifacts are prepared. Linux Python
+3.11–3.13 and macOS each pass 283 regressions; all generated HTTP clients,
+24 Node lifecycle/transport checks, actual browser reads/reviews, old-binary
+upgrade/recovery for absolute/tilde paths, and installed wheel/sdist examples
+pass. The starter also passes ten cancellation/CLI checks on Node 26 and 22.
+All five final-review findings are corrected, with regression evidence above. A cold-install
 and explicit-review walkthrough is measured, with its agent-run/human-usability
 limits documented. Source/code review was performed by the implementing agent;
 it is not an independent security audit. The five-minute human target remains

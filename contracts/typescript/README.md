@@ -68,6 +68,12 @@ absence of domain writes. **Connect demo**, **Narrow demo privacy**, **Revoke de
 credentials** and **Disconnect** exercise the live poller and cache clearing.
 The Node tests additionally cover stalled bodies, background/offline lifecycle,
 non-overlap, late results, changed access during a request and bounded retries.
+The shared `scripts/v1_4_transport_check.mjs` suite exercises read and review
+GET/POST deadlines and caller cancellation during stalled headers and bodies,
+with forced garbage collection and assertions that uncertain calls are not
+retried. Installed wheel/sdist checks run the same nine tests against the
+generated starter's `transport.ts`, plus an actual agent subprocess check that
+must stop at its default 10-second deadline without a fixture watchdog kill.
 
 The fixture is a development test harness, not a deployment proxy or credential
 provisioning API. Do not point it at a real database. Stop it with Ctrl-C; its

@@ -1719,6 +1719,8 @@ def _run(args: argparse.Namespace) -> int:
     # Inspect/back up existing storage before an explicit migration. Fresh paths
     # retain the historical command behavior, but existing data is not upgraded
     # merely to generate a plan or take its pre-upgrade backup.
+    # Match SQLiteStore.open's expansion before making the safety decision.
+    args.db = str(Path(args.db).expanduser())
     auto_migrate = not (args.command in {"migrate", "backup"} and Path(args.db).is_file() and Path(args.db).stat().st_size > 0)
     memory = Memory.open(args.db, namespace=getattr(args, "namespace", "user/default"), auto_migrate=auto_migrate)
     try:

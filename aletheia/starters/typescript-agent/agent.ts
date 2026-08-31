@@ -1,21 +1,12 @@
 /** Separate agent process. Never receives the operator's review credential. */
-import createClient from "openapi-fetch";
-import type {paths} from "./schema.js";
+import { agentClient } from "./transport.js";
 
 const url=process.env.ALETHEIA_URL, token=process.env.ALETHEIA_AGENT_TOKEN;
 const namespace=process.env.ALETHEIA_NAMESPACE ?? 'user/demo', action=process.argv[2];
 if(!url || !token || !['capture','read'].includes(action ?? '')) {
   throw Error('Run operator_demo.py for a disposable local example, or supply URL, restricted token and capture/read action.');
 }
-const client=createClient<paths>({baseUrl:url,headers:{Authorization:`Bearer ${token}`},
-  fetch:async(request:Request)=>{
-    const response=await fetch(new Request(request,{cache:'no-store',signal:AbortSignal.timeout(10_000),
-      headers:{...Object.fromEntries(request.headers),'X-Request-ID':crypto.randomUUID()}}));
-    // Buffer within the same deadline; never retry a write automatically.
-    const body=await response.arrayBuffer();
-    if(!response.ok)throw Error(`Memory request failed (${response.status}); inspect scope or the pending operation before retrying.`);
-    return new Response(body,{status:response.status,headers:response.headers});
-  }});
+const client=agentClient(url,token);
 try {
   const result=await client.GET('/v1/auth/me');
   if(!result.data)throw Error('Principal discovery unavailable.');
@@ -34,13 +25,13 @@ try {
     if(!response.data)throw Error('Outcome unknown: retain the same operation key and payload.');
     console.log(JSON.stringify({candidate_id:response.data.data.candidate.id}));
   }else{
-    const response=await client.POST('/v1/context-pack',{body:{namespace,query:'architecture',retrieval_mode:'lexical',record_usage:false}});
+    const response=await client.POST('/v1/context-pack',{params:{header:{'X-Aletheia-Contract':'memory-read-v1'}},body:{namespace,query:'architecture',retrieval_mode:'lexical',record_usage:false}});
     if(!response.data)throw Error('Context unavailable.');
     const pack=response.data.data;
     console.log(pack.markdown);
     console.log('Visible context items:',pack.items.length);
     if(pack.items[0]){
-      const detail=await client.GET('/v1/claims/{claim_id}/explain',{params:{path:{claim_id:pack.items[0].claim_id}}});
+      const detail=await client.GET('/v1/claims/{claim_id}/explain',{params:{path:{claim_id:pack.items[0].claim_id},header:{'X-Aletheia-Contract':'memory-read-v1'}}});
       console.log('Provenance:',detail.data?.data.evidence[0]?.content ?? 'No visible evidence');
     }
   }

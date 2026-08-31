@@ -28,6 +28,12 @@ a new decision. A changed/redacted creation result returns 409/403; it does not
 return an old snapshot. Keys expire after 24 hours, so inspect rather than blindly
 recreating an old uncertain operation.
 
+`agent.ts` uses the generated client's `transport.ts` wrapper for every request.
+Its 10-second deadline covers connection, headers and the entire response body;
+the wrapper also honors caller cancellation. A timeout after sending a write
+does not prove that the write failed. Shared reads explicitly select
+`memory-read-v1`; candidate creation selects `agent-onboarding-v1`.
+
 For an already configured service, set `ALETHEIA_URL`, `ALETHEIA_AGENT_TOKEN` and
 `ALETHEIA_NAMESPACE` in the process environment without committing them. Then:
 

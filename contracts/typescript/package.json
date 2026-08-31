@@ -9,7 +9,7 @@
     "generate:read": "openapi-typescript generated/read.json --default-non-nullable false -o generated/read.d.ts",
     "generate:review": "openapi-typescript generated/review.json --default-non-nullable false -o generated/review.d.ts",
     "generate:onboarding": "openapi-typescript generated/onboarding.json --default-non-nullable false -o generated/onboarding.d.ts",
-    "test": "node --test dist/poll.test.js",
+    "test": "node --expose-gc --test dist/poll.test.js ../../scripts/v1_4_transport_check.mjs",
     "check": "tsc --noEmit",
     "build": "tsc"
   },

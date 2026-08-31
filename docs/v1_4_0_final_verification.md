@@ -1,5 +1,11 @@
 # 1.4.0 final pre-publication verification
 
+**Superseded for release readiness:** the final review found five defects at
+`d051598` despite the successful checks recorded below. Their corrections and
+expanded 283-test, client, installed-artifact and browser verification are in
+[final-review corrections](v1_4_0_review_closure.md). The older counts and timings
+below remain historical evidence, not verification of the corrected artifacts.
+
 Recorded 2026-08-30, America/Chicago. Software **1.4.0**, storage **1.3.1**,
 HTTP major **v1**. This final preparation follows RC commit
 `1a68eed4687054d927bf44d12493c913fcd467a4` on the isolated

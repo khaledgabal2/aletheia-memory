@@ -9,7 +9,7 @@ from aletheia.core.errors import ValidationError
 
 STARTERS = {"embedded": ("memory_demo.py", "README.md"),
             "http-agent": ("agent.py", "operator_demo.py", "README.md"),
-            "typescript-agent": ("agent.ts", "schema.d.ts", "package.json", "package-lock.json", "tsconfig.json", "README.md")}
+            "typescript-agent": ("agent.ts", "transport.ts", "schema.d.ts", "package.json", "package-lock.json", "tsconfig.json", "README.md")}
 
 
 def reserve_database(path):

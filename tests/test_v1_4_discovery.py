@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import timedelta
 import json
+import sqlite3
 from pathlib import Path
 import tomllib
 
@@ -19,6 +20,8 @@ from aletheia.models import ServiceConfig
 from aletheia.service.auth import CAPABILITIES
 from aletheia.service.contracts import DISCOVERY_PATHS, discovery_document
 from aletheia.service.http import AletheiaService, openapi_schema
+from aletheia.service.read_contracts import READ_PATHS
+from aletheia.storage import SCHEMA_VERSION
 from aletheia import version as versions
 from scripts.v1_4_phase0 import local_service, load_legacy_client, request
 
@@ -80,6 +83,8 @@ def test_software_schema_and_legacy_bridge_are_independent(tmp_path, monkeypatch
         report = AletheiaClient(url, tokens["agent"]).compatibility_report()
         assert report["aletheia_version"] == report["schema_version"] == "1.3.1"
         assert report["software_version"] == "1.4.0"
+        assert report["migration_support"] == {"from": "1.3.0", "to": SCHEMA_VERSION, "safe": True,
+            "requires_pre_upgrade_backup": True, "in_place_downgrade": False, "recovery": "restore_pre_upgrade_backup"}
         assert "aletheia_version" in report["deprecated_fields"]
         for path in ["/v1/health", "/v1/ready", "/v1/version", "/v1/compatibility/report", "/v1/auth/me"]:
             result = request(url, "GET", path, token=tokens["agent"])
@@ -105,6 +110,54 @@ def test_legacy_bridge_preserves_rejection_of_mismatched_storage(tmp_path):
         with service.memory.store.transaction():
             service.memory.store.connection.execute("UPDATE schema_version SET version = 'unsupported'")
         assert load_legacy_client()(url, tokens["agent"]).check_compatibility()["compatible"] is False
+        report = AletheiaClient(url, tokens["agent"]).compatibility_report()
+        assert report["schema_version"] == "unsupported"
+        assert report["migration_support"]["to"] == SCHEMA_VERSION
+        assert report["migration_support"]["safe"] is False
+
+
+@pytest.mark.parametrize("version", ["1.2.0", "1.4.0"])
+def test_migration_metadata_does_not_certify_untested_or_newer_storage(tmp_path, version):
+    with service_at(tmp_path / "unsupported.db") as service:
+        _, _, token = token_for(service, capabilities=["memory:read"])
+        with service.memory.store.transaction():
+            service.memory.store.connection.execute("UPDATE schema_version SET version=?", (version,))
+        status, body = get(service, "/v1/compatibility/report", token)
+        assert status == 200
+        assert body["data"]["migration_support"]["safe"] is False
+        assert body["data"]["migration_support"]["to"] == SCHEMA_VERSION
+        validate_envelope(openapi_schema(), "/v1/compatibility/report", status, body)
+
+
+def test_all_read_and_discovery_schemas_cover_real_exclusive_lock_errors(tmp_path):
+    from tests.test_v1_4_reads import conform
+    with local_service(tmp_path) as (service, url, tokens):
+        db = service.memory.store.connection
+        db.execute("PRAGMA busy_timeout=20")
+        # Rollback-journal exclusive locking also blocks the read-only discovery
+        # paths. Use a real second connection, not an injected exception.
+        assert db.execute("PRAGMA journal_mode=DELETE").fetchone()[0] == "delete"
+        document = openapi_schema()
+        blocker = sqlite3.connect(service.memory.store.path)
+        try:
+            blocker.execute("BEGIN EXCLUSIVE")
+            for path in [*DISCOVERY_PATHS, *READ_PATHS]:
+                method = READ_PATHS[path][0].upper() if path in READ_PATHS else "GET"
+                actual = path.replace("{claim_id}", "fixture").replace("{target_type}", "claim").replace("{target_id}", "fixture")
+                result = request(url, method, actual, token=tokens["agent"], payload={} if method == "POST" else None)
+                assert result["status"] == 503
+                assert result["body"]["error"]["code"] == "database_busy"
+                if path in READ_PATHS:
+                    conform(document, path, result)
+                else:
+                    validate_envelope(document, path, result["status"], result["body"])
+                    assert result["headers"]["Cache-Control"] == "no-store"
+                    assert result["headers"]["X-Request-ID"] == result["body"]["request_id"]
+        finally:
+            blocker.rollback()
+            blocker.close()
+        assert get(service, "/v1/health")[0] == 200
+        assert not db.in_transaction
 
 
 def test_scoped_principal_needs_no_read_or_admin_and_never_serializes_credentials(tmp_path):

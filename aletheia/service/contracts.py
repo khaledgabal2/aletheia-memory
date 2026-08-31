@@ -89,7 +89,10 @@ def discovery_schemas():
             "sdk_versions": {"type": "array", "items": _ref("SDKRelease")},
             "matrix": {"type": "array", "items": _ref("CompatibilityEntry")},
             "archive_formats": _strings(), "warnings": _strings(),
-            "migration_support": _object({"from": string, "to": string, "safe": boolean}),
+            "migration_support": _object({"from": string, "to": string,
+                "safe": {**boolean, "description": "Current schema has a tested upgrade/no-op path; safety requires the documented backup and stopped-writer procedure."},
+                "requires_pre_upgrade_backup": boolean, "in_place_downgrade": boolean,
+                "recovery": {"const": "restore_pre_upgrade_backup"}}),
         }),
         # OpenAPI itself is an extensible specification, not an untyped domain result.
         "OpenApiDocument": _object({
@@ -138,7 +141,7 @@ def apply_discovery_contracts(schema):
                 "schema": {"type": "boolean", "default": True},
                 "description": "Legacy truthy spellings 1, true, yes, on are accepted; other supplied values are false.",
             } for key in ["include_plugins", "include_sdks", "include_runtime"]]
-        statuses = [200, 400, 403, 413, 429, 500]
+        statuses = [200, 400, 403, 413, 429, 500, 503]
         if not public:
             statuses.append(401)
         if capability:

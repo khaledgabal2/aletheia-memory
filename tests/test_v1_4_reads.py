@@ -3,6 +3,7 @@
 from dataclasses import replace
 import hashlib
 import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 from jsonschema import Draft202012Validator
@@ -193,6 +194,54 @@ def test_opt_in_canonical_validation_and_legacy_coercion(tmp_path, path, bad):
         conform(openapi_schema(), path, result)
         legacy = request(url, "POST", "/v1/retrieve", token=tokens["agent"], payload={"namespace": NAMESPACE, "mode": "lexical", "limit": "10", "future_extension": {"allowed": True}})
         assert legacy["status"] == 200
+
+
+@pytest.mark.parametrize("profile", ["memory-read-v2", "agent-onboarding-v1", "memory-review-v1", ""])
+def test_explicit_unsupported_read_profile_never_falls_back_to_legacy(tmp_path, profile):
+    with local_service(tmp_path) as (service, url, tokens):
+        claim = seed(service.memory, "profile negotiation")
+        document = openapi_schema()
+        for path, (method, _, _) in READ_PATHS.items():
+            actual = path.replace("{claim_id}", claim.id).replace("{target_type}", "claim").replace("{target_id}", claim.id)
+            if path.endswith("overview"):
+                actual += "?namespace=" + NAMESPACE
+            result = request(url, method.upper(), actual, token=tokens["agent"],
+                headers={"X-Aletheia-Contract": profile},
+                payload={"namespace": NAMESPACE, "retrieval_mode": "lexical", "record_usage": "false"} if method == "post" else None)
+            assert result["status"] == 409
+            assert result["body"]["error"]["code"] == "unsupported_contract"
+            conform(document, path, result)
+        assert service.memory.store.connection.execute("SELECT count(*) FROM context_pack_log").fetchone()[0] == 0
+        # An absent header alone retains historical bool coercion, including its
+        # usage-recording side effect. Canonical callers must supply real bools.
+        legacy = request(url, "POST", "/v1/context-pack", token=tokens["agent"],
+            payload={"namespace": NAMESPACE, "retrieval_mode": "lexical", "record_usage": "false"})
+        assert legacy["status"] == 200
+        assert service.memory.store.connection.execute("SELECT count(*) FROM context_pack_log").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("path", ["/v1/context-pack", "/v1/context"])
+def test_database_busy_response_conforms_and_usage_write_recovers(tmp_path, path):
+    with local_service(tmp_path) as (service, url, tokens):
+        db = service.memory.store.connection
+        db.execute("PRAGMA busy_timeout=20")
+        payload = {"namespace": NAMESPACE, "query": "architecture", "retrieval_mode": "lexical", "record_usage": True}
+        blocker = sqlite3.connect(service.memory.store.path)
+        try:
+            blocker.execute("BEGIN IMMEDIATE")
+            result = request(url, "POST", path, token=tokens["agent"], headers=PROFILE, payload=payload)
+            assert result["status"] == 503
+            assert result["body"]["error"]["code"] == "database_busy"
+            conform(openapi_schema(), path, result)
+            assert db.execute("SELECT count(*) FROM context_pack_log").fetchone()[0] == 0
+            assert not db.in_transaction
+        finally:
+            blocker.rollback()
+            blocker.close()
+        recovered = request(url, "POST", path, token=tokens["agent"], headers=PROFILE, payload=payload)
+        assert recovered["status"] == 200
+        conform(openapi_schema(), path, recovered)
+        assert db.execute("SELECT count(*) FROM context_pack_log").fetchone()[0] == 1
 
 
 def test_polling_is_read_only_for_domain_state_and_concurrent_calls_finish(tmp_path):

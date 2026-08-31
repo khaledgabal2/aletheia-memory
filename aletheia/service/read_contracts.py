@@ -8,7 +8,7 @@ from aletheia.models import (Claim, RetrievalResult, ContextItem, ContextWarning
                              CandidateClaim, EvidenceSpan, Conflict, ConflictFamily, ClaimRelationship,
                              ClaimScope, ConfidenceSnapshot, ReviewTask)
 from aletheia.service.contracts import _object, _ref, _strings, DISCOVERY_PATHS
-from aletheia.service.errors import validation_error
+from aletheia.service.errors import ServiceError, validation_error
 
 
 READ_PROFILE = "memory-read-v1"
@@ -68,8 +68,10 @@ def _matches(value, schema):
 
 def validate_read_input(endpoint, query, payload, contract):
     # No implicit tightening of accepted legacy coercions/extensions.
-    if contract != READ_PROFILE:
+    if contract is None:
         return
+    if contract != READ_PROFILE:
+        raise ServiceError("unsupported_contract", "Use memory-read-v1 for negotiated reads, including reads shared by other profiles.", status_code=409)
     if endpoint == "/v1/dashboard/overview":
         if not query.get("namespace", [""])[0]:
             raise validation_error("The read profile requires an explicit namespace.")
@@ -151,7 +153,7 @@ def apply_read_contracts(schema):
         operation["x-permissions"] = {"any_of": [capability, "memory:admin"], "all_of": [],
             "resource_policy": "Stored namespace/project and full provenance privacy; administrative capability never widens scope.",
             "additional": {"candidate_audit": ["memory:review"], "explanation_audit_history": ["memory:audit"]}}
-        operation["description"] = "Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor."
+        operation["description"] = "Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor."
         params = [{"name": "X-Aletheia-Contract", "in": "header", "required": False, "schema": {"type": "string", "enum": [READ_PROFILE]}},
                   {"name": "X-Request-ID", "in": "header", "required": False, "schema": STRING}]
         for key in ["claim_id", "target_id", "target_type"]:
@@ -165,7 +167,7 @@ def apply_read_contracts(schema):
         operation["responses"] = {str(status): {"description": "Success" if status == 200 else "Service error envelope",
             "content": {"application/json": {"schema": _ref(result + "Envelope" if status == 200 else "ErrorEnvelope")}},
             "headers": {"Cache-Control": {"schema": {"const": "no-store"}}, "X-Request-ID": {"schema": STRING}},
-        } for status in [200, 400, 401, 403, 404, 413, 429, 500]}
+        } for status in [200, 400, 401, 403, 404, 409, 413, 429, 500, 503]}
     return schema
 
 

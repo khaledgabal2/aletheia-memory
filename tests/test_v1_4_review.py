@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -282,12 +283,34 @@ def test_migration_is_atomic_preserves_data_and_has_complete_trigger_integrity(t
         upgraded.close()
 
 
-def test_cli_backup_precedes_upgrade_and_reports_actual_stored_schema(tmp_path, capsys):
+@pytest.mark.parametrize("spelling", ["absolute", "tilde"])
+@pytest.mark.parametrize("command", ["backup", "plan", "apply"])
+def test_cli_backup_precedes_upgrade_and_reports_actual_stored_schema(tmp_path, capsys, spelling, command):
     path = tmp_path / "legacy.db"
-    old_database(path).close()
+    memory = old_database(path)
+    event = memory.write_event(namespace=NAMESPACE, source_type="manual", content="Keep original recovery evidence")
+    support = memory.compatibility_report()["migration_support"]
+    assert support["from"] == "1.3.0" and support["to"] == SCHEMA_VERSION
+    assert support["safe"] and support["requires_pre_upgrade_backup"]
+    memory.close()
+    # Exercise real expansion without changing HOME or writing in the home directory.
+    db_arg = str(path) if spelling == "absolute" else "~/" + os.path.relpath(path, Path.home())
+    assert Path(db_arg).expanduser().resolve() == path.resolve()
     archive = tmp_path / "before.alet"
-    assert main(["migrate", "apply", "--db", str(path), "--backup-before", "--backup-output", str(archive), "--passphrase", "synthetic-test-password"]) == 0
+    if command == "backup":
+        args = ["backup", "create", "--db", db_arg, "--output", str(archive), "--encrypt", "--passphrase", "synthetic-test-password"]
+    elif command == "plan":
+        args = ["migrate", "plan", "--db", db_arg]
+    else:
+        args = ["migrate", "apply", "--db", db_arg, "--backup-before", "--backup-output", str(archive), "--passphrase", "synthetic-test-password"]
+    assert main(args) == 0
     capsys.readouterr()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT version FROM schema_version").fetchone()[0] == (SCHEMA_VERSION if command == "apply" else "1.3.0")
+        assert connection.execute("SELECT content FROM evidence_events WHERE id=?", (event.id,)).fetchone()[0] == "Keep original recovery evidence"
+    if command == "plan":
+        assert not archive.exists()
+        return
     from aletheia.core.hardening import verify_backup_file
     status, _, manifest, payload = verify_backup_file(backup_path=str(archive), passphrase="synthetic-test-password", deep=True)
     assert status == "passed"
@@ -296,8 +319,8 @@ def test_cli_backup_precedes_upgrade_and_reports_actual_stored_schema(tmp_path, 
     old.write_bytes(payload["database.sqlite"])
     with sqlite3.connect(old) as connection:
         assert connection.execute("SELECT version FROM schema_version").fetchone()[0] == "1.3.0"
-    with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT version FROM schema_version").fetchone()[0] == SCHEMA_VERSION
+        assert connection.execute("SELECT content FROM evidence_events WHERE id=?", (event.id,)).fetchone()[0] == "Keep original recovery evidence"
+        assert connection.execute("SELECT 1 FROM sqlite_master WHERE name='review_state'").fetchone() is None
 
 
 def test_restore_changes_live_identity_and_invalidates_pre_restore_revisions_and_replays(tmp_path):

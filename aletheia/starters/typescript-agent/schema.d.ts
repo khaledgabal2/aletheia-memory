@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * GET /v1/audit/{target_type}/{target_id}
-         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
+         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
          */
         get: operations["getAudit"];
         put?: never;
@@ -50,7 +50,7 @@ export interface paths {
         };
         /**
          * GET /v1/claims/{claim_id}
-         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
+         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
          */
         get: operations["getClaim"];
         put?: never;
@@ -70,7 +70,7 @@ export interface paths {
         };
         /**
          * GET /v1/claims/{claim_id}/explain
-         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
+         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
          */
         get: operations["explainClaim"];
         put?: never;
@@ -109,7 +109,7 @@ export interface paths {
         put?: never;
         /**
          * POST /v1/context
-         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
+         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
          */
         post: operations["createContext"];
         delete?: never;
@@ -129,7 +129,7 @@ export interface paths {
         put?: never;
         /**
          * POST /v1/context-pack
-         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
+         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
          */
         post: operations["createContextPack"];
         delete?: never;
@@ -147,7 +147,7 @@ export interface paths {
         };
         /**
          * GET /v1/dashboard/overview
-         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
+         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
          */
         get: operations["getOverview"];
         put?: never;
@@ -240,7 +240,7 @@ export interface paths {
         put?: never;
         /**
          * POST /v1/retrieve
-         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
+         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
          */
         post: operations["retrieveMemory"];
         delete?: never;
@@ -260,7 +260,7 @@ export interface paths {
         put?: never;
         /**
          * POST /v1/search
-         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits. Legacy coercions and extension inputs remain accepted without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
+         * @description Read contract. Use X-Aletheia-Contract: memory-read-v1 for canonical input validation and limits, including reads shared by the review/onboarding profiles. Other explicit values return 409 unsupported_contract. Legacy coercions and extension inputs remain accepted only without that header. Ranked/nested lists are bounded, not exhaustive pagination; no cursor.
          */
         post: operations["searchMemory"];
         delete?: never;
@@ -440,6 +440,11 @@ export interface components {
             matrix: components["schemas"]["CompatibilityEntry"][];
             migration_support: {
                 from: string;
+                in_place_downgrade: boolean;
+                /** @constant */
+                recovery: "restore_pre_upgrade_backup";
+                requires_pre_upgrade_backup: boolean;
+                /** @description Current schema has a tested upgrade/no-op path; safety requires the documented backup and stopped-writer procedure. */
                 safe: boolean;
                 to: string;
             };
@@ -1120,6 +1125,17 @@ export interface operations {
                 };
             };
             /** @description Service error envelope */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
             413: {
                 headers: {
                     "Cache-Control"?: "no-store";
@@ -1143,6 +1159,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -1243,6 +1270,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Service error envelope */
+            503: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     getClaim: {
@@ -1315,6 +1353,17 @@ export interface operations {
                 };
             };
             /** @description Service error envelope */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
             413: {
                 headers: {
                     "Cache-Control"?: "no-store";
@@ -1338,6 +1387,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -1419,6 +1479,17 @@ export interface operations {
                 };
             };
             /** @description Service error envelope */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
             413: {
                 headers: {
                     "Cache-Control"?: "no-store";
@@ -1442,6 +1513,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -1549,6 +1631,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Service error envelope */
+            503: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     createContext: {
@@ -1623,6 +1716,17 @@ export interface operations {
                 };
             };
             /** @description Service error envelope */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
             413: {
                 headers: {
                     "Cache-Control"?: "no-store";
@@ -1646,6 +1750,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -1729,6 +1844,17 @@ export interface operations {
                 };
             };
             /** @description Service error envelope */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
             413: {
                 headers: {
                     "Cache-Control"?: "no-store";
@@ -1752,6 +1878,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -1834,6 +1971,17 @@ export interface operations {
                 };
             };
             /** @description Service error envelope */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
             413: {
                 headers: {
                     "Cache-Control"?: "no-store";
@@ -1857,6 +2005,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -1946,6 +2105,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Service error envelope */
+            503: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     getOpenApi: {
@@ -2026,6 +2196,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Service error envelope */
+            503: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     getReadiness: {
@@ -2097,6 +2278,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -2309,6 +2501,17 @@ export interface operations {
                 };
             };
             /** @description Service error envelope */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
             413: {
                 headers: {
                     "Cache-Control"?: "no-store";
@@ -2332,6 +2535,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -2415,6 +2629,17 @@ export interface operations {
                 };
             };
             /** @description Service error envelope */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
             413: {
                 headers: {
                     "Cache-Control"?: "no-store";
@@ -2438,6 +2663,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;
@@ -2518,6 +2754,17 @@ export interface operations {
             };
             /** @description Service error envelope */
             500: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    "X-Request-ID"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service error envelope */
+            503: {
                 headers: {
                     "Cache-Control"?: "no-store";
                     "X-Request-ID"?: string;

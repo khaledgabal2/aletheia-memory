@@ -136,6 +136,7 @@ The 1.4.0 design, prerelease evidence and final verification are recorded here:
 - [Phase 5 verification evidence](v1_4_0_phase5_evidence.md)
 - [Release-candidate verification](v1_4_0_phase6_evidence.md)
 - [Final pre-publication verification](v1_4_0_final_verification.md)
+- [Final-review corrections and expanded verification](v1_4_0_review_closure.md)
 - [Release approval and handoff](v1_4_0_release_handoff.md)
 - [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 

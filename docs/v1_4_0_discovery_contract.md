@@ -54,6 +54,17 @@ explains the old alias; there is no removal in 1.4.0.
 This does not change legacy plugin min/max compatibility policy; reviewing that
 separate policy is outside the discovery slice.
 
+`migration_support` retains the `from`, `to` and boolean `safe` fields. `from`
+is the tested starting storage version **1.3.0**, and `to` is the engine's
+current storage version **1.3.1**, not the software version. `safe` is true only
+for that tested starting schema or the current schema; it does not certify
+untested older, unknown or newer storage. It also does not prove that a backup
+has already been taken. `requires_pre_upgrade_backup: true` makes the safety
+condition explicit: stop writers and retain a verified encrypted archive before
+upgrading. `in_place_downgrade: false` and `recovery: restore_pre_upgrade_backup`
+describe the supported rollback procedure. Recovery omits writes made after the
+backup. See the [migration guide](v1_4_0_migration_guide.md).
+
 Software version reporting also corrects diagnostics, documentation-build
 metadata, newly registered contract introduction versions and release-gate run
 metadata. Existing migration, backup/archive format and seeded historical
@@ -120,6 +131,7 @@ The new error is importable from `aletheia.client` and the existing
 ## Transport and verification
 
 Discovery HTTP responses, including errors, use `Cache-Control: no-store`.
+All six discovery schemas include `503 database_busy` for storage contention.
 The envelope retains request correlation. Printable ASCII request IDs of at
 most 200 characters are also returned in `X-Request-ID`; other IDs remain in the
 JSON envelope but are not reflected into an HTTP header. No CORS or broader
@@ -144,8 +156,8 @@ source hashes verified against the retained provenance. Temporary credentials
 travel only through pipes/environment and are not written to fixtures or logs.
 All harnesses are Memory-owned and independent of Desktop.
 
-Remaining gates include complete resource authorization/redaction for reads,
-real-browser topology tests, pagination, atomic review/replay, first-run
-diagnostics and a measured human tutorial. Discovery does not enable those
-profiles prematurely. The [release plan](v1_4_0_contract_hardening_and_developer_experience_plan.md)
+The later read, review and onboarding gates are tracked in the
+[final verification record](v1_4_0_final_verification.md). The five-minute human
+tutorial target remains unmeasured; automated execution is not a substitute.
+The [release plan](v1_4_0_contract_hardening_and_developer_experience_plan.md)
 remains the source of truth.

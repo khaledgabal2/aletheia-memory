@@ -15,11 +15,13 @@ export function reviewClient(baseUrl: string, token: string, timeoutMs = 10_000)
       const abort = () => controller.abort(request.signal.reason);
       request.signal.addEventListener("abort", abort, { once: true });
       if (request.signal.aborted) abort();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const timer = setTimeout(() => controller.abort(new Error("Request timed out")), timeoutMs);
       const headers = new Headers(request.headers);
       headers.set("X-Request-ID", crypto.randomUUID());
       try {
-        const response = await fetch(new Request(request, { headers, signal: controller.signal, cache: "no-store" }));
+        // Pass the live signal directly; an intermediate Request can lose its
+        // abort forwarding during body transfer under Node garbage collection.
+        const response = await fetch(request, { headers, signal: controller.signal, cache: "no-store" });
         const body = await response.arrayBuffer();
         if (!response.ok) {
           // Error JSON is untrusted; surface only the documented code and status.

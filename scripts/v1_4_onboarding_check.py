@@ -103,6 +103,12 @@ def worker(*, typescript=False):
             for command in (["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], ["npm", "run", "check"], ["npm", "run", "build"]):
                 tool = subprocess.run(command, cwd=path, capture_output=True, text=True, timeout=120)
                 assert tool.returncode == 0, tool.stdout + tool.stderr
+            if answer == "approve":
+                environment = {**os.environ, "ALETHEIA_TEST_TRANSPORT": str((path / "dist/transport.js").resolve())}
+                transport = subprocess.run(["node", "--expose-gc", "--test", str(Path(__file__).with_name("v1_4_transport_check.mjs"))],
+                    env=environment, capture_output=True, text=True, timeout=60)
+                assert transport.returncode == 0, transport.stdout + transport.stderr
+                checks.append("installed TypeScript transport: 10 GC, stalled-header/body, cancellation, no-retry and actual CLI deadline checks")
         result = subprocess.run([sys.executable, "-I", str((path / "operator_demo.py").resolve())], cwd=path, input=answer + "\n", capture_output=True, text=True, timeout=45)
         assert result.returncode == 0, result.stderr
         assert "Visible context items: 0" in result.stdout

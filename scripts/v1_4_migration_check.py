@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -65,6 +66,12 @@ def main():
     provenance = json.loads((root / "tests/fixtures/v1_3_1/provenance.json").read_text())
     for name, expected in provenance["runtime_sha256"].items():
         assert hashlib.sha256(package.joinpath(*name.split(".")).with_suffix(".py").read_bytes()).hexdigest() == expected
+    for spelling in ("absolute", "tilde"):
+        verify_round_trip(package, spelling)
+    print("Published 1.3.1 database (absolute and quoted tilde paths): planning leaves old storage readable; upgrade preserves claims, evidence, candidates, permissions and retrieval; older binary refuses new storage and recovers the encrypted pre-upgrade backup.")
+
+
+def verify_round_trip(package, spelling):
     with tempfile.TemporaryDirectory(prefix="aletheia-migration-") as directory:
         path, archive = Path(directory) / "legacy.db", Path(directory) / "before.alet"
         def legacy(action, database):
@@ -74,7 +81,12 @@ def main():
                 raise RuntimeError(f"Published binary {action} failed: {result.stderr}")
             return result.stdout.strip()
         before = json.loads(legacy("seed", path))
-        subprocess.run([sys.executable, "-c", "from aletheia.cli.main import main; raise SystemExit(main())", "migrate", "apply", "--db", str(path),
+        db_arg = str(path) if spelling == "absolute" else "~/" + os.path.relpath(path, Path.home())
+        assert Path(db_arg).expanduser().resolve() == path.resolve()
+        cli = [sys.executable, "-c", "from aletheia.cli.main import main; raise SystemExit(main())"]
+        subprocess.run([*cli, "migrate", "plan", "--db", db_arg], check=True, capture_output=True, text=True, timeout=45)
+        assert json.loads(legacy("inspect", path)) == before
+        subprocess.run([*cli, "migrate", "apply", "--db", db_arg,
             "--backup-before", "--backup-output", str(archive), "--passphrase", "synthetic-migration-password"],
             check=True, capture_output=True, text=True, timeout=45)
         memory = Memory.open(str(path), auto_migrate=False)
@@ -88,7 +100,6 @@ def main():
             memory.close()
         legacy("refuse", path)
         assert json.loads(legacy("recover", Path(directory) / "recovered.db")) == before
-    print("Published 1.3.1 database: upgrade preserves claims, evidence, candidates, permissions and retrieval; older binary refuses new storage and recovers the encrypted pre-upgrade backup.")
 
 
 if __name__ == "__main__":

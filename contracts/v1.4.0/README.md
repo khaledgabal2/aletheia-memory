@@ -5,7 +5,7 @@
 Do not use it to decide which features a running service supports.
 
 Discover current support with `/v1/auth/me` and use the actual service OpenAPI.
-The 1.4.0rc1 implementation advertises:
+The 1.4.0 implementation advertises:
 
 - `memory-read-v1`: [contract](../../docs/v1_4_0_read_contract.md)
 - `memory-review-v1`: [contract](../../docs/v1_4_0_review_contract.md)
