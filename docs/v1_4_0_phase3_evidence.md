@@ -62,8 +62,9 @@ imports, temporary directories and synthetic inputs, and checks that development
 or model dependencies are absent. For the generated-client and compatibility
 gates, see [the contract tooling guide](../contracts/typescript/README.md).
 
-The release-gates workflow now runs both installed-artifact checks. GitHub
-temporary private security forks do not run Actions/integrations; local macOS
+The release-gates workflow now runs both installed-artifact checks. [GitHub
+temporary private security forks](https://docs.github.com/en/code-security/tutorials/fix-reported-vulnerabilities/collaborate-in-a-fork)
+do not run Actions/integrations; local macOS
 results do not imply Linux CI results. No new real-browser test was needed for
 this CLI/documentation slice; Phase 2 browser evidence remains historical.
 
@@ -83,8 +84,15 @@ this CLI/documentation slice; Phase 2 browser evidence remains historical.
 - No scoped helper was added: the existing APIs and returned handles suffice.
   `Memory.remember()` retains its trusted active-write semantics.
 
-Phase 3 remains a dependent private draft PR because its history includes the
-unpublished Phase 2 remediation. Review stays under draft advisory
+Phase 3 is tracked in [private draft PR #2](https://github.com/khaledgabal2/aletheia-memory-ghsa-v96m-pj74-648h/pull/2)
+because its history includes the unpublished Phase 2 remediation. GitHub rejected
+the existing private-only `codex/v1.4-read-contract` branch as a PR base with
+HTTP 422 (`base: invalid`). The PR therefore targets `codex/v1.4-discovery` and
+shows a cumulative Phase 2 + Phase 3 diff; it depends on private PR #1. The Phase 3
+implementation is commit `1404722ce801d96e0ecea7a73021de35fc617774`, with subsequent
+evidence-only commits. Compare `3817e9a...codex/v1.4-onboarding` locally to review
+only this slice. No private base branch was copied into the public repository.
+Review stays under draft advisory
 [GHSA-v96m-pj74-648h](https://github.com/khaledgabal2/aletheia-memory/security/advisories/GHSA-v96m-pj74-648h)
 and its private temporary fork. The maintainer will review/merge after the work
 is complete. Package version remains 1.3.1 and schema version remains 1.3.0 until
