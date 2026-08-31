@@ -27,7 +27,7 @@ understood the trust boundary. Carry that validation into the final release gate
 | Optional providers | Configuration and stored semantic-index state are inspected without model calls or plugin loading. Stale/model-dimension mismatches warn without rebuilding. Explicit local GET probes report unavailability/redirect errors without forwarding credentials or failing core lexical setup. |
 | Source distribution | The full 210-test suite also passes from the extracted sdist. Templates and docs are included; Node dependencies, generated output and Python caches are excluded. |
 | Existing contract gates | Baseline/discovery/read TypeScript consumers regenerate, compile and execute successfully. All five Node lifecycle tests and both SDK compatibility directions pass. No new profile or API/storage schema is introduced. |
-| Repository boundary | Generic release-boundary and whitespace checks pass. The original checkout remains clean on `codex/v1.4-plan`. No public main push, merge or publication occurs. |
+| Repository boundary | Generic release-boundary and whitespace checks pass. The original checkout stays on `codex/v1.4-plan` with no tracked-file changes; unrelated untracked editor configuration was left untouched. No public main push, merge or publication occurs. |
 
 ### Timing, measured separately
 
