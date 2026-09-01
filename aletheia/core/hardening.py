@@ -13,6 +13,7 @@ import sys
 import tempfile
 import zipfile
 from dataclasses import asdict
+from functools import wraps
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -93,6 +94,15 @@ M8_TABLES = {
     "release_manifests",
     "production_readiness_checks",
 }
+
+
+def _atomic_store_write(operation):
+    """Keep multi-step hardening writes inside one explicit SQLite commit."""
+    @wraps(operation)
+    def wrapped(memory, *args, **kwargs):
+        with memory.store.transaction(immediate=True):
+            return operation(memory, *args, **kwargs)
+    return wrapped
 
 
 def create_backup(
@@ -366,6 +376,7 @@ def restore_backup(
     dry_run: bool = True,
     verify_before: bool = True,
     run_integrity_after: bool = True,
+    trust_unauthenticated: bool = False,
 ) -> RestoreRun:
     if mode not in {"new_database", "overwrite_existing", "in_place"}:
         raise ValidationError("Restore mode must be new_database, overwrite_existing, or in_place.")
@@ -386,6 +397,14 @@ def restore_backup(
         verified = verification_status == "passed"
         if not verified and not dry_run:
             raise ValidationError("Restore refused because backup verification failed: " + "; ".join(warnings))
+        if manifest and not manifest.get("encrypted"):
+            warnings.append(
+                "The archive is checksum-verified but unauthenticated; an attacker who can replace it can also replace its checksums."
+            )
+            if not dry_run and not trust_unauthenticated:
+                raise ValidationError(
+                    "Restore refused an unauthenticated archive. Use an encrypted backup, or explicitly set trust_unauthenticated after verifying its provenance."
+                )
     target = Path(target_db_path)
     if dry_run:
         return RestoreRun(
@@ -1496,6 +1515,7 @@ def export_archive(
     return ExportManifest.from_row(row)
 
 
+@_atomic_store_write
 def import_archive(
     memory,
     *,

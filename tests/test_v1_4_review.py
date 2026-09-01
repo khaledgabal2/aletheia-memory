@@ -188,6 +188,29 @@ def test_two_independent_connections_cannot_commit_competing_decisions(tmp_path)
             other.close()
 
 
+def test_embedded_promotion_and_rejection_cannot_reopen_terminal_candidate(tmp_path):
+    memory = Memory.open(str(tmp_path / "terminal.db"), namespace=NAMESPACE)
+    try:
+        item = candidate(memory, "terminal promotion")
+        claim = memory.promote_candidate(item.id, reason="First explicit decision")
+        with pytest.raises(ValidationError, match="candidate status is promoted"):
+            memory.promote_candidate(item.id, reason="Duplicate decision")
+        with pytest.raises(ValidationError, match="already terminal: promoted"):
+            memory.reject_candidate(item.id, reason="Late conflicting decision")
+        assert memory.read_candidate(item.id).candidate_status == "promoted"
+        assert memory.read_claim(claim.id).status == "active"
+        assert memory.store.connection.execute(
+            "SELECT count(*) FROM candidate_claim_links WHERE candidate_id=? AND relation='promoted_to'",
+            (item.id,),
+        ).fetchone()[0] == 1
+        assert memory.store.connection.execute(
+            "SELECT count(*) FROM extraction_decisions WHERE candidate_id=? AND decision='promote'",
+            (item.id,),
+        ).fetchone()[0] == 1
+    finally:
+        memory.close()
+
+
 @pytest.mark.parametrize("writer", ["embedded", "cli", "legacy_http"])
 def test_supported_writers_invalidate_review_tokens(tmp_path, writer):
     with local_service(tmp_path) as (service, url, tokens):

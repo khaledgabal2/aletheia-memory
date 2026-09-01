@@ -14,8 +14,15 @@ aletheia backup verify ./aletheia.alet --db ./aletheia.db --passphrase "change-m
 Dry-run restore before applying:
 
 ```bash
-aletheia restore dry-run ./aletheia.alet --target ./restored.db --db ./aletheia.db --passphrase "change-me"
+aletheia restore dry-run ./aletheia.alet --target-db ./restored.db --db ./aletheia.db --passphrase "change-me"
 ```
+
+Applied restores require an authenticated encrypted archive by default. A
+checksum-only unencrypted archive proves accidental-corruption resistance, but
+someone who can replace the archive can replace its checksums too. If an older
+unencrypted archive has been verified through a separate trusted channel, the
+operator must acknowledge that boundary explicitly with
+`--trust-unauthenticated`; never use that switch for an untrusted download.
 
 The v1 release gate checks that backup and restore machinery is available. A clean development database may pass with an acknowledged missing-backup warning, but production readiness should include a verified backup.
 

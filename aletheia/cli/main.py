@@ -1376,6 +1376,11 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     restore_apply.add_argument("--namespace")
     restore_apply.add_argument("--passphrase")
     restore_apply.add_argument("--confirm")
+    restore_apply.add_argument(
+        "--trust-unauthenticated",
+        action="store_true",
+        help="Allow an unencrypted checksum-only archive after separately verifying its provenance.",
+    )
     restore_namespace = restore_sub.add_parser("namespace")
     restore_namespace.add_argument("backup_path")
     restore_namespace.add_argument("--db", default="./aletheia.db")
@@ -2484,6 +2489,7 @@ def _run_m8(memory: Memory, args: argparse.Namespace) -> int:
                 namespace=args.namespace,
                 passphrase=args.passphrase,
                 dry_run=False,
+                trust_unauthenticated=args.trust_unauthenticated,
             )))
             return 0
         if args.restore_command == "namespace":

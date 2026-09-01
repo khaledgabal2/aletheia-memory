@@ -108,7 +108,7 @@ class AuthService:
         if client_type not in CLIENT_TYPES:
             raise validation_error(f"Unknown client_type: {client_type}")
         client_id = new_id("cli")
-        with self.connection:
+        with self.memory.store.transaction():
             self.connection.execute(
                 """
                 INSERT INTO api_clients (id, name, client_type, status, created_at, metadata_json)
@@ -139,7 +139,7 @@ class AuthService:
 
     def disable_client(self, client_id: str) -> ApiClient:
         self.get_client(client_id)
-        with self.connection:
+        with self.memory.store.transaction():
             self.connection.execute(
                 "UPDATE api_clients SET status = 'disabled' WHERE id = ?",
                 (client_id,),
@@ -172,7 +172,7 @@ class AuthService:
         token_id = new_id("tok")
         token_prefix = raw_token[:12]
         now = utc_now_iso()
-        with self.connection:
+        with self.memory.store.transaction():
             self.connection.execute(
                 """
                 INSERT INTO api_tokens (
@@ -225,7 +225,7 @@ class AuthService:
 
     def revoke_token(self, token_id: str, *, reason: str | None = None) -> ApiToken:
         self.get_token(token_id)
-        with self.connection:
+        with self.memory.store.transaction():
             self.connection.execute(
                 """
                 UPDATE api_tokens
@@ -297,7 +297,7 @@ class AuthService:
             if token.status != "active":
                 raise unauthorized("Token is not active.")
             if token.expires_at and parse_iso(token.expires_at) and parse_iso(token.expires_at) <= utc_now():
-                with self.connection:
+                with self.memory.store.transaction():
                     self.connection.execute(
                         "UPDATE api_tokens SET status = 'expired' WHERE id = ?",
                         (token.id,),

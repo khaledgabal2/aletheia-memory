@@ -55,7 +55,7 @@ def remember_response(service, payload, headers, request_id, request_hash):
             raise forbidden("Requested privacy exceeds this credential's scope.")
         options = dict(method="POST", endpoint="/v1/remember", headers=headers, payload=payload,
             request_hash=content_hash(canonical(payload)) if negotiated else request_hash, namespace=namespace,
-            client_id="credential:" + context.token_id if negotiated else context.client_id)
+            client_id="credential:" + context.token_id if context.token_id else "tokenless")
         replay = service._idempotency_replay(**options)
         if replay is not None:
             data, access = replay["data"], ReadAccess(service, context)

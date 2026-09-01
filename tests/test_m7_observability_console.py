@@ -10,6 +10,7 @@ from aletheia import Memory
 from aletheia.core.ids import new_id
 from aletheia.core.time import utc_now, utc_now_iso
 from aletheia.models import ServiceConfig
+from aletheia.service.auth import AuthService
 from aletheia.version import software_version
 from aletheia.service.http import AletheiaService, openapi_schema
 
@@ -282,6 +283,26 @@ def test_console_auth_session_csrf_dashboard_and_confirmed_actions(tmp_path):
         service.close()
 
 
+def test_console_login_secrets_are_never_persisted_as_idempotency_receipts(tmp_path):
+    service = _service(tmp_path, console_enabled=True)
+    try:
+        raw = _issue_console_login_token(service.memory)
+        status, envelope = _post(
+            service,
+            "/v1/console/login",
+            {"login_token": raw},
+            **{"Idempotency-Key": "never-store-login"},
+        )
+        assert status == 200
+        assert "session_token" in envelope["data"]
+        assert "Set-Cookie" in envelope["_headers"]
+        assert service.memory.store.connection.execute(
+            "SELECT count(*) FROM idempotency_records WHERE idempotency_key='never-store-login'"
+        ).fetchone()[0] == 0
+    finally:
+        service.close()
+
+
 def test_dashboard_saved_views_delete_and_openapi_include_m7_paths(tmp_path):
     service = _service(tmp_path, console_enabled=True)
     try:
@@ -309,6 +330,38 @@ def test_dashboard_saved_views_delete_and_openapi_include_m7_paths(tmp_path):
         assert "/v1/traces/retrieval" in paths
         assert "/v1/metrics/latest" in paths
         assert "/v1/reports/export" in paths
+    finally:
+        service.close()
+
+
+def test_report_export_cannot_escape_service_safe_roots(tmp_path):
+    service = _service(tmp_path)
+    try:
+        auth = AuthService(service.memory)
+        client = auth.create_client(name="report-reader", client_type="test")
+        _, raw = auth.create_token(
+            client_id=client.id,
+            namespace_grants=[NAMESPACE],
+            capabilities=["memory:read"],
+        )
+        escaped = tmp_path.parent / f"{tmp_path.name}-escaped-report.md"
+        status, body = _post(service, "/v1/reports/export", {
+            "namespace": NAMESPACE,
+            "report_type": "memory_health",
+            "output_path": str(escaped),
+        }, Authorization=f"Bearer {raw}")
+        assert status == 400
+        assert body["error"]["code"] == "validation_error"
+        assert not escaped.exists()
+
+        allowed = tmp_path / "report.md"
+        status, _ = _post(service, "/v1/reports/export", {
+            "namespace": NAMESPACE,
+            "report_type": "memory_health",
+            "output_path": str(allowed),
+        }, Authorization=f"Bearer {raw}")
+        assert status == 200
+        assert allowed.is_file()
     finally:
         service.close()
 

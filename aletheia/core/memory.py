@@ -1749,6 +1749,10 @@ class Memory:
             raise ValidationError(f"Unknown candidate review decision: {decision}")
         self._require_text(reason, "reason")
         candidate = self.read_candidate(candidate_id)
+        if candidate.candidate_status in {"promoted", "rejected", "merged", "duplicate"}:
+            raise ValidationError(
+                f"Candidate review is already terminal: {candidate.candidate_status}."
+            )
         new_status = {
             "validate": "validated",
             "reject": "rejected",
@@ -8871,7 +8875,7 @@ class Memory:
         target_status: str,
     ) -> list[str]:
         failures: list[str] = []
-        if candidate.candidate_status in {"invalid", "rejected", "needs_evidence"}:
+        if candidate.candidate_status in {"invalid", "rejected", "promoted", "merged", "needs_evidence"}:
             failures.append(f"candidate status is {candidate.candidate_status}")
         if candidate.candidate_status == "duplicate" or candidate.duplicate_risk >= 0.95:
             failures.append("candidate is a duplicate without merge strategy")

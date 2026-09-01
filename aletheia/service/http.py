@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -337,6 +338,7 @@ class AletheiaService:
         request_id = self._header(headers, "X-Request-ID") or new_id("req")
         namespace_for_log = None
         client_id = None
+        idempotency_record_id = None
         request_hash = self._hash_body(body)
         status = 200
         response: dict[str, Any]
@@ -352,8 +354,22 @@ class AletheiaService:
             namespace_for_log = payload.get("namespace") if isinstance(payload, dict) else None
             if namespace_for_log is None and query.get("namespace"):
                 namespace_for_log = query["namespace"][0]
-            auth_context = self._authenticate(method, endpoint, headers)
+            try:
+                auth_context = self._authenticate(method, endpoint, headers)
+            except ServiceError as exc:
+                if self.config.rate_limit_enabled and exc.status_code == 401:
+                    self._check_rate_limit("auth-failure:" + self._anonymous_rate_limit_identity(headers))
+                raise
             client_id = auth_context.client_id
+            idempotency_scope = (
+                "credential:" + auth_context.token_id
+                if auth_context.token_id
+                else "tokenless:" + content_hash(json.dumps({
+                    "capabilities": sorted(auth_context.capabilities),
+                    "grants": sorted(auth_context.namespace_grants),
+                    "privacy": auth_context.privacy_ceiling,
+                }, sort_keys=True))[:24]
+            )
             if self.config.rate_limit_enabled:
                 with self.lock:
                     self._check_rate_limit(self._rate_limit_identity(auth_context, headers))
@@ -372,7 +388,7 @@ class AletheiaService:
                         payload=payload,
                         request_hash=request_hash,
                         namespace=namespace_for_log,
-                        client_id=client_id,
+                        client_id=idempotency_scope,
                     )
                     if replay is not None:
                         status = int(replay.get("_status_code", 200))
@@ -380,6 +396,9 @@ class AletheiaService:
                     else:
                         replay = None
                 if replay is None:
+                    idempotency_record_id = self._idempotency_record_id(
+                        method, endpoint, headers, idempotency_scope
+                    )
                     data, warnings, pagination = self._route_consistent(
                         method=method,
                         endpoint=endpoint,
@@ -398,10 +417,11 @@ class AletheiaService:
                             payload=payload,
                             request_hash=request_hash,
                             namespace=namespace_for_log,
-                            client_id=client_id,
+                            client_id=idempotency_scope,
                             status_code=status,
                             response=response,
                         )
+                    idempotency_record_id = None
         except ServiceError as exc:
             status = exc.status_code
             response = self._error(exc, request_id)
@@ -425,6 +445,15 @@ class AletheiaService:
             response = self._error(ServiceError("internal_error", "Internal server error.", status_code=500), request_id)
         finally:
             duration_ms = int((time.perf_counter() - started) * 1000)
+            if idempotency_record_id is not None:
+                try:
+                    with self.memory.store.transaction(immediate=True):
+                        self.memory.store.connection.execute(
+                            "DELETE FROM idempotency_records WHERE id=? AND status='in_progress'",
+                            (idempotency_record_id,),
+                        )
+                except sqlite3.Error:
+                    logging.getLogger(__name__).warning("Idempotency reservation cleanup unavailable.")
             try:
                 self._log_request(
                     request_id=request_id,
@@ -1277,7 +1306,7 @@ class AletheiaService:
                 namespace=namespace,
                 report_type=self._required(payload, "report_type"),
                 format=payload.get("format", "markdown"),
-                output_path=payload.get("output_path"),
+                output_path=self._optional_safe_admin_path(payload, "output_path"),
                 filters=payload.get("filters"),
             ))
         if method == "GET" and endpoint == "/v1/reports":
@@ -1802,6 +1831,7 @@ class AletheiaService:
                 passphrase=payload.get("passphrase"),
                 key_id=payload.get("key_id"),
                 dry_run=False,
+                trust_unauthenticated=bool(payload.get("trust_unauthenticated", False)),
             ))
 
         if method == "GET" and endpoint == "/v1/encryption/status":
@@ -2292,6 +2322,9 @@ class AletheiaService:
     def _rate_limit_identity(self, auth_context: AuthContext, headers: Mapping[str, str]) -> str:
         if auth_context.client_id:
             return f"client:{auth_context.client_id}"
+        return self._anonymous_rate_limit_identity(headers)
+
+    def _anonymous_rate_limit_identity(self, headers: Mapping[str, str]) -> str:
         client_ip = "local"
         if self.config.trust_proxy_headers:
             forwarded_for = self._header(headers, "X-Forwarded-For")
@@ -2346,26 +2379,39 @@ class AletheiaService:
         namespace: str | None,
         client_id: str | None,
     ) -> dict | None:
-        if method not in STATE_CHANGING_METHODS or endpoint in READ_POST_PATHS:
+        record_id = self._idempotency_record_id(method, endpoint, headers, client_id)
+        if record_id is None:
             return None
         key = self._header(headers, "Idempotency-Key")
-        if not key:
-            return None
-        record_id = self._idempotency_id(client_id, key, endpoint)
-        row = self.memory.store.connection.execute(
-            "SELECT * FROM idempotency_records WHERE id = ?",
-            (record_id,),
-        ).fetchone()
-        if not row:
-            return None
-        expires_at = parse_iso(row["expires_at"]) if row["expires_at"] else None
-        if expires_at and expires_at <= utc_now():
-            with self.memory.store.transaction():
+        from datetime import timedelta
+        with self.memory.store.transaction(immediate=True):
+            row = self.memory.store.connection.execute(
+                "SELECT * FROM idempotency_records WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+            expires_at = parse_iso(row["expires_at"]) if row and row["expires_at"] else None
+            if row and expires_at and expires_at <= utc_now():
                 self.memory.store.connection.execute("DELETE FROM idempotency_records WHERE id = ?", (record_id,))
-            return None
-        if row["request_hash"] != request_hash:
-            raise idempotency_conflict()
-        return json.loads(row["response_json"])
+                row = None
+            if row:
+                if row["request_hash"] != request_hash:
+                    raise idempotency_conflict()
+                if row["status"] != "completed" or not row["response_json"]:
+                    raise idempotency_conflict(
+                        "An operation with this idempotency key is still in progress; inspect state before retrying."
+                    )
+                return json.loads(row["response_json"])
+            self.memory.store.connection.execute(
+                """
+                INSERT INTO idempotency_records (
+                    id, namespace, client_id, idempotency_key, endpoint,
+                    request_hash, response_json, status, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'in_progress', ?, ?)
+                """,
+                (record_id, namespace, client_id, key, endpoint, request_hash,
+                 utc_now_iso(), (utc_now() + timedelta(minutes=5)).isoformat()),
+            )
+        return None
 
     def _idempotency_store(
         self,
@@ -2382,35 +2428,50 @@ class AletheiaService:
     ) -> None:
         if method not in STATE_CHANGING_METHODS or endpoint in READ_POST_PATHS or status_code >= 400:
             return
-        key = self._header(headers, "Idempotency-Key")
-        if not key:
+        record_id = self._idempotency_record_id(method, endpoint, headers, client_id)
+        if record_id is None:
             return
         from datetime import timedelta
 
-        record_id = self._idempotency_id(client_id, key, endpoint)
         stored = dict(response)
         stored["_status_code"] = status_code
-        with self.memory.store.transaction():
-            self.memory.store.connection.execute(
+        with self.memory.store.transaction(immediate=True):
+            updated = self.memory.store.connection.execute(
                 """
-                INSERT OR REPLACE INTO idempotency_records (
-                    id, namespace, client_id, idempotency_key, endpoint,
-                    request_hash, response_json, status, created_at, expires_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)
+                UPDATE idempotency_records
+                SET response_json=?, status='completed', expires_at=?
+                WHERE id=? AND request_hash=? AND status='in_progress'
                 """,
                 (
-                    record_id,
-                    namespace,
-                    client_id,
-                    key,
-                    endpoint,
-                    request_hash,
                     json.dumps(stored, sort_keys=True),
-                    utc_now_iso(),
                     (utc_now() + timedelta(hours=24)).isoformat(),
+                    record_id,
+                    request_hash,
                 ),
+            ).rowcount
+            if updated != 1:
+                raise idempotency_conflict(
+                    "The idempotency reservation changed before its result was stored; inspect state before retrying."
+                )
+
+    def _idempotency_record_id(
+        self,
+        method: str,
+        endpoint: str,
+        headers: Mapping[str, str],
+        client_id: str | None,
+    ) -> str | None:
+        if (method not in STATE_CHANGING_METHODS or endpoint in READ_POST_PATHS
+                or endpoint in {"/v1/console/login", "/v1/console/logout"}):
+            return None
+        key = self._header(headers, "Idempotency-Key")
+        if not key:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", key):
+            raise validation_error(
+                "Idempotency-Key must contain 1-200 ASCII letters, digits, dots, underscores, colons or hyphens."
             )
+        return self._idempotency_id(client_id, key, endpoint)
 
     def _idempotency_id(self, client_id: str | None, key: str, endpoint: str) -> str:
         return "idem_" + content_hash(f"{client_id or 'anonymous'}\0{key}\0{endpoint}")[:24]

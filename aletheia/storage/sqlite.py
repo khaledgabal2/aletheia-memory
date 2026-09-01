@@ -61,7 +61,11 @@ class SQLiteStore:
             Path(expanded_path).parent.mkdir(parents=True, exist_ok=True)
         else:
             expanded_path = path
-        connection = sqlite3.connect(expanded_path, check_same_thread=False)
+        # Explicit transaction control prevents a bare DML statement from
+        # opening a hidden transaction that a later savepoint cannot commit.
+        connection = sqlite3.connect(
+            expanded_path, check_same_thread=False, isolation_level=None
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 5000")

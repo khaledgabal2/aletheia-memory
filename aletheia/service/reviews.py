@@ -209,7 +209,8 @@ class ReviewProtocol:
 
     def legacy_mutation(self, candidate, action, payload, context, access, endpoint, headers, request_id, request_hash):
         options = dict(method="POST", endpoint=endpoint, headers=headers, payload=payload,
-                       request_hash=request_hash, namespace=candidate.namespace, client_id=context.client_id)
+                       request_hash=request_hash, namespace=candidate.namespace,
+                       client_id="credential:" + context.token_id if context.token_id else "tokenless")
         replay = self.service._idempotency_replay(**options)
         if replay is not None:
             if action == "promote":

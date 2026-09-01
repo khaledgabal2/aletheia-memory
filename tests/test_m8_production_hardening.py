@@ -241,6 +241,43 @@ def test_encrypted_backup_verify_restore_and_corruption_detection(tmp_path):
         memory.close()
 
 
+def test_unencrypted_restore_requires_explicit_provenance_trust(tmp_path):
+    source = Memory.open(str(tmp_path / "plain-source.db"), namespace=NAMESPACE)
+    archive = tmp_path / "plain.alet"
+    target = tmp_path / "plain-restored.db"
+    try:
+        claim = source.remember(
+            namespace=NAMESPACE,
+            memory_type="project",
+            subject="plain archive",
+            predicate="requires",
+            object="explicit provenance trust",
+        )
+        source.create_backup(output_path=str(archive), encrypt=False)
+        preview = source.restore_backup(
+            backup_path=str(archive), target_db_path=str(target), dry_run=True
+        )
+        assert any("unauthenticated" in warning for warning in preview.warnings)
+        with pytest.raises(ValidationError, match="unauthenticated archive"):
+            source.restore_backup(
+                backup_path=str(archive), target_db_path=str(target), dry_run=False
+            )
+        restored = source.restore_backup(
+            backup_path=str(archive),
+            target_db_path=str(target),
+            dry_run=False,
+            trust_unauthenticated=True,
+        )
+        assert restored.status == "completed"
+    finally:
+        source.close()
+    reopened = Memory.open(str(target), namespace=NAMESPACE, auto_migrate=False)
+    try:
+        assert reopened.read_claim(claim.id).object == "explicit provenance trust"
+    finally:
+        reopened.close()
+
+
 def test_redacted_logical_backup_excludes_raw_db_tokens_and_content(tmp_path):
     db_path = tmp_path / "redacted-source.db"
     backup_path = tmp_path / "redacted.alet"
@@ -847,6 +884,13 @@ def test_export_import_support_benchmark_release_readiness_and_compaction(tmp_pa
         assert target.list_claims(namespace=NAMESPACE)
     finally:
         target.close()
+
+    reopened = Memory.open(str(tmp_path / "target.db"), namespace=NAMESPACE, auto_migrate=False)
+    try:
+        assert reopened.list_claims(namespace=NAMESPACE)
+        assert not reopened.store.connection.in_transaction
+    finally:
+        reopened.close()
 
 
 def test_release_migration_range_is_consistent_across_cli_and_http(tmp_path, capsys):

@@ -452,6 +452,61 @@ def test_http_api_envelopes_idempotency_rate_limit_audit_and_admin_gates(tmp_pat
     assert all(row["request_hash"] is None for row in rows)
 
 
+def test_generic_idempotency_is_scoped_to_the_authenticated_credential(tmp_path):
+    service, first_raw = _service(tmp_path, rate_limit_per_minute=20)
+    try:
+        first_context = service.auth.authenticate(f"Bearer {first_raw}")
+        _, second_raw = service.auth.create_token(
+            client_id=first_context.client_id,
+            namespace_grants=[NAMESPACE],
+            capabilities=list(first_context.capabilities),
+            privacy_ceiling=first_context.privacy_ceiling,
+        )
+        payload = _remember_payload()
+        first = _post(service, "/v1/remember", first_raw, payload, **{"Idempotency-Key": "per-credential"})
+        second = _post(service, "/v1/remember", second_raw, payload, **{"Idempotency-Key": "per-credential"})
+        assert first[0] == second[0] == 200
+        assert first[1]["data"]["candidate"]["id"] != second[1]["data"]["candidate"]["id"]
+        rows = service.memory.store.connection.execute(
+            "SELECT client_id, status FROM idempotency_records WHERE idempotency_key='per-credential'"
+        ).fetchall()
+        assert len(rows) == 2
+        assert len({row["client_id"] for row in rows}) == 2
+        assert {row["status"] for row in rows} == {"completed"}
+    finally:
+        service.close()
+
+
+def test_idempotency_reservation_blocks_a_competing_service(tmp_path):
+    service, raw = _service(tmp_path, rate_limit_per_minute=20)
+    other_memory = Memory.open(service.memory.store.path, auto_migrate=False)
+    other = AletheiaService(
+        other_memory,
+        ServiceConfig(db_path=service.memory.store.path, rate_limit_enabled=False),
+    )
+    headers = {"Idempotency-Key": "in-flight"}
+    options = dict(
+        method="POST",
+        endpoint="/v1/feedback",
+        headers=headers,
+        payload={"namespace": NAMESPACE},
+        request_hash="same-request",
+        namespace=NAMESPACE,
+        client_id="credential:" + service.auth.authenticate(f"Bearer {raw}").token_id,
+    )
+    try:
+        assert service._idempotency_replay(**options) is None
+        with pytest.raises(ServiceError, match="still in progress"):
+            other._idempotency_replay(**options)
+    finally:
+        with service.memory.store.transaction(immediate=True):
+            service.memory.store.connection.execute(
+                "DELETE FROM idempotency_records WHERE idempotency_key='in-flight'"
+            )
+        other.close()
+        service.close()
+
+
 def test_rate_limit_applies_per_token_and_can_be_disabled(tmp_path):
     service, token = _service(tmp_path, rate_limit_per_minute=1)
     assert token is not None
@@ -487,6 +542,18 @@ def test_rate_limit_applies_per_token_and_can_be_disabled(tmp_path):
         {"namespace": NAMESPACE, "query": "third"},
         **{"X-Forwarded-For": "203.0.113.11"},
     )[0] == 429
+
+
+def test_failed_bearer_authentication_is_rate_limited(tmp_path):
+    service, _ = _service(tmp_path, rate_limit_per_minute=1)
+    try:
+        first = _get(service, "/v1/auth/me", "invalid-bearer")
+        assert first[0] == 401
+        second = _get(service, "/v1/auth/me", "another-invalid-bearer")
+        assert second[0] == 429
+        assert second[1]["error"]["code"] == "rate_limited"
+    finally:
+        service.close()
 
 
 def test_mcp_tools_are_candidate_first_logged_and_namespace_capability_aware(tmp_path):
