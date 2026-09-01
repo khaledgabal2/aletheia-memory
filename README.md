@@ -142,7 +142,7 @@ paraphrase recall is not promised. Reruns refuse to overwrite the database.
 
 See the [complete quickstart](docs/quickstart.md), then the
 [scoped HTTP agent starter](docs/examples.md). The starter generator and read-only
-diagnostic options are new 1.4 development features, not yet in public 1.3.1:
+diagnostic options require Aletheia Memory 1.4.0 or later:
 
 ```bash
 aletheia examples create --type embedded --output ./memory-demo
@@ -151,7 +151,7 @@ python memory_demo.py
 aletheia doctor --read-only --db ./aletheia-demo.db --namespace user/demo
 ```
 
-On the published package, use the copyable Python example above.
+On 1.3.1, use the copyable Python example above instead.
 The five-minute human target is not yet measured.
 
 The remaining sections are integration/reference workflows. Trusted embedded

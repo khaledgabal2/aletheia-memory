@@ -15,6 +15,7 @@ from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService
 from aletheia.version import software_version
 from aletheia.service.http import AletheiaService, openapi_schema
+from aletheia.storage import SCHEMA_VERSION, SUPPORTED_MIGRATION_FROM
 
 
 NAMESPACE = "user/default"
@@ -814,8 +815,9 @@ def test_export_import_support_benchmark_release_readiness_and_compaction(tmp_pa
         }
 
         release = source.release_manifest(output_path=str(manifest_path))
-        from aletheia.version import software_version
         assert release.version == software_version()
+        assert release.migration_range == f"{SUPPORTED_MIGRATION_FROM} -> {SCHEMA_VERSION}"
+        assert json.loads(manifest_path.read_text())["migration_range"] == release.migration_range
         assert manifest_path.exists()
 
         readiness = source.readiness_check(namespace=NAMESPACE)
@@ -845,6 +847,22 @@ def test_export_import_support_benchmark_release_readiness_and_compaction(tmp_pa
         assert target.list_claims(namespace=NAMESPACE)
     finally:
         target.close()
+
+
+def test_release_migration_range_is_consistent_across_cli_and_http(tmp_path, capsys):
+    expected = f"{SUPPORTED_MIGRATION_FROM} -> {SCHEMA_VERSION}"
+    cli_db = tmp_path / "release-cli.db"
+    assert main(["release", "check", "--db", str(cli_db)]) == 0
+    assert json.loads(capsys.readouterr().out)["migration_range"] == expected
+
+    service, token = _service(tmp_path)
+    try:
+        status, body = _post(service, "/v1/release/manifest", token, {})
+        assert status == 200
+        assert body["data"]["version"] == software_version()
+        assert body["data"]["migration_range"] == expected
+    finally:
+        service.close()
 
 
 def test_m8_cli_and_http_surfaces(tmp_path, capsys):

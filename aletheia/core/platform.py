@@ -44,7 +44,7 @@ from aletheia.models import (
     SDKReleaseRecord,
     V1ReleaseGateRun,
 )
-from aletheia.storage import SCHEMA_VERSION
+from aletheia.storage import SCHEMA_VERSION, SUPPORTED_MIGRATION_FROM
 from aletheia.version import discovery_metadata, software_version
 
 
@@ -859,8 +859,8 @@ def compatibility_report(memory, *, include_plugins: bool = True, include_sdks: 
         "archive_formats": [entry.component_version for entry in entries if entry.component_type == "archive"],
         # Published 1.3.1 uses storage 1.3.0. Do not advertise untested older
         # upgrades or an in-place downgrade; recovery uses the retained archive.
-        "migration_support": {"from": "1.3.0", "to": SCHEMA_VERSION,
-            "safe": current_schema in {"1.3.0", SCHEMA_VERSION},
+        "migration_support": {"from": SUPPORTED_MIGRATION_FROM, "to": SCHEMA_VERSION,
+            "safe": current_schema in {SUPPORTED_MIGRATION_FROM, SCHEMA_VERSION},
             "requires_pre_upgrade_backup": True, "in_place_downgrade": False,
             "recovery": "restore_pre_upgrade_backup"},
         "matrix": [asdict(entry) for entry in entries],

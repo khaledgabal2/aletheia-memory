@@ -33,9 +33,9 @@ aletheia docs list
 
 ## 1.4.0 Upgrade And Packaged Starters
 
-Use `python -m pip install aletheia-memory==1.4.0` for this release, or install
-the reviewed `aletheia_memory-1.4.0-py3-none-any.whl` or matching source archive
-by local path. Before publication, only the reviewed local artifacts are available.
+Use `python -m pip install aletheia-memory==1.4.0` for the published release. For
+pre-publication review, install the reviewed `aletheia_memory-1.4.0-py3-none-any.whl`
+or matching source archive by local path.
 
 Before opening any existing database, read the
 [migration/backup guide](v1_4_0_migration_guide.md). Storage moves from 1.3.0 to
@@ -105,7 +105,7 @@ aletheia init --db ./aletheia.db
 
 The command creates or migrates the database and prints the current health
 record. It is a write operation, including when the file already exists.
-The new 1.4 development mode reserves a fresh path and refuses existing files
+The 1.4 initialization mode reserves a fresh path and refuses existing files
 or symlinks; read-only diagnostics never initialize a missing database:
 
 ```bash

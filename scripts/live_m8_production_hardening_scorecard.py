@@ -23,6 +23,8 @@ from aletheia.cli.main import main as cli_main
 from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService
 from aletheia.service.http import AletheiaService, openapi_schema
+from aletheia.storage import SCHEMA_VERSION, SUPPORTED_MIGRATION_FROM
+from aletheia.version import software_version
 
 
 NAMESPACE = "live/m8"
@@ -249,7 +251,7 @@ class M8LiveScorecard:
         plan = self.memory.migration_plan()
         migration = self.memory.migration_apply(dry_run=True, verify_after=False)
         compact = self.memory.compact_database(dry_run=True)
-        assert plan.to_version == "1.3.0"
+        assert plan.to_version == SCHEMA_VERSION
         assert compact.metadata["dry_run"] is True
         return f"plan_steps={len(plan.steps)}, migration={migration.status}, compact={compact.status}"
 
@@ -283,7 +285,8 @@ class M8LiveScorecard:
         results = self.memory.list_benchmark_results(benchmark.id)
         release = self.memory.release_manifest(output_path=str(self.release_path))
         assert results
-        assert release.version == "1.3.0"
+        assert release.version == software_version()
+        assert release.migration_range == f"{SUPPORTED_MIGRATION_FROM} -> {SCHEMA_VERSION}"
         assert self.release_path.exists()
         return f"benchmark={benchmark.id}, results={len(results)}, release={release.id}"
 
@@ -344,7 +347,7 @@ class M8LiveScorecard:
         )
         assert status == 200
         schema = openapi_schema()
-        assert schema["info"]["version"] == "1.3.0"
+        assert schema["info"]["version"] == software_version()
         assert "/v1/backups/create" in schema["paths"]
         assert "Production Hardening" in service._console_static("/console")[1]["_raw_body"]
         return f"cli_backup={cli_backup.name}, http_readiness={envelope['data']['status']}, openapi=1.3.0"

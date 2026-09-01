@@ -17,7 +17,7 @@ def main():
         raise SystemExit("Set ALETHEIA_URL and ALETHEIA_AGENT_TOKEN, or run operator_demo.py for a disposable local demo.")
     client = AletheiaClient(url, token, timeout=10)
     if not hasattr(client, "current_principal"):
-        raise SystemExit("This starter needs the 1.4 development SDK, not the published 1.3.1 SDK.")
+        raise SystemExit("This starter requires aletheia-memory 1.4.0 or later; the 1.3.1 SDK does not provide current-principal discovery.")
     try:
         principal = client.current_principal()
         if not {"memory-read-v1", "agent-onboarding-v1"} <= set(principal.get("supported_profiles", [])):

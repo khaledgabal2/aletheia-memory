@@ -55,7 +55,7 @@ from aletheia.models import (
     SimpleRun,
     SupportBundle,
 )
-from aletheia.storage import SCHEMA_VERSION
+from aletheia.storage import SCHEMA_VERSION, SUPPORTED_MIGRATION_FROM
 from aletheia.version import software_version
 
 
@@ -1831,7 +1831,7 @@ def release_manifest(memory, *, output_path: str | None = None) -> ReleaseManife
                 migration_range, test_summary_json, benchmark_summary_json,
                 created_at, metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '1.0.x -> 1.3.0', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 manifest_id,
@@ -1842,6 +1842,7 @@ def release_manifest(memory, *, output_path: str | None = None) -> ReleaseManife
                 json.dumps([platform.system().lower()], sort_keys=True),
                 json.dumps(package_files, sort_keys=True),
                 lock_hash,
+                f"{SUPPORTED_MIGRATION_FROM} -> {SCHEMA_VERSION}",
                 json.dumps({"unit": "run pytest", "live": "run live scorecards"}, sort_keys=True),
                 json.dumps({"latest_benchmark_id": latest_benchmark[0].id if latest_benchmark else None}, sort_keys=True),
                 now,

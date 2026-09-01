@@ -14,6 +14,11 @@ from aletheia.core.ids import content_hash
 from aletheia.core.time import utc_now_iso
 
 SCHEMA_VERSION = "1.3.1"
+# Oldest storage revision covered by the tested 1.4 migration/recovery gate.
+# Keep this separate from both the software release and older historical
+# migrations: discovery and release metadata must not advertise an untested
+# direct upgrade path.
+SUPPORTED_MIGRATION_FROM = "1.3.0"
 
 DEFAULT_CATEGORY_LABELS = [
     "identity",
