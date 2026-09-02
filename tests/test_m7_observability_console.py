@@ -424,18 +424,83 @@ def test_report_export_cannot_escape_service_safe_roots(tmp_path):
             "report_type": "memory_health",
             "output_path": str(escaped),
         }, Authorization=f"Bearer {raw}")
-        assert status == 400
-        assert body["error"]["code"] == "validation_error"
+        assert status == 403
+        assert body["error"]["code"] == "forbidden"
         assert not escaped.exists()
 
+        status, default_report = _post(service, "/v1/reports/export", {
+            "namespace": NAMESPACE,
+            "report_type": "memory_health",
+        }, Authorization=f"Bearer {raw}")
+        assert status == 200
+        default_path = Path(default_report["data"]["file_path"])
+        assert default_path.parent == tmp_path / "reports"
+        assert default_path.is_file()
+
+        admin = auth.create_client(name="report-admin", client_type="test")
+        _, admin_raw = auth.create_token(
+            client_id=admin.id,
+            namespace_grants=[NAMESPACE],
+            capabilities=["memory:read", "memory:admin"],
+        )
         allowed = tmp_path / "report.md"
         status, _ = _post(service, "/v1/reports/export", {
             "namespace": NAMESPACE,
             "report_type": "memory_health",
             "output_path": str(allowed),
-        }, Authorization=f"Bearer {raw}")
+        }, Authorization=f"Bearer {admin_raw}")
         assert status == 200
         assert allowed.is_file()
+
+        status, body = _post(service, "/v1/reports/export", {
+            "namespace": NAMESPACE,
+            "report_type": "memory_health",
+            "output_path": [str(tmp_path / "not-a-string.md")],
+        }, Authorization=f"Bearer {admin_raw}")
+        assert status == 400
+        assert body["error"]["code"] == "validation_error"
+
+        database = Path(service.config.db_path)
+        for protected in (database, Path(str(database) + "-wal"), Path(str(database) + "-shm")):
+            status, body = _post(service, "/v1/reports/export", {
+                "namespace": NAMESPACE,
+                "report_type": "memory_health",
+                "output_path": str(protected),
+            }, Authorization=f"Bearer {admin_raw}")
+            assert status == 400
+            assert body["error"]["code"] == "validation_error"
+        assert service.memory.health()["status"] == "ok"
+        operation = openapi_schema()["paths"]["/v1/reports/export"]["post"]
+        assert operation["x-permissions"]["conditional"]["output_path"] == ["memory:admin"]
+    finally:
+        service.close()
+
+
+def test_notification_mutation_requires_target_namespace_access(tmp_path):
+    service = _service(tmp_path)
+    try:
+        notification = service.memory.create_notification(
+            "user/other",
+            notification_type="review_task",
+            title="Other namespace",
+            message="Must not be mutated cross-namespace.",
+        )
+        auth = AuthService(service.memory)
+        client = auth.create_client(name="namespace-reader", client_type="test")
+        _, raw = auth.create_token(
+            client_id=client.id,
+            namespace_grants=[NAMESPACE],
+            capabilities=["memory:read"],
+        )
+        status, body = _post(
+            service,
+            f"/v1/notifications/{notification.id}/dismiss",
+            {},
+            Authorization=f"Bearer {raw}",
+        )
+        assert status == 403
+        assert body["error"]["code"] == "forbidden"
+        assert service.memory.get_notification(notification.id).status == "unread"
     finally:
         service.close()
 

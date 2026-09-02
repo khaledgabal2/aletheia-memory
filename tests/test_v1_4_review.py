@@ -195,6 +195,8 @@ def test_embedded_promotion_and_rejection_cannot_reopen_terminal_candidate(tmp_p
         claim = memory.promote_candidate(item.id, reason="First explicit decision")
         with pytest.raises(ValidationError, match="candidate status is promoted"):
             memory.promote_candidate(item.id, reason="Duplicate decision")
+        with pytest.raises(ValidationError, match="candidate status is promoted"):
+            memory.promote_candidate(item.id, reason="Forced duplicate decision", force=True)
         with pytest.raises(ValidationError, match="already terminal: promoted"):
             memory.reject_candidate(item.id, reason="Late conflicting decision")
         assert memory.read_candidate(item.id).candidate_status == "promoted"
@@ -256,6 +258,8 @@ def test_failed_review_rolls_back_claim_links_scope_audit_epoch_and_replay(tmp_p
 def test_trigger_inventory_and_read_only_operational_activity(tmp_path):
     with local_service(tmp_path) as (service, url, tokens):
         db = service.memory.store.connection
+        assert integrity(db)
+        db.execute("CREATE TABLE plugin_owned_records (id TEXT PRIMARY KEY)")
         assert integrity(db)
         assert len(list(trigger_definitions())) == 3 * len(inventory()["invalidates"])
         item = candidate(service.memory, "operational")

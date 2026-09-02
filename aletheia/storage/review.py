@@ -31,7 +31,8 @@ def integrity(connection):
     tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
               if not row[0].startswith(("sqlite_", "claims_fts"))}
     classified = inventory()
-    if tables != set(classified["invalidates"]) | set(classified["excluded"]):
+    required_tables = set(classified["invalidates"]) | set(classified["excluded"])
+    if not required_tables <= tables:
         return False
     rows = connection.execute("SELECT id, generation, epoch FROM review_state").fetchall()
     if len(rows) != 1 or rows[0][0] != 1 or not rows[0][1] or type(rows[0][2]) is not int or rows[0][2] < 0:

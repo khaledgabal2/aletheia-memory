@@ -422,6 +422,10 @@ class AletheiaClient:
     ) -> Any:
         attempts = 2 if method == "GET" else 1
         with self._request_lock:
+            self.last_request_id = None
+            self.last_warnings = []
+            self.last_pagination = None
+            self.last_envelope = None
             for attempt in range(attempts):
                 try:
                     return self._request_once(

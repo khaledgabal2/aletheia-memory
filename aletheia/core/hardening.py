@@ -894,19 +894,21 @@ def redact(
                     (replacement_text, content_hash(replacement_text), target_id),
                 )
                 for claim_id in affected["claims"]:
+                    claim = memory.read_claim(claim_id)
                     memory.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (claim_id,))
                     memory.store.connection.execute(
                         "UPDATE claims SET status = 'archived' WHERE id = ? AND status IN ('active', 'core')",
                         (claim_id,),
                     )
-                    memory._write_status_history(
-                        namespace=namespace,
-                        claim_id=claim_id,
-                        old_status="active",
-                        new_status="archived",
-                        reason="evidence.redacted",
-                        actor=actor,
-                    )
+                    if claim.status in {"active", "core"}:
+                        memory._write_status_history(
+                            namespace=namespace,
+                            claim_id=claim_id,
+                            old_status=claim.status,
+                            new_status="archived",
+                            reason="evidence.redacted",
+                            actor=actor,
+                        )
                 _invalidate_derived(memory, namespace, affected["claims"], reason)
                 _stale_semantic_for_targets(memory, namespace=namespace, target_ids=affected["claims"], reason="evidence.redacted")
             elif target_type == "claim":

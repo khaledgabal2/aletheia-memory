@@ -9,9 +9,10 @@ Final pre-publication checks are recorded in [final verification](v1_4_0_final_v
 The subsequent five findings and their verified corrections are recorded in
 [final-review corrections](v1_4_0_review_closure.md), which supersedes the earlier
 readiness claim and identifies the expanded gates for the corrected build.
-The later baseline review and all reconciled corrections are recorded in
-[external audit closure](v1_4_0_external_audit_closure.md); that record and its
-304-test gate are authoritative for the current branch.
+The later baseline review and reconciled corrections are recorded in the
+[external audit closure](v1_4_0_external_audit_closure.md). The subsequent
+[final independent re-review](v1_4_0_rereview_closure.md) and its 311-test gate
+are authoritative for the current branch.
 This document prepares Phase 7. It does not authorize merging, advisory
 publication, GitHub release creation, TestPyPI/PyPI uploads or branch-rule changes.
 The owner asked to review approvals only after implementation and verification.
@@ -37,8 +38,8 @@ are historical scope inputs, not live supported-profile discovery.
 ## Review order and disclosure boundary
 
 Public planning/discovery PRs and private implementation PRs remain unmerged.
-The implementation is in the private security advisory fork for
-`GHSA-v96m-pj74-648h`. Keep private branches and patch details private until the owner approves
+The implementation is in the private security advisory fork. Keep private
+branches and patch details private until the owner approves
 coordinated disclosure and the protected release path below. Private PRs are cumulative
 against `codex/v1.4-discovery`; review the phase-specific ranges recorded below.
 
@@ -67,7 +68,7 @@ represent this ruleset. No protection setting was changed for this release.
 ## Completed final preparation
 
 Final 1.4.0 metadata/docs and corrected artifacts are prepared. The latest
-macOS gate passes 304 regressions; the prior Linux Python 3.11–3.13 gate passed
+macOS gate passes 311 regressions; the prior Linux Python 3.11–3.13 gate passed
 283 tests per interpreter before the external-audit corrections and must be
 rerun by protected CI. All generated HTTP clients,
 24 Node lifecycle/transport checks, actual browser reads/reviews, old-binary

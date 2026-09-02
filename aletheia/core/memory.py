@@ -192,6 +192,7 @@ CANDIDATE_STATUSES = {
     "needs_conflict_resolution",
     "invalid",
 }
+TERMINAL_CANDIDATE_STATUSES = {"promoted", "rejected", "merged", "duplicate"}
 CANDIDATE_EDITABLE_STATUSES = {
     "pending_review",
     "needs_evidence",
@@ -207,7 +208,6 @@ REVIEW_DECISIONS = {
     "needs_scope",
     "needs_conflict_resolution",
     "defer",
-    "promote",
 }
 ENTITY_TYPES = {
     "user",
@@ -922,6 +922,10 @@ class Memory:
         self._require_text(namespace, "namespace")
         self._require_text(source_type, "source_type")
         self._require_text(content, "content")
+        if not isinstance(privacy_level, str) or privacy_level not in PRIVACY_LEVELS:
+            raise ValidationError(
+                "privacy_level must be public, personal, private, sensitive, or secret."
+            )
 
         event_id = stable_event_id(
             namespace=namespace,
@@ -1754,7 +1758,7 @@ class Memory:
             raise ValidationError(f"Unknown candidate review decision: {decision}")
         self._require_text(reason, "reason")
         candidate = self.read_candidate(candidate_id)
-        if candidate.candidate_status in {"promoted", "rejected", "merged", "duplicate"}:
+        if candidate.candidate_status in TERMINAL_CANDIDATE_STATUSES:
             raise ValidationError(
                 f"Candidate review is already terminal: {candidate.candidate_status}."
             )
@@ -1766,7 +1770,6 @@ class Memory:
             "needs_conflict_resolution": "needs_conflict_resolution",
             "defer": candidate.candidate_status,
             "edit": candidate.candidate_status,
-            "promote": "promoted",
         }[decision]
         decision_id = new_id("xdec")
         now = utc_now_iso()
@@ -1831,6 +1834,10 @@ class Memory:
             raise ValidationError(f"Candidate promotion target must be one of {sorted(PROMOTION_TARGETS)}.")
         self._require_text(reason, "reason")
         candidate = self.read_candidate(candidate_id)
+        if candidate.candidate_status in TERMINAL_CANDIDATE_STATUSES:
+            raise ValidationError(
+                f"Cannot promote candidate: candidate status is {candidate.candidate_status}"
+            )
         if edits:
             self.review_candidate(
                 candidate_id,

@@ -138,7 +138,14 @@ def test_candidate_edits_cannot_bypass_review_or_validation_gates(tmp_path):
                 reason="Attempt invalid confidence.",
                 edits={"suggested_confidence": 1.5},
             )
+        with pytest.raises(ValidationError, match="Unknown candidate review decision"):
+            memory.review_candidate(
+                candidate.id,
+                decision="promote",
+                reason="Promotion must create a claim through promote_candidate.",
+            )
         assert memory.read_candidate(candidate.id).candidate_status == "pending_review"
+        assert memory.list_claims(namespace=NAMESPACE) == []
     finally:
         memory.close()
 

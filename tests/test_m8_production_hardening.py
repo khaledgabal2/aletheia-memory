@@ -462,6 +462,7 @@ def test_redaction_forget_retention_integrity_and_migration_runs(tmp_path):
             object="sensitive note",
         )
         event_id = claim.evidence_ids[0]
+        memory.promote_claim(claim.id, "core", reason="Verify redaction history.", force=True)
         preview = memory.redact(
             target_id=event_id,
             target_type="evidence",
@@ -478,6 +479,15 @@ def test_redaction_forget_retention_integrity_and_migration_runs(tmp_path):
         assert applied.affected_counts["claims"] == [claim.id]
         assert memory.read_event(event_id).content == "[REDACTED]"
         assert memory.read_claim(claim.id).status == "archived"
+        redaction_history = memory.store.connection.execute(
+            """
+            SELECT old_status, new_status
+            FROM claim_status_history
+            WHERE claim_id = ? AND reason = 'evidence.redacted'
+            """,
+            (claim.id,),
+        ).fetchone()
+        assert tuple(redaction_history) == ("core", "archived")
         assert memory.list_tombstones(namespace=NAMESPACE)
 
         forget_claim = memory.remember(

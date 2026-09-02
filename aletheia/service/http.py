@@ -1319,6 +1319,11 @@ class AletheiaService:
         if method == "POST" and endpoint.startswith("/v1/notifications/"):
             self.auth.require_capability(auth_context, "memory:read")
             notification_id = endpoint.split("/")[3]
+            notification = self.memory.get_notification(notification_id)
+            if notification.namespace:
+                self.auth.require_namespace(
+                    auth_context, namespace=notification.namespace, project_id=None
+                )
             if endpoint.endswith("/dismiss"):
                 return asdict(self.memory.dismiss_notification(notification_id))
             if endpoint.endswith("/snooze"):
@@ -1332,11 +1337,21 @@ class AletheiaService:
                 self._require(auth_context, "memory:read", {"namespace": namespace})
             else:
                 self.auth.require_capability(auth_context, "memory:admin")
+            requested_path = payload.get("output_path")
+            if requested_path is not None and requested_path != "":
+                self.auth.require_capability(auth_context, "memory:admin")
+            report_format = payload.get("format", "markdown")
+            output_path = self._optional_safe_admin_path(payload, "output_path")
+            if output_path is None:
+                suffix = "md" if report_format == "markdown" else "json"
+                output_path = self._default_admin_output_path(
+                    "reports", f"aletheia-report-{new_id('rep')}.{suffix}"
+                )
             return asdict(self.memory.export_report(
                 namespace=namespace,
                 report_type=self._required(payload, "report_type"),
-                format=payload.get("format", "markdown"),
-                output_path=self._optional_safe_admin_path(payload, "output_path"),
+                format=report_format,
+                output_path=output_path,
                 filters=payload.get("filters"),
             ))
         if method == "GET" and endpoint == "/v1/reports":
@@ -2409,7 +2424,7 @@ class AletheiaService:
         if self.config.trust_proxy_headers:
             forwarded_for = self._header(headers, "X-Forwarded-For")
             if forwarded_for:
-                client_ip = forwarded_for.split(",", 1)[0].strip()
+                client_ip = forwarded_for.rsplit(",", 1)[-1].strip()
             else:
                 client_ip = (self._header(headers, "X-Real-IP") or "local").strip()
         return f"anonymous:{client_ip or 'local'}"
@@ -3065,6 +3080,18 @@ class AletheiaService:
 
     def _safe_admin_path(self, value: str, *, field: str) -> str:
         resolved = Path(value).expanduser().resolve(strict=False)
+        if self.config.db_path != ":memory:":
+            database = Path(self.config.db_path).expanduser().resolve(strict=False)
+            protected_database_files = {
+                database,
+                Path(str(database) + "-wal"),
+                Path(str(database) + "-shm"),
+                Path(str(database) + "-journal"),
+            }
+            if resolved in protected_database_files:
+                raise validation_error(
+                    f"The field '{field}' cannot overwrite the live database or its sidecars."
+                )
         roots = self._admin_safe_roots()
         if not any(resolved == root or root in resolved.parents for root in roots):
             raise validation_error(
@@ -3077,7 +3104,9 @@ class AletheiaService:
         value = payload.get(field)
         if value is None or value == "":
             return None
-        return self._safe_admin_path(str(value), field=field)
+        if not isinstance(value, str):
+            raise validation_error(f"The field '{field}' must be a path string.")
+        return self._safe_admin_path(value, field=field)
 
     def _required_safe_admin_path(self, payload: dict, field: str) -> str:
         return self._safe_admin_path(str(self._required(payload, field)), field=field)
@@ -3663,6 +3692,17 @@ def openapi_schema() -> dict:
             },
         },
         "paths": paths,
+    }
+    report_export = schema["paths"]["/v1/reports/export"]["post"]
+    report_export["description"] = (
+        "Exports a namespace report to a service-controlled path. Supplying a custom "
+        "output_path additionally requires memory:admin; live database files and sidecars "
+        "can never be selected."
+    )
+    report_export["x-permissions"] = {
+        "all_of": ["memory:read"],
+        "conditional": {"output_path": ["memory:admin"]},
+        "resource_policy": "Namespace access and administrative safe-root containment.",
     }
     from aletheia.service.review_contracts import apply_review_contracts
     from aletheia.service.onboarding_contract import apply_onboarding_contract

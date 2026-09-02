@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from aletheia import Memory
+from aletheia.core.errors import ValidationError
 
 
 def test_health_remember_retrieve_and_audit(tmp_path):
@@ -30,6 +33,23 @@ def test_health_remember_retrieve_and_audit(tmp_path):
         assert audit["claim"]["id"] == claim.id
         assert audit["evidence"][0]["id"] == claim.evidence_ids[0]
         assert any(entry["action"] == "claim.write" for entry in audit["audit"])
+    finally:
+        memory.close()
+
+
+@pytest.mark.parametrize("privacy_level", ["Secret", "unknown", "", None, []])
+def test_core_event_write_rejects_unknown_privacy_levels(tmp_path, privacy_level):
+    memory = Memory.open(str(tmp_path / "privacy.db"))
+    try:
+        with pytest.raises(ValidationError, match="privacy_level"):
+            memory.write_event(
+                source_type="unit",
+                content="must not be stored with an unknown privacy level",
+                privacy_level=privacy_level,
+            )
+        assert memory.store.connection.execute(
+            "SELECT count(*) FROM evidence_events"
+        ).fetchone()[0] == 0
     finally:
         memory.close()
 

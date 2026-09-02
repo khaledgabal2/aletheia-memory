@@ -29,6 +29,24 @@ Compatibility limits: new profiles require discovery; old clients keep the
 legacy route surface but do not gain negotiated write guarantees. Unknown
 contract headers, invalid profiled fields, unsafe output overwrites and stale
 write preconditions are explicitly refused. No npm package is published.
+
+Behavior changes to account for when upgrading:
+
+- Session identifiers are authorization-checked and can now return 403/404
+  where an unscoped value previously passed through.
+- Operation keys accept ASCII letters, digits, dots, underscores, colons and
+  hyphens. Raw base64 keys containing `+`, `/` or `=` must use a safe encoding.
+- Integer fields reject fractional values instead of truncating them, and
+  privacy levels reject unknown spelling or capitalization.
+- Replaying a legacy operation can return `replay_result_changed` if its stored
+  result no longer matches current state. Credential-scoped 1.4 operation keys
+  do not reuse unscoped pre-upgrade idempotency records.
+- `aletheia api ping` accepts loopback service URLs only. Remote deployments
+  should perform health checks at their trusted proxy boundary.
+- Tokenless `/v1/auth/me` is available only when the local service is explicitly
+  unauthenticated and unprotected; configured deployments return 401 without a
+  bearer or console credential.
+
 See the [release handoff](docs/v1_4_0_release_handoff.md) for evidence and the
 release verification record.
 

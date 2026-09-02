@@ -1,8 +1,9 @@
 # 1.4.0 final-review corrections
 
-**Historical gate:** a later external audit was reconciled and corrected in
-[external audit closure](v1_4_0_external_audit_closure.md). Its 304-test result
-supersedes the counts below for the current branch.
+**Historical gate:** later audits were reconciled and corrected in the
+[external audit closure](v1_4_0_external_audit_closure.md) and authoritative
+[final independent re-review closure](v1_4_0_rereview_closure.md). The latter's
+311-test result supersedes the counts below for the current branch.
 
 Recorded 2026-08-30. All five findings from the review of `d051598` are corrected
 on the isolated `codex/v1.4-final-release` branch. This record supersedes the

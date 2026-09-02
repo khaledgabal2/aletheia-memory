@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 import urllib.error
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -636,6 +636,29 @@ def test_failed_bearer_authentication_is_rate_limited(tmp_path):
         service.close()
 
 
+def test_failed_auth_uses_proxy_appended_forwarded_address(tmp_path):
+    service, _ = _service(tmp_path, rate_limit_per_minute=1)
+    service.config = replace(service.config, trust_proxy_headers=True)
+    try:
+        first = _get(
+            service,
+            "/v1/auth/me",
+            "invalid-one",
+            **{"X-Forwarded-For": "198.51.100.10, 203.0.113.9"},
+        )
+        second = _get(
+            service,
+            "/v1/auth/me",
+            "invalid-two",
+            **{"X-Forwarded-For": "198.51.100.11, 203.0.113.9"},
+        )
+        assert first[0] == 401
+        assert second[0] == 429
+        assert second[1]["error"]["code"] == "rate_limited"
+    finally:
+        service.close()
+
+
 def test_mcp_tools_are_candidate_first_logged_and_namespace_capability_aware(tmp_path):
     service, _token = _service(tmp_path, auth_required=False)
     registry = McpToolRegistry(service, namespace=NAMESPACE, mode="read_write_candidate")
@@ -678,6 +701,10 @@ def test_mcp_tools_are_candidate_first_logged_and_namespace_capability_aware(tmp
         "memory_health", {"namespace": "user/default/projects/a&b"}
     )
     assert endpoint.endswith("namespace=user%2Fdefault%2Fprojects%2Fa%26b")
+    endpoint, _, _ = admin._tool_to_http(
+        "memory_audit", {"target_type": "claim/type", "target_id": "clm/a&b"}
+    )
+    assert endpoint == "/v1/audit/claim%2Ftype/clm%2Fa%26b"
 
 
 class _FakeResponse:
@@ -810,9 +837,17 @@ def test_python_client_normalizes_transport_failures_retries_only_gets_and_seria
 
     monkeypatch.setattr("urllib.request.urlopen", unavailable)
     client = AletheiaClient("http://127.0.0.1:8765")
+    client.last_request_id = "stale-request"
+    client.last_warnings = ["stale warning"]
+    client.last_pagination = {"next_cursor": "stale"}
+    client.last_envelope = {"data": "stale"}
     with pytest.raises(AletheiaTransportError, match="Could not reach"):
         client.health()
     assert calls == ["GET", "GET"]
+    assert client.last_request_id is None
+    assert client.last_warnings == []
+    assert client.last_pagination is None
+    assert client.last_envelope is None
     calls.clear()
     with pytest.raises(AletheiaTransportError):
         client.remember(namespace=NAMESPACE)

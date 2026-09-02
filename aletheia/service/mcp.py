@@ -7,7 +7,7 @@ import sys
 import time
 from dataclasses import dataclass, replace
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from aletheia.core.ids import new_id
 from aletheia.models import ServiceConfig
@@ -267,10 +267,12 @@ class McpToolRegistry:
         if tool_name == "memory_feedback":
             return "/v1/feedback", arguments, "POST"
         if tool_name == "memory_audit":
-            target_type = arguments.get("target_type", "claim")
-            return f"/v1/audit/{target_type}/{arguments['target_id']}", {}, "GET"
+            target_type = quote(str(arguments.get("target_type", "claim")), safe="")
+            target_id = quote(str(arguments["target_id"]), safe="")
+            return f"/v1/audit/{target_type}/{target_id}", {}, "GET"
         if tool_name == "memory_explain_claim":
-            return f"/v1/claims/{arguments['claim_id']}/explain", {}, "GET"
+            claim_id = quote(str(arguments["claim_id"]), safe="")
+            return f"/v1/claims/{claim_id}/explain", {}, "GET"
         if tool_name == "memory_health":
             namespace = arguments.get("namespace", self.namespace)
             return "/v1/health-report?" + urlencode({"namespace": namespace}), None, "GET"
@@ -292,11 +294,15 @@ class McpToolRegistry:
             namespace = arguments.get("namespace", self.namespace)
             return "/v1/candidates?" + urlencode({"namespace": namespace}), None, "GET"
         if tool_name == "memory_promote_candidate":
-            return f"/v1/candidates/{arguments['candidate_id']}/promote", {"reason": arguments["reason"]}, "POST"
+            candidate_id = quote(str(arguments["candidate_id"]), safe="")
+            return f"/v1/candidates/{candidate_id}/promote", {"reason": arguments["reason"]}, "POST"
         if tool_name == "memory_reject_candidate":
-            return f"/v1/candidates/{arguments['candidate_id']}/reject", {"reason": arguments["reason"]}, "POST"
+            candidate_id = quote(str(arguments["candidate_id"]), safe="")
+            return f"/v1/candidates/{candidate_id}/reject", {"reason": arguments["reason"]}, "POST"
         if tool_name == "memory_trace_derivation":
-            return f"/v1/derivation/{arguments['target_type']}/{arguments['target_id']}", None, "GET"
+            target_type = quote(str(arguments["target_type"]), safe="")
+            target_id = quote(str(arguments["target_id"]), safe="")
+            return f"/v1/derivation/{target_type}/{target_id}", None, "GET"
         if tool_name == "memory_record_outcome":
             return "/v1/outcomes", arguments, "POST"
         raise ValueError(f"Unknown MCP tool: {tool_name}")

@@ -138,6 +138,7 @@ The 1.4.0 design, prerelease evidence and final verification are recorded here:
 - [Final pre-publication verification](v1_4_0_final_verification.md)
 - [Final-review corrections and expanded verification](v1_4_0_review_closure.md)
 - [External-audit closure and latest verification](v1_4_0_external_audit_closure.md)
+- [Final independent re-review closure](v1_4_0_rereview_closure.md)
 - [Release approval and handoff](v1_4_0_release_handoff.md)
 - [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 

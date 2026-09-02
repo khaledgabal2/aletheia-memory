@@ -1,5 +1,9 @@
 # 1.4.0 external audit closure
 
+**Historical gate:** a later independent re-review found and corrected four
+residual release issues. See the authoritative
+[final independent re-review closure](v1_4_0_rereview_closure.md).
+
 Recorded 2026-09-01. This closes the findings in the Claude review of
 `codex/v1.4-plan` at `c75dfb9`. That review examined the pre-implementation
 baseline and did not run the test suite. Each finding was therefore reproduced
