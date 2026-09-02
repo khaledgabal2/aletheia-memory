@@ -1,6 +1,6 @@
 # Installation
 
-This guide covers Aletheia 1.4.0, verifying the command line,
+This guide covers Aletheia 1.4.1, verifying the command line,
 initializing a local database, and finding installed help. Follow the
 [zero-model quickstart](quickstart.md) for the primary first-run journey:
 evidence, candidate, explicit review, lexical context, provenance and reopen.
@@ -33,8 +33,8 @@ aletheia docs list
 
 ## 1.4.0 Upgrade And Packaged Starters
 
-Use `python -m pip install aletheia-memory==1.4.0` for the published release. For
-pre-publication review, install the reviewed `aletheia_memory-1.4.0-py3-none-any.whl`
+Use `python -m pip install aletheia-memory==1.4.1` for the published release. For
+pre-publication review, install the reviewed `aletheia_memory-1.4.1-py3-none-any.whl`
 or matching source archive by local path.
 
 Before opening any existing database, read the
@@ -68,7 +68,7 @@ the published version.
 Install a downloaded release artifact into your environment:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.4.0-py3-none-any.whl
+python -m pip install ./dist/aletheia_memory-1.4.1-py3-none-any.whl
 ```
 
 Then verify the CLI:

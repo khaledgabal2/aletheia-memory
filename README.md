@@ -25,10 +25,10 @@ clear audit trail.
 
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
-- Version: `1.4.0`
+- Version: `1.4.1`
 - Runtime: Python 3.11+
 - Storage: local SQLite
-- License: [MIT](LICENSE)
+- License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
 - Distribution: published on PyPI; source installs and release wheels are also supported.
 
 ## What Aletheia Provides
@@ -69,16 +69,16 @@ python -m pip install aletheia-memory
 Memory is independent of Desktop and Relay. Its core needs no model, account,
 embedding index or running external service.
 
-For the next steps, use the packaged [Python and TypeScript agent starters](docs/examples.md),
-then optionally [tested local model recipes](docs/v1_4_0_local_model_recipes.md).
+For the next steps, use the packaged [Python and TypeScript agent starters](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/examples.md),
+then optionally [tested local model recipes](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_4_0_local_model_recipes.md).
 These additions require Memory 1.4.0 or later. Before upgrading an existing
-database, follow the [backup and migration guide](docs/v1_4_0_migration_guide.md).
+database, follow the [backup and migration guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_4_0_migration_guide.md).
 
 ## Your First Reviewed Memory
 
 In a fresh demo directory, save this as `memory_demo.py` and run
-`python memory_demo.py`. The example works with published 1.3.1 and with this
-1.4.0 release. Read the candidate and source before typing `approve`.
+`python memory_demo.py`. The example works with published 1.3.1 and with Memory
+1.4.0 or later. Read the candidate and source before typing `approve`.
 
 ```python
 """A deterministic evidence → review → memory example; no model required."""
@@ -140,8 +140,8 @@ source provenance and a successful reopen check. Any other answer leaves the
 candidate pending. The query matches the literal word `architecture`; arbitrary
 paraphrase recall is not promised. Reruns refuse to overwrite the database.
 
-See the [complete quickstart](docs/quickstart.md), then the
-[scoped HTTP agent starter](docs/examples.md). The starter generator and read-only
+See the [complete quickstart](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/quickstart.md), then the
+[scoped HTTP agent starter](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/examples.md). The starter generator and read-only
 diagnostic options require Aletheia Memory 1.4.0 or later:
 
 ```bash
@@ -421,20 +421,20 @@ aletheia docs show index
 
 Recommended starting points:
 
-- [Installation](docs/installation.md)
-- [Introduction](docs/introduction.md)
-- [Core Concepts](docs/core_concepts.md)
-- [Memory Lifecycle](docs/memory_lifecycle.md)
-- [Architecture](docs/architecture.md)
-- [Interfaces](docs/interfaces.md)
-- [CLI Reference](docs/cli_reference.md)
-- [Integration Guide](docs/integration_guide.md)
-- [HTTP API Reference](docs/http_api_reference.md)
-- [MCP Reference](docs/mcp_reference.md)
-- [Security And Privacy Guide](docs/security_privacy_guide.md)
-- [Operations Guide](docs/operations_guide.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Near-Future Changes](docs/near_future_changes.md)
+- [Installation](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/installation.md)
+- [Introduction](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/introduction.md)
+- [Core Concepts](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/core_concepts.md)
+- [Memory Lifecycle](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/memory_lifecycle.md)
+- [Architecture](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/architecture.md)
+- [Interfaces](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/interfaces.md)
+- [CLI Reference](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/cli_reference.md)
+- [Integration Guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/integration_guide.md)
+- [HTTP API Reference](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/http_api_reference.md)
+- [MCP Reference](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/mcp_reference.md)
+- [Security And Privacy Guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/security_privacy_guide.md)
+- [Operations Guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/operations_guide.md)
+- [Troubleshooting](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/troubleshooting.md)
+- [Near-Future Changes](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/near_future_changes.md)
 
 ## Trust And Privacy Model
 
@@ -485,9 +485,9 @@ uv build
 
 ## Community And Security
 
-- Contributions: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Security reports: [SECURITY.md](SECURITY.md)
-- Release notes: [CHANGELOG.md](CHANGELOG.md)
+- Contributions: [CONTRIBUTING.md](https://github.com/khaledgabal2/aletheia-memory/blob/main/CONTRIBUTING.md)
+- Security reports: [SECURITY.md](https://github.com/khaledgabal2/aletheia-memory/blob/main/SECURITY.md)
+- Release notes: [CHANGELOG.md](https://github.com/khaledgabal2/aletheia-memory/blob/main/CHANGELOG.md)
 
 ## Contributing
 

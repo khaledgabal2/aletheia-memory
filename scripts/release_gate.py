@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,8 @@ PRODUCT_SPECIFIC_PATTERNS = (
     "tests/fixtures/sample_adapter/*",
     "tests/test_sample_adapter_compatibility.py",
 )
+MARKDOWN_LINK_TARGET = re.compile(r"!?\[[^\]]+\]\(([^)\s]+)")
+ABSOLUTE_LINK_PREFIXES = ("https://", "http://", "mailto:", "#")
 
 
 def target_is_generic_baseline(*, branch: str | None = None, base_ref: str | None = None) -> bool:
@@ -32,6 +35,17 @@ def disallowed_product_files(paths: list[str]) -> list[str]:
             for path in paths
             for pattern in PRODUCT_SPECIFIC_PATTERNS
             if fnmatch.fnmatch(path, pattern)
+        }
+    )
+
+
+def relative_markdown_links(markdown: str) -> list[str]:
+    """Return Markdown link or image targets that depend on a hosting base URL."""
+    return sorted(
+        {
+            target
+            for target in MARKDOWN_LINK_TARGET.findall(markdown)
+            if not target.startswith(ABSOLUTE_LINK_PREFIXES)
         }
     )
 
@@ -78,6 +92,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         for path in matches:
             print(f"- {path}", file=sys.stderr)
+        return 1
+
+    relative_links = relative_markdown_links((repo / "README.md").read_text())
+    if relative_links:
+        print(
+            "README links must be absolute so the package description works on PyPI:",
+            file=sys.stderr,
+        )
+        for target in relative_links:
+            print(f"- {target}", file=sys.stderr)
         return 1
     return 0
 

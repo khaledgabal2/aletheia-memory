@@ -1,10 +1,10 @@
 # Near-Future Changes
 
-This document separates the current v1.4.0 source release from likely future directions.
+This document separates the current v1.4.1 source release from likely future directions.
 
 Current implementation source:
 
-- `pyproject.toml` declares package version `1.4.0`.
+- `pyproject.toml` declares package version `1.4.1`.
 - `aletheia/storage/sqlite.py` declares `SCHEMA_VERSION = "1.3.1"`.
 - `docs/v1_public_contracts.md` defines stable v1 surfaces and semver policy.
 - `docs/m10_federated_memory_contract.md` is implemented as the M10 federation-beta milestone.

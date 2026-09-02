@@ -2,6 +2,16 @@
 
 All notable public changes to Aletheia are tracked here.
 
+## 1.4.1
+
+Packaging metadata correction.
+
+- Replace repository-relative README links with absolute GitHub links so the
+  project description links work when rendered on PyPI.
+- Extend the release gate to reject relative README links before publication.
+- Refresh the tracked `uv` lockfile to match the package version and declared
+  development dependencies.
+
 ## 1.4.0
 
 Integration contracts and developer experience release.
