@@ -52,7 +52,8 @@ Current protected content and encrypted archive payloads use:
 
 - AES-256-GCM
 - PBKDF2-HMAC-SHA256
-- 120,000 PBKDF2 iterations
+- 600,000 PBKDF2 iterations for new content and secret hashes; bounded legacy
+  verification remains available during migration
 - random 16-byte salt
 - random 12-byte nonce
 - authenticated decryption checks
@@ -117,7 +118,13 @@ Plan or apply rotation:
 aletheia keys rotate key_... \
   --db ./aletheia.db \
   --label rotated-local-protected-key
+```
 
+The plan reports a deterministic `new_key_id`. Put distinct new key material in
+`ALETHEIA_KEY_<new_key_id>` (or name that exact variable with `--new-key-env`),
+then apply the same plan:
+
+```bash
 aletheia keys rotate key_... \
   --db ./aletheia.db \
   --label rotated-local-protected-key \
@@ -125,7 +132,9 @@ aletheia keys rotate key_... \
   --force
 ```
 
-Rotation records events in `key_rotation_events`. A verified backup is
+Applied content rotation decrypts every payload with the old key, re-encrypts it
+with the distinct new key, verifies that no old-key payload remains, and only
+then retires the old key. The operation is atomic. A verified backup is
 recommended before applying rotation.
 
 ## Backup And Export Encryption

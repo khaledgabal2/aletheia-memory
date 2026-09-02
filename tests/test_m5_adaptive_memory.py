@@ -108,7 +108,7 @@ def test_m5_migration_creates_default_policies_and_no_learning_runs(tmp_path):
 
     memory = Memory.open(db_path, namespace=NAMESPACE)
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         rows = memory.store.connection.execute(
             "SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual table')"
         ).fetchall()
@@ -151,7 +151,7 @@ def test_m5_migration_creates_default_policies_and_no_learning_runs(tmp_path):
         ] == 0
 
         memory.store.migrate()
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         assert len(memory.list_ranking_policy_versions("rpol_default")) == 1
     finally:
         memory.close()
@@ -526,7 +526,7 @@ def test_job_claim_is_atomic_for_two_workers(tmp_path):
 def test_cli_m5_commands_cover_contract_examples(tmp_path, capsys):
     db_path = str(tmp_path / "aletheia.db")
     assert main(["init", "--db", db_path]) == 0
-    assert '"schema_version": "1.3.0"' in capsys.readouterr().out
+    assert '"schema_version": "1.3.1"' in capsys.readouterr().out
 
     assert main(
         [

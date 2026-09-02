@@ -22,6 +22,8 @@ from aletheia.cli.main import main as cli_main
 from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService
 from aletheia.service.http import AletheiaService, openapi_schema
+from aletheia.storage import SCHEMA_VERSION, SUPPORTED_MIGRATION_FROM
+from aletheia.version import software_version
 
 
 NAMESPACE = "live/m9"
@@ -171,7 +173,7 @@ stores_data = false
 
     def case_public_contracts(self) -> str:
         health = self.memory.health()
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == SCHEMA_VERSION
         contracts = self.memory.list_public_contracts()
         names = {contract.name for contract in contracts}
         required = {"HTTP API v1", "MCP tools v1", "Python SDK v1", "Plugin interface v1", "Config schema v1", "Aletheia archive format v1"}
@@ -181,7 +183,8 @@ stores_data = false
         deprecations = self.memory.check_deprecations()
         assert deprecations["status"] == "passed"
         report = self.memory.compatibility_report(include_runtime=False)
-        assert report["migration_support"]["to"] == "1.3.0"
+        assert report["migration_support"]["from"] == SUPPORTED_MIGRATION_FROM
+        assert report["migration_support"]["to"] == SCHEMA_VERSION
         return f"schema={health['schema_version']}, contracts={len(contracts)}, api_versions={len(api_versions)}, deprecations={deprecations['notice_count']}"
 
     def case_plugins(self) -> str:
@@ -286,7 +289,7 @@ stores_data = false
         assert any(check["name"] == "schema_version" for check in doctor.checks)
         report = self.memory.compatibility_report()
         assert report["api_version"] == "v1"
-        assert report["schema_version"] == "1.3.0"
+        assert report["schema_version"] == SCHEMA_VERSION
         matrix = self.memory.list_compatibility_matrix()
         assert any(entry.component_type == "plugin_api" for entry in matrix)
         return f"doctor={doctor.status}, checks={len(doctor.checks)}, compatibility_entries={len(matrix)}"
@@ -312,8 +315,8 @@ stores_data = false
         }
         assert required <= check_names
         release = self.memory.release_manifest()
-        assert release.version == "1.3.0"
-        assert release.migration_range == "1.0.x -> 1.3.0"
+        assert release.version == software_version()
+        assert release.migration_range == f"{SUPPORTED_MIGRATION_FROM} -> {SCHEMA_VERSION}"
         return f"gate={gate.id}, checks={len(gate.checks)}, release={release.id}"
 
     def case_console_api_cli(self) -> str:

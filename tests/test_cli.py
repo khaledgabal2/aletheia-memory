@@ -32,7 +32,7 @@ def test_cli_migrate_subcommands_preserve_parent_db(tmp_path, capsys):
     second_db = tmp_path / "leaf.db"
     assert main(["migrate", "plan", "--db", str(second_db)]) == 0
     assert second_db.exists()
-    assert '"to_version": "1.3.0"' in capsys.readouterr().out
+    assert '"to_version": "1.3.1"' in capsys.readouterr().out
 
 
 def test_cli_init_remember_search_and_conflicts(tmp_path, capsys):

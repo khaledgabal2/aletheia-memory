@@ -7,7 +7,9 @@ from aletheia.client import (
     AletheiaIntegrityGateError,
     AletheiaRateLimitError,
     AletheiaServerError,
+    AletheiaStaleRevisionError,
     AletheiaUnauthorizedError,
+    AletheiaUnsupportedFeatureError,
     AletheiaValidationError,
     AsyncAletheiaClient,
 )
@@ -19,7 +21,9 @@ __all__ = [
     "AletheiaIntegrityGateError",
     "AletheiaRateLimitError",
     "AletheiaServerError",
+    "AletheiaStaleRevisionError",
     "AletheiaUnauthorizedError",
+    "AletheiaUnsupportedFeatureError",
     "AletheiaValidationError",
     "AsyncAletheiaClient",
 ]

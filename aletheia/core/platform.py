@@ -10,6 +10,7 @@ import platform as py_platform
 import socket
 import sqlite3
 import sys
+import tempfile
 import time
 import tomllib
 import urllib.error
@@ -44,7 +45,8 @@ from aletheia.models import (
     SDKReleaseRecord,
     V1ReleaseGateRun,
 )
-from aletheia.storage import SCHEMA_VERSION
+from aletheia.storage import SCHEMA_VERSION, SUPPORTED_MIGRATION_FROM
+from aletheia.version import discovery_metadata, software_version
 
 
 PLUGIN_TYPES = {
@@ -185,7 +187,7 @@ def register_public_contract(
                 name,
                 version,
                 stability,
-                SCHEMA_VERSION,
+                software_version(),
                 schema_ref,
                 documentation_ref,
                 now,
@@ -841,17 +843,27 @@ def compatibility_report(memory, *, include_plugins: bool = True, include_sdks: 
     entries = list_compatibility_matrix(memory)
     plugins = list_plugins(memory) if include_plugins else []
     plugin_warnings = [f"Plugin {plugin['name']} is {plugin['status']}." for plugin in plugins if plugin["status"] in {"incompatible", "blocked", "failed", "quarantined"}]
+    current_schema = memory.health()["schema_version"]
     report = {
+        # Historical alias required by the published 1.3.1 SDK equality check.
         "aletheia_version": SCHEMA_VERSION,
-        "schema_version": memory.health()["schema_version"],
-        "api_version": "v1",
+        "schema_version": current_schema,
+        **discovery_metadata(),
+        "deprecated_fields": {
+            "aletheia_version": "Historical expected-schema version; use software_version for the software release."
+        },
         "python_version": py_platform.python_version() if include_runtime else None,
         "platform": py_platform.platform() if include_runtime else None,
         "sqlite_version": sqlite3.sqlite_version if include_runtime else None,
         "plugins": plugins,
         "sdk_versions": [asdict(record) for record in list_sdk_releases(memory)] if include_sdks else [],
         "archive_formats": [entry.component_version for entry in entries if entry.component_type == "archive"],
-        "migration_support": {"from": "1.0.x", "to": "1.3.0", "safe": True},
+        # Published 1.3.1 uses storage 1.3.0. Do not advertise untested older
+        # upgrades or an in-place downgrade; recovery uses the retained archive.
+        "migration_support": {"from": SUPPORTED_MIGRATION_FROM, "to": SCHEMA_VERSION,
+            "safe": current_schema in {SUPPORTED_MIGRATION_FROM, SCHEMA_VERSION},
+            "requires_pre_upgrade_backup": True, "in_place_downgrade": False,
+            "recovery": "restore_pre_upgrade_backup"},
         "matrix": [asdict(entry) for entry in entries],
         "warnings": plugin_warnings,
     }
@@ -894,8 +906,7 @@ def list_sdk_releases(memory) -> list[SDKReleaseRecord]:
 def scaffold_adapter(memory, *, adapter_type: str, name: str, output_path: str) -> dict:
     if adapter_type not in {"generic-http", "mcp-client", "python-sdk"}:
         raise ValidationError("adapter_type must be generic-http, mcp-client, or python-sdk.")
-    out = Path(output_path)
-    out.mkdir(parents=True, exist_ok=True)
+    from aletheia.onboarding import write_new_project
     safe_name = name.replace(" ", "-").lower()
     files = {
         "README.md": f"# {name}\n\nAletheia {adapter_type} adapter scaffold.\n\nRun conformance with:\n\n```bash\naletheia conformance run --suite agent-adapter --target .\n```\n",
@@ -903,8 +914,7 @@ def scaffold_adapter(memory, *, adapter_type: str, name: str, output_path: str) 
         "agent_loop.py": _adapter_loop_source(adapter_type),
         "conformance.py": "def test_candidate_write_default():\n    assert True\n",
     }
-    for rel, text in files.items():
-        (out / rel).write_text(text, encoding="utf-8")
+    out = write_new_project(output_path, files)
     example_id = "ex_" + content_hash(f"{adapter_type}\0{safe_name}\0{out}")[:24]
     with memory.store.transaction():
         memory.store.connection.execute(
@@ -964,6 +974,7 @@ def build_docs(
         example_validation = test_doc_examples(memory)
         if example_validation["status"] != "passed":
             warning_count += 1
+    build_status = "passed" if example_validation["status"] in {"passed", "skipped"} else "failed"
     for rel, text in docs.items():
         (out / rel).write_text(text, encoding="utf-8")
     build_id = new_id("docs")
@@ -974,12 +985,13 @@ def build_docs(
                 id, version, output_path, status, examples_validated,
                 warning_count, created_at, metadata_json
             )
-            VALUES (?, ?, ?, 'passed', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 build_id,
-                SCHEMA_VERSION,
+                software_version(),
                 str(out),
+                build_status,
                 int(validate_examples),
                 warning_count,
                 utc_now_iso(),
@@ -1018,10 +1030,104 @@ def docs_status(memory) -> dict:
 
 
 def test_doc_examples(memory) -> dict:
+    """Compile and inspect the shipped examples instead of trusting catalog rows."""
+    checks: dict[str, dict[str, Any]] = {}
+
+    def run(name: str, operation) -> None:
+        try:
+            detail = operation()
+            checks[name] = {"status": "passed", "detail": detail or "validated"}
+        except Exception as exc:  # noqa: BLE001 - every failed example is reported.
+            checks[name] = {"status": "failed", "detail": str(exc)}
+
     required_contracts = {"HTTP API v1", "Python SDK v1", "Plugin interface v1"}
-    names = {contract.name for contract in list_public_contracts(memory)}
-    missing = sorted(required_contracts - names)
-    return {"status": "passed" if not missing else "failed", "missing": missing, "validated_categories": ["cli", "python", "http", "mcp", "plugin", "adapter", "backup", "protected_mode"]}
+
+    def contracts() -> str:
+        names = {contract.name for contract in list_public_contracts(memory)}
+        missing = sorted(required_contracts - names)
+        if missing:
+            raise ValidationError("Missing public contracts: " + ", ".join(missing))
+        return ", ".join(sorted(required_contracts))
+
+    run("contracts", contracts)
+
+    with tempfile.TemporaryDirectory(prefix="aletheia-doc-examples-") as temp:
+        root = Path(temp)
+
+        def starters() -> str:
+            from aletheia.onboarding import STARTERS, create_starter
+
+            compiled: list[str] = []
+            for kind in sorted(STARTERS):
+                result = create_starter(kind, root / kind)
+                project = Path(result["path"])
+                for source in sorted(project.glob("*.py")):
+                    compile(source.read_text(encoding="utf-8"), str(source), "exec")
+                    compiled.append(f"{kind}/{source.name}")
+                if kind == "typescript-agent":
+                    package = json.loads((project / "package.json").read_text(encoding="utf-8"))
+                    json.loads((project / "package-lock.json").read_text(encoding="utf-8"))
+                    if "build" not in package.get("scripts", {}):
+                        raise ValidationError("TypeScript starter has no build script.")
+                    for filename in ("agent.ts", "transport.ts", "schema.d.ts", "tsconfig.json"):
+                        if not (project / filename).is_file():
+                            raise ValidationError(f"TypeScript starter is missing {filename}.")
+            return "compiled " + ", ".join(compiled)
+
+        run("starters", starters)
+
+    def cli() -> str:
+        from aletheia.cli.main import build_parser
+
+        parsed = build_parser().parse_args(["doctor", "--read-only", "--db", "example.db"])
+        if not parsed.read_only:
+            raise ValidationError("Read-only doctor example did not parse.")
+        return "doctor --read-only"
+
+    run("cli", cli)
+
+    def http() -> str:
+        from aletheia.service.http import openapi_schema
+
+        schema = openapi_schema()
+        required = {"/v1/version", "/v1/retrieve", "/v1/remember"}
+        missing = sorted(required - set(schema.get("paths", {})))
+        if missing:
+            raise ValidationError("OpenAPI is missing example paths: " + ", ".join(missing))
+        return f"{len(schema['paths'])} OpenAPI paths"
+
+    run("http", http)
+
+    def mcp() -> str:
+        from aletheia.models import ServiceConfig
+        from aletheia.service.http import AletheiaService
+        from aletheia.service.mcp import McpToolRegistry
+
+        registry = McpToolRegistry(
+            AletheiaService(memory, ServiceConfig(db_path=memory.store.path, auth_required=False)),
+            namespace=memory.namespace,
+        )
+        names = {tool["name"] for tool in registry.list_tools()}
+        required = {"memory_context_pack", "memory_search", "memory_remember"}
+        if not required.issubset(names):
+            raise ValidationError("MCP starter tools are incomplete.")
+        return ", ".join(sorted(required))
+
+    run("mcp", mcp)
+
+    def adapters() -> str:
+        for adapter_type in ("generic-http", "mcp-client", "python-sdk"):
+            compile(_adapter_loop_source(adapter_type), f"{adapter_type}/agent_loop.py", "exec")
+        return "generic-http, mcp-client, python-sdk"
+
+    run("adapters", adapters)
+    failed = sorted(name for name, result in checks.items() if result["status"] == "failed")
+    return {
+        "status": "failed" if failed else "passed",
+        "failed": failed,
+        "checks": checks,
+        "validated_categories": sorted(checks),
+    }
 
 
 def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
@@ -1036,7 +1142,7 @@ def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
         if status == "failed":
             warnings.append(detail)
 
-    add("package_version", "passed", f"Aletheia {SCHEMA_VERSION}")
+    add("package_version", "passed", f"Aletheia {software_version()}")
     add("python_version", "passed", py_platform.python_version())
     add("sqlite_available", "passed", sqlite3.sqlite_version)
     health = memory.health()
@@ -1054,8 +1160,28 @@ def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
             recommendations.append("Start service with: aletheia serve --db <db>")
     else:
         add("service_reachable", "skipped", "No service URL supplied.")
-    add("mcp_available", "passed", "MCP registry importable.")
-    add("console_available", "passed", "Console HTML bundled.")
+    try:
+        from aletheia.service.mcp import McpToolRegistry
+
+        mcp_available = callable(McpToolRegistry)
+    except (ImportError, AttributeError):
+        mcp_available = False
+    add(
+        "mcp_available",
+        "passed" if mcp_available else "failed",
+        "MCP registry importable." if mcp_available else "MCP registry import failed.",
+    )
+    try:
+        from aletheia.service.http import CONSOLE_HTML
+
+        console_available = "<!doctype html>" in CONSOLE_HTML.lower()
+    except (ImportError, AttributeError):
+        console_available = False
+    add(
+        "console_available",
+        "passed" if console_available else "failed",
+        "Console HTML bundled." if console_available else "Console HTML is unavailable.",
+    )
     protected = memory.protected_mode_status()
     add("protected_mode", "passed" if protected.enabled else "warning", "Protected mode enabled." if protected.enabled else "Protected mode disabled.")
     backups = memory.list_backups(limit=1)
@@ -1068,8 +1194,24 @@ def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
     add("plugin_compatibility", "warning" if incompatible else "passed", f"{len(incompatible)} incompatible plugin(s).")
     if incompatible:
         recommendations.append("Disable or reinstall incompatible plugins.")
-    add("sdk_compatibility", "passed", "Python SDK v1 registered.")
-    add("environment", "passed", "No external telemetry configured by default.")
+    contract_names = {contract.name for contract in list_public_contracts(memory)}
+    sdk_available = "Python SDK v1" in contract_names
+    add(
+        "sdk_compatibility",
+        "passed" if sdk_available else "failed",
+        "Python SDK v1 registered." if sdk_available else "Python SDK v1 contract is missing.",
+    )
+    environment_supported = sys.version_info >= (3, 11) and sqlite3.sqlite_version_info >= (3, 35)
+    add(
+        "environment",
+        "passed" if environment_supported else "failed",
+        (
+            f"Python {py_platform.python_version()} and SQLite {sqlite3.sqlite_version} supported; "
+            "external telemetry is disabled by default."
+            if environment_supported
+            else f"Unsupported Python/SQLite runtime: {py_platform.python_version()} / {sqlite3.sqlite_version}."
+        ),
+    )
     status = "healthy" if not warnings else "healthy_with_warnings"
     if any(check["status"] == "failed" for check in checks):
         status = "unhealthy"
@@ -1217,7 +1359,7 @@ def v1_gate_run(
             """,
             (
                 run_id,
-                SCHEMA_VERSION,
+                software_version(),
                 status,
                 json.dumps(checks, sort_keys=True),
                 json.dumps(critical_failures, sort_keys=True),

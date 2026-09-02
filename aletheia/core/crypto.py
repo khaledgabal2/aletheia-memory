@@ -17,7 +17,10 @@ AES_GCM_PASSPHRASE_ALGORITHM = "AES-256-GCM-PBKDF2-SHA256"
 LEGACY_XOR_HMAC_ALGORITHM = "xor-stream-hmac-sha256"
 PBKDF2_SECRET_HASH_ALGORITHM = "pbkdf2_sha256"
 PBKDF2_KEY_DERIVATION = "pbkdf2-sha256"
-PBKDF2_ITERATIONS = 120_000
+LEGACY_PBKDF2_ITERATIONS = 120_000
+PBKDF2_ITERATIONS = 600_000
+MIN_PBKDF2_ITERATIONS = 100_000
+MAX_PBKDF2_ITERATIONS = 2_000_000
 
 
 def random_bytes(length: int) -> bytes:
@@ -48,8 +51,10 @@ def derive_pbkdf2_key(
     iterations: int = PBKDF2_ITERATIONS,
     length: int = 32,
 ) -> bytes:
-    if iterations <= 0:
-        raise ValidationError("PBKDF2 iterations must be positive.")
+    if not MIN_PBKDF2_ITERATIONS <= iterations <= MAX_PBKDF2_ITERATIONS:
+        raise ValidationError(
+            f"PBKDF2 iterations must be between {MIN_PBKDF2_ITERATIONS} and {MAX_PBKDF2_ITERATIONS}."
+        )
     return hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"), salt, iterations, dklen=length)
 
 
@@ -147,7 +152,9 @@ def decrypt_legacy_xor_hmac_bytes(cipher: bytes, passphrase: str, metadata: dict
         salt = b64url_decode(metadata["salt"])
     except (KeyError, TypeError, ValueError) as exc:
         raise ValidationError("Legacy encrypted payload metadata is malformed.") from exc
-    key = derive_pbkdf2_key(passphrase, salt)
+    key = derive_pbkdf2_key(
+        passphrase, salt, iterations=LEGACY_PBKDF2_ITERATIONS
+    )
     expected = hmac.new(key, cipher, hashlib.sha256).hexdigest()
     if not constant_time_equal(expected, metadata.get("mac", "")):
         raise ValidationError("Encrypted payload authentication failed.")
@@ -155,7 +162,9 @@ def decrypt_legacy_xor_hmac_bytes(cipher: bytes, passphrase: str, metadata: dict
 
 
 def decrypt_legacy_xor_hmac_content(*, cipher: bytes, passphrase: str, salt: bytes, mac: bytes) -> bytes:
-    key = derive_pbkdf2_key(passphrase, salt)
+    key = derive_pbkdf2_key(
+        passphrase, salt, iterations=LEGACY_PBKDF2_ITERATIONS
+    )
     expected = hmac.new(key, cipher, hashlib.sha256).digest()
     if not constant_time_equal(expected, mac):
         raise ValidationError("Encrypted content authentication failed.")

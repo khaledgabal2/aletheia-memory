@@ -20,6 +20,7 @@ class HelpDocument:
 
 
 _CATALOG: tuple[tuple[str, str, str, str, str], ...] = (
+    ("quickstart", "quickstart.md", "Zero-model Quickstart", "start", "Capture evidence, review a candidate, retrieve context and reopen persisted memory."),
     ("index", "index.md", "Documentation Index", "start", "Complete map of the installed help system."),
     ("installation", "installation.md", "Installation", "start", "Install Aletheia, verify the CLI, and find installed docs."),
     ("introduction", "introduction.md", "Introduction", "start", "What Aletheia is, what it is not, and the trust boundaries."),

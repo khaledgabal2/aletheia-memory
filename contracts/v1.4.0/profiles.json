@@ -1,0 +1,987 @@
+{
+  "inventory_version": 1,
+  "release": "1.4.0",
+  "status": "Phase 0 review proposal; no profile is advertised as supported",
+  "source_of_truth": "docs/v1_4_0_contract_hardening_and_developer_experience_plan.md",
+  "baseline_revision": "1cb3e607450b2d0d345cc3c06d73223b7f3e3fe4",
+  "independence": "All schemas, fixtures and harnesses are Memory-owned; Desktop and Relay are not dependencies.",
+  "profiles": [
+    {
+      "name": "memory-read-v1",
+      "operations": [
+        "getHealth",
+        "getReadiness",
+        "getVersion",
+        "getOpenApi",
+        "getCompatibility",
+        "getCurrentPrincipal",
+        "getOverview",
+        "retrieveMemory",
+        "createContextPack",
+        "getClaim",
+        "explainClaim",
+        "getAudit"
+      ],
+      "limits": [
+        "Search-backed explorer; no exhaustive claim/evidence browser",
+        "Permissions are per operation, not a bundle automatically granted to readers"
+      ]
+    },
+    {
+      "name": "memory-review-v1",
+      "operations": [
+        "getHealth",
+        "getReadiness",
+        "getVersion",
+        "getOpenApi",
+        "getCompatibility",
+        "getCurrentPrincipal",
+        "listCandidates",
+        "getCandidate",
+        "promoteCandidate",
+        "rejectCandidate",
+        "getAudit"
+      ],
+      "limits": [
+        "Candidate promotion/rejection only",
+        "Review profile unavailable until all G3 tests pass"
+      ]
+    },
+    {
+      "name": "agent-onboarding-v1",
+      "operations": [
+        "getHealth",
+        "getReadiness",
+        "getVersion",
+        "getOpenApi",
+        "getCompatibility",
+        "getCurrentPrincipal",
+        "rememberCandidate",
+        "retrieveMemory",
+        "createContextPack",
+        "getClaim",
+        "explainClaim",
+        "getAudit"
+      ],
+      "limits": [
+        "No review capability on agent token",
+        "Operator review is a separate trusted workflow"
+      ]
+    }
+  ],
+  "aliases_preserved": [
+    {
+      "canonical": "/v1/retrieve",
+      "alias": "/v1/search"
+    },
+    {
+      "canonical": "/v1/context-pack",
+      "alias": "/v1/context"
+    },
+    {
+      "canonical": "/v1/auth/me",
+      "legacy_bridge": "/v1/console/session",
+      "note": "Existing shape retained; not semantically equivalent principal discovery."
+    }
+  ],
+  "error_catalog": {
+    "400": [
+      "validation_error"
+    ],
+    "401": [
+      "unauthorized"
+    ],
+    "403": [
+      "forbidden"
+    ],
+    "404": [
+      "not_found"
+    ],
+    "409": [
+      "idempotency_conflict",
+      "conflict where supported"
+    ],
+    "412": [
+      "stale_revision (new negotiated review only)"
+    ],
+    "413": [
+      "payload_too_large"
+    ],
+    "428": [
+      "precondition_required (new negotiated review only)"
+    ],
+    "429": [
+      "rate_limited"
+    ],
+    "500": [
+      "internal_error"
+    ],
+    "503": [
+      "stale_schema",
+      "bounded unavailability where implemented"
+    ]
+  },
+  "operations": [
+    {
+      "operation_id": "getHealth",
+      "method": "GET",
+      "path": "/v1/health",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "public",
+        "any_of": [],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "Health",
+        "fields": "status, database (readiness state), schema_version, service_version, auth_required, warnings",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "No domain mutation; operational request logging.",
+      "release_gate": "G1",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "health"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G1/getHealth",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "getReadiness",
+      "method": "GET",
+      "path": "/v1/ready",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "public",
+        "any_of": [],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "Readiness",
+        "fields": "ready plus Health",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "Readiness is currently unconditional after service startup; stale storage behavior must be tested.",
+      "release_gate": "G1",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "ready"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G1/getReadiness",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "getVersion",
+      "method": "GET",
+      "path": "/v1/version",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "public",
+        "any_of": [],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "Version",
+        "fields": "service_version, api_version; additive software/profile metadata",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "Baseline reports storage version as software version.",
+      "release_gate": "G1",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "version"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G1/getVersion",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "getOpenApi",
+      "method": "GET",
+      "path": "/v1/openapi.json",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "public",
+        "any_of": [],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "OpenApiDocument",
+        "fields": "OpenAPI document inside existing data envelope",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "Build tooling must extract data before generation; no response-format change.",
+      "release_gate": "G1",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G1/getOpenApi",
+        "conformance_status": "planned; not passed",
+        "baseline_schema_capture": "tests/fixtures/v1_3_1/openapi.json and summary.json"
+      }
+    },
+    {
+      "operation_id": "getCompatibility",
+      "method": "GET",
+      "path": "/v1/compatibility/report",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:read",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "query:include_plugins=true",
+          "query:include_sdks=true",
+          "query:include_runtime=true"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "CompatibilityReport",
+        "fields": "legacy fields plus additive software_version, api_version, supported_profiles",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "Keep historical aletheia_version schema alias for legacy SDK equality; canonical version remains separate.",
+      "release_gate": "G1",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "compatibility"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G1/getCompatibility",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "getCurrentPrincipal",
+      "method": "GET",
+      "path": "/v1/auth/me",
+      "owner": "Aletheia Memory",
+      "availability": "proposed",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "CurrentPrincipal",
+        "fields": "authentication_mode, principal, capabilities, namespace_grants, privacy_ceiling, expires_at, service_identity",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "NEW: authenticated current-principal metadata; tokenless mode explicit; no secrets or global namespace enumeration.",
+      "release_gate": "G1",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "principal_unavailable"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G1/getCurrentPrincipal",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "getOverview",
+      "method": "GET",
+      "path": "/v1/dashboard/overview",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:read",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "query:namespace (explicit in profile)"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "Overview",
+        "fields": "metrics, health and permission-filtered optional sections",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "Scope/privacy, section permissions and no-domain-write behavior require complete G2 validation. Legacy response shape is recorded with an authorized reviewer.",
+      "release_gate": "G2",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "dashboard"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G2/getOverview",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "retrieveMemory",
+      "method": "POST",
+      "path": "/v1/retrieve",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:read",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "body:namespace (required)",
+          "body:query=''",
+          "body:mode=hybrid (examples explicitly lexical)",
+          "body:limit=10",
+          "body:project_id?",
+          "body:session_id?",
+          "body:memory_types?",
+          "body:include_disputed=false",
+          "body:include_archived=false"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "RetrievalResult[]",
+        "fields": "claim_id, text, score, confidence_base, confidence_effective, evidence_ids and ranking/domain metadata",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "Ranked bounded result set; no cursor.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [
+          "namespace_denied",
+          "unauthenticated",
+          "validation"
+        ],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID",
+        "Idempotency-Key"
+      ],
+      "behavior": "Result cap, not exhaustive browsing. Privacy filtering may reduce count. HTTP route does not enable record_access.",
+      "release_gate": "G2",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "retrieve",
+          "namespace_denied",
+          "unauthenticated",
+          "validation"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G2/retrieveMemory",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "createContextPack",
+      "method": "POST",
+      "path": "/v1/context-pack",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:context",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "body:namespace (required)",
+          "body:query=''",
+          "body:retrieval_mode=hybrid (examples explicitly lexical)",
+          "body:token_budget=1500",
+          "body:project_id?",
+          "body:session_id?",
+          "body:include_reflections=true",
+          "body:include_inferences=false",
+          "body:include_derivation_metadata=false",
+          "body:policy_version_id?",
+          "body:record_usage=false"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "ContextPack",
+        "fields": "context_pack_id, markdown, sections, items, warnings, provenance, policy, access_warnings?",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID",
+        "Idempotency-Key"
+      ],
+      "behavior": "Profile polling requires record_usage=false. Provenance/markdown/sections must share privacy filtering.",
+      "release_gate": "G2",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "context"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G2/createContextPack",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "getClaim",
+      "method": "GET",
+      "path": "/v1/claims/{claim_id}",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:read",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "path:claim_id (required)"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "Claim",
+        "fields": "claim fields and evidence_ids",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [
+          "claim_missing"
+        ],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "G2 must verify consistent namespace, project and privacy enforcement across retrieval, detail, explanation and audit.",
+      "release_gate": "G2",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "claim",
+          "claim_missing"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G2/getClaim",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "explainClaim",
+      "method": "GET",
+      "path": "/v1/claims/{claim_id}/explain",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:read",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "path:claim_id (required)"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "ClaimExplanation",
+        "fields": "claim explanation, evidence and governance metadata",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "Apply complete resource/provenance privacy checks; no unrestricted evidence-browser promise.",
+      "release_gate": "G2",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "explain"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G2/explainClaim",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "getAudit",
+      "method": "GET",
+      "path": "/v1/audit/{target_type}/{target_id}",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:audit",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "path:target_type (profile: claim,candidate_claim,evidence)",
+          "path:target_id (required)"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "AuditTrail",
+        "fields": "requested_target_type, audit and related provenance",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID"
+      ],
+      "behavior": "Resolve authorized target before querying audit; unknown type/id must not bypass scope. No pagination promise.",
+      "release_gate": "G2",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "audit"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G2/getAudit",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "rememberCandidate",
+      "method": "POST",
+      "path": "/v1/remember",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:write_candidate",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "body:namespace (required)",
+          "body:write_mode=candidate",
+          "body:memory_type (required)",
+          "body:subject (required)",
+          "body:predicate (required)",
+          "body:object (required)",
+          "body:evidence_text (required in starter)",
+          "body:source_type=agent_observation",
+          "body:privacy_level?",
+          "body:trust_level=imported",
+          "body:project_id?",
+          "body:session_id?",
+          "body:title?",
+          "body:confidence=0.75",
+          "body:importance=0.5",
+          "body:half_life_days?",
+          "body:scope?"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "RememberCandidateResult",
+        "fields": "write_mode=candidate, candidate",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [
+          "idempotency_conflict"
+        ],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID",
+        "Idempotency-Key"
+      ],
+      "behavior": "Creates ingestion/evidence/extraction/candidate/audit rows; never auto-promotes. Legacy active variant remains supported separately with memory:write_active.",
+      "release_gate": "G4",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "remember",
+          "remember_replay",
+          "idempotency_conflict"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G4/rememberCandidate",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "listCandidates",
+      "method": "GET",
+      "path": "/v1/candidates",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:review",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "query:namespace (required)",
+          "query:status?",
+          "query:memory_type?",
+          "query:project_id?",
+          "query:limit=50 (clamped 1..200)"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "Candidate[]",
+        "fields": "candidate fields including evidence_spans; add opaque revision",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "See behavior: current top-N and planned opt-in continuation.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID",
+        "X-Aletheia-Contract: memory-review-v1 (proposed)"
+      ],
+      "behavior": "Baseline newest created_at DESC, id ASC; bounded top-N list; next_cursor=null does not promise complete enumeration. Add opt-in keyset continuation in G3.",
+      "release_gate": "G3",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "candidates"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G3/listCandidates",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "getCandidate",
+      "method": "GET",
+      "path": "/v1/candidates/{candidate_id}",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:review",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "path:candidate_id (required)"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "Candidate",
+        "fields": "candidate fields and evidence_spans; add opaque revision",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [
+          "candidate_denied"
+        ],
+        "review_preconditions": []
+      },
+      "headers": [
+        "X-Request-ID",
+        "X-Aletheia-Contract: memory-review-v1 (proposed)"
+      ],
+      "behavior": "Candidate inspection requires review, including privacy/project checks; read permission alone is insufficient.",
+      "release_gate": "G3",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "candidate",
+          "candidate_denied"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G3/getCandidate",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "promoteCandidate",
+      "method": "POST",
+      "path": "/v1/candidates/{candidate_id}/promote",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:review",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "path:candidate_id (required)",
+          "body:reason (required)",
+          "body:expected_revision? (required for negotiated review profile)"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "Claim",
+        "fields": "promoted claim, with audit correlation via envelope/headers",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": [
+          "400 missing idempotency key",
+          "412 stale revision",
+          "428 missing expected_revision"
+        ]
+      },
+      "headers": [
+        "X-Request-ID",
+        "Idempotency-Key",
+        "X-Aletheia-Contract: memory-review-v1 (proposed)"
+      ],
+      "behavior": "Atomic precondition + governance + claim/link/decision/audit + replay record; legacy unconditioned writes remain distinguishable.",
+      "release_gate": "G3",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "promote"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G3/promoteCandidate",
+        "conformance_status": "planned; not passed"
+      }
+    },
+    {
+      "operation_id": "rejectCandidate",
+      "method": "POST",
+      "path": "/v1/candidates/{candidate_id}/reject",
+      "owner": "Aletheia Memory",
+      "availability": "existing; profile guarantees pending",
+      "permission": {
+        "authentication": "configured authentication; console rules retained where applicable",
+        "any_of": [
+          "memory:review",
+          "memory:admin"
+        ],
+        "resource_scope": "Namespace grants, project restrictions and privacy ceilings still apply; admin does not bypass namespace/privacy."
+      },
+      "request": {
+        "inputs": [
+          "path:candidate_id (required)",
+          "body:reason (required)",
+          "body:expected_revision? (required for negotiated review profile)"
+        ],
+        "legacy_extension_policy": "Preserve accepted extension fields; validation tightening requires explicit compatibility review.",
+        "inputs_scope": "Selected profile inputs and baseline defaults; optional legacy extensions remain supported."
+      },
+      "response": {
+        "planned_schema": "ExtractionDecision",
+        "fields": "candidate decision, with audit correlation via envelope/headers",
+        "envelope": "Existing data/request_id/warnings/pagination envelope; this inventory is not a published schema."
+      },
+      "pagination": "None; nested lists may be bounded.",
+      "errors": {
+        "common": "See error_catalog; include only runtime-applicable statuses in published operation schemas.",
+        "baseline_response_cases": [],
+        "review_preconditions": [
+          "400 missing idempotency key",
+          "412 stale revision",
+          "428 missing expected_revision"
+        ]
+      },
+      "headers": [
+        "X-Request-ID",
+        "Idempotency-Key",
+        "X-Aletheia-Contract: memory-review-v1 (proposed)"
+      ],
+      "behavior": "Atomic precondition + decision + audit + replay record. Successful replay precedes stale comparison after reauthorization.",
+      "release_gate": "G3",
+      "evidence": {
+        "baseline_capture": "scripts/v1_4_phase0.py",
+        "baseline_response_cases": [
+          "reject"
+        ],
+        "baseline_test": "tests/test_v1_4_phase0.py::test_profile_inventory_matches_baseline",
+        "conformance_test_ref": "G3/rejectCandidate",
+        "conformance_status": "planned; not passed"
+      }
+    }
+  ],
+  "deferred": [
+    "relay-sync-v1",
+    "SSE/WebSockets",
+    "public npm client publication",
+    "cross-origin browser support",
+    "full administrative/federation typing",
+    "claim edits/conflict resolution profile",
+    "exhaustive evidence browsing"
+  ]
+}

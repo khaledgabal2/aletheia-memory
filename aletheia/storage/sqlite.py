@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import os
 import threading
 from contextlib import contextmanager
 from importlib import resources
@@ -13,7 +14,12 @@ from typing import Iterator
 from aletheia.core.ids import content_hash
 from aletheia.core.time import utc_now_iso
 
-SCHEMA_VERSION = "1.3.0"
+SCHEMA_VERSION = "1.3.1"
+# Oldest storage revision covered by the tested 1.4 migration/recovery gate.
+# Keep this separate from both the software release and older historical
+# migrations: discovery and release metadata must not advertise an untested
+# direct upgrade path.
+SUPPORTED_MIGRATION_FROM = "1.3.0"
 
 DEFAULT_CATEGORY_LABELS = [
     "identity",
@@ -54,17 +60,35 @@ class SQLiteStore:
         if path != ":memory:":
             expanded_path = str(Path(path).expanduser())
             Path(expanded_path).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                descriptor = os.open(
+                    expanded_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+            except FileExistsError:
+                pass
+            else:
+                os.close(descriptor)
         else:
             expanded_path = path
-        connection = sqlite3.connect(expanded_path, check_same_thread=False)
+        # Explicit transaction control prevents a bare DML statement from
+        # opening a hidden transaction that a later savepoint cannot commit.
+        connection = sqlite3.connect(
+            expanded_path, check_same_thread=False, isolation_level=None
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 5000")
         if expanded_path != ":memory:":
             connection.execute("PRAGMA journal_mode = WAL")
         store = cls(path=expanded_path, connection=connection)
-        if auto_migrate:
-            store.migrate()
+        try:
+            if auto_migrate:
+                store.migrate()
+        except BaseException:
+            connection.close()
+            raise
         return store
 
     def migrate(self) -> None:
@@ -82,48 +106,57 @@ class SQLiteStore:
                 .joinpath("schema.sql")
                 .read_text()
             )
-            self.connection.executescript(schema)
-            self._ensure_compatible_columns()
-            self._backfill_m2_records()
-            self._backfill_m3_records()
-            self._backfill_m4_records()
-            self._backfill_m5_records()
-            self._backfill_m7_records()
-            self._backfill_m8_records()
-            self._backfill_m9_records()
-            self._backfill_m10_records()
-            self._backfill_m11_records()
-            self._backfill_m12_records()
-            self.connection.execute(
-                """
-                INSERT INTO schema_version (id, version, applied_at)
-                VALUES (1, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    version = excluded.version,
-                    applied_at = excluded.applied_at
-                """,
-                (SCHEMA_VERSION, utc_now_iso()),
-            )
-            self.connection.commit()
+            if self.connection.in_transaction:
+                raise RuntimeError("Schema migration requires its own transaction.")
+            try:
+                self.connection.executescript("BEGIN IMMEDIATE;\n" + schema)
+                self._ensure_compatible_columns()
+                self._backfill_m2_records()
+                self._backfill_m3_records()
+                self._backfill_m4_records()
+                self._backfill_m5_records()
+                self._backfill_m7_records()
+                self._backfill_m8_records()
+                self._backfill_m9_records()
+                self._backfill_m10_records()
+                self._backfill_m11_records()
+                self._backfill_m12_records()
+                from aletheia.storage.review import install, integrity
+                install(self.connection)
+                if not integrity(self.connection):
+                    raise RuntimeError("Review schema/trigger inventory is incomplete; migration rolled back.")
+                self.connection.execute(
+                    """
+                    INSERT INTO schema_version (id, version, applied_at)
+                    VALUES (1, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        version = excluded.version,
+                        applied_at = excluded.applied_at
+                    """,
+                    (SCHEMA_VERSION, utc_now_iso()),
+                )
+                self.connection.commit()
+            except BaseException:
+                self.connection.rollback()
+                raise
 
     def close(self) -> None:
         self.connection.close()
 
     @contextmanager
-    def transaction(self) -> Iterator[None]:
+    def transaction(self, *, immediate: bool = False) -> Iterator[None]:
         """Run writes in an atomic transaction with savepoints for nested callers."""
         with self._lock:
             outermost = self._transaction_depth == 0 and not self.connection.in_transaction
             self._transaction_depth += 1
             if outermost:
                 try:
-                    self.connection.execute("BEGIN")
+                    self.connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
                     yield
-                except Exception:
+                    self.connection.commit()
+                except BaseException:
                     self.connection.rollback()
                     raise
-                else:
-                    self.connection.commit()
                 finally:
                     self._transaction_depth -= 1
                 return
@@ -133,7 +166,7 @@ class SQLiteStore:
             self.connection.execute(f"SAVEPOINT {savepoint}")
             try:
                 yield
-            except Exception:
+            except BaseException:
                 self.connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                 self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
                 raise
@@ -225,7 +258,7 @@ class SQLiteStore:
         return row["version"] if row else None
 
     def _schema_current(self) -> bool:
-        required_tables = {"schema_version", "claims", "evidence_events", "claims_fts"}
+        required_tables = {"schema_version", "claims", "evidence_events", "claims_fts", "review_state", "review_replays"}
         if not all(self._table_exists(table) for table in required_tables):
             return False
         if self._table_exists("embeddings"):
@@ -234,7 +267,8 @@ class SQLiteStore:
             ).fetchone()
             if not index or "COALESCE(index_version" not in (index["sql"] or ""):
                 return False
-        return True
+        from aletheia.storage.review import integrity
+        return integrity(self.connection)
 
     def _table_exists(self, table: str) -> bool:
         row = self.connection.execute(

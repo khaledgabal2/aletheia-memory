@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Memory read contract check</title>
+<style>body{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 20px}button{padding:9px;margin:4px}pre{white-space:pre-wrap;background:#f2f4f5;padding:18px}small{color:#555}</style>
+<h1>Memory read contract check</h1>
+<p>Disposable Memory-owned fixture. No Desktop, models, persistent browser storage, or existing user database.</p>
+<button id="connect">Connect demo</button><button id="refresh">Refresh</button><button id="disconnect">Disconnect</button>
+<button id="scope">Narrow demo privacy</button><button id="revoke">Revoke demo credentials</button>
+<button id="checks">Run browser checks</button>
+<p id="status" role="status">Disconnected</p>
+<pre id="memory">No cached data</pre><pre id="checks-output">Browser checks have not run.</pre>
+<small>Same-origin requests, no-store responses, 10-second request timeout, 5-second polling, bounded backoff.</small>
+<script type="importmap">{"imports":{"openapi-fetch":"/vendor/openapi-fetch.js"}}</script>
+<script type="module">
+import { ScopedReader, ReadPoller, ReadError } from '/assets/read-client.js';
+const status = document.querySelector('#status'), view = document.querySelector('#memory'), checks = document.querySelector('#checks-output');
+let poller, reader;
+const clear = () => { view.textContent = 'No cached data'; };
+const fixture = async (action) => {
+  const response = await fetch('/fixture', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({action}), cache: 'no-store' });
+  if (!response.ok) throw new Error('Fixture setup failed');
+  return response.json();
+};
+const operation = async (client, signal) => {
+  const summary = await client.GET('/v1/dashboard/overview', {signal, params: {query: {namespace:'user/phase0-demo'}}});
+  const hits = await client.POST('/v1/retrieve', {signal, body: {namespace:'user/phase0-demo', query:'architecture', mode:'lexical', limit:10}});
+  const context = await client.POST('/v1/context-pack', {signal, body: {namespace:'user/phase0-demo', query:'architecture', retrieval_mode:'lexical', record_usage:false}});
+  return {visible_claims: summary.data.data.metrics.active_claim_count, results: hits.data.data.map(item => item.text), context: context.data.data.markdown};
+};
+document.querySelector('#connect').onclick = async () => {
+  poller?.stop(); reader?.reset(); clear();
+  const session = await fixture('connect');
+  reader = new ScopedReader(location.origin, session.token, clear);
+  poller = new ReadPoller({load: signal => reader.read(operation, signal), data: data => {view.textContent = JSON.stringify(data,null,2); status.textContent='Connected — scoped reads passed';}, clear,
+    error: error => {status.textContent=error.message;}});
+  status.textContent = 'Connecting'; poller.start();
+};
+document.querySelector('#refresh').onclick = () => poller?.refresh();
+document.querySelector('#disconnect').onclick = () => {poller?.stop(); reader?.reset(); status.textContent='Disconnected — cache cleared';};
+document.querySelector('#scope').onclick = async () => {await fixture('narrow'); poller?.refresh();};
+document.querySelector('#revoke').onclick = async () => {await fixture('revoke'); poller?.refresh();};
+document.querySelector('#checks').onclick = async () => {
+  poller?.stop(); reader?.reset(); clear(); checks.textContent='Running actual browser requests…';
+  const results=[];
+  const assert=(condition,message)=>{if(!condition)throw new Error(message); results.push(message);};
+  try {
+    let session=await fixture('connect');
+    const scoped = new ScopedReader(location.origin,session.token,clear);
+    const signal=new AbortController().signal;
+    const data=await scoped.read(operation,signal);
+    assert(data.visible_claims===1 && data.results.length===1,'Authenticated same-origin generated reads and provenance');
+    const response=await fetch('/v1/claims/'+session.claim_id,{headers:{Authorization:'Bearer '+session.token,'X-Request-ID':'browser-read-check'},cache:'no-store'});
+    assert(response.headers.get('Cache-Control')==='no-store' && response.headers.get('X-Request-ID')==='browser-read-check','Actual cache and correlation headers');
+    await fixture('narrow');
+    const narrowed=await scoped.read(operation,signal);
+    assert(narrowed.visible_claims===0 && narrowed.results.length===0,'Changed privacy scope excludes old data');
+    await fixture('revoke');
+    let denied=false; try {await scoped.read(operation,signal);} catch(error){denied=error instanceof ReadError && error.status===401;}
+    assert(denied && view.textContent==='No cached data','Revoked credentials fail and clear the view');
+    session=await fixture('connect');
+    const fresh=new ScopedReader(location.origin,session.token,clear);
+    const controller=new AbortController();controller.abort();
+    let aborted=false;try{await fresh.read(operation,controller.signal);}catch{aborted=true;}
+    assert(aborted,'Cancellation stops browser requests');
+    const after=await fresh.read(operation,signal);
+    assert(after.results.length===1,'Reconnect refreshes through fresh credentials');
+    const stats=await (await fetch('/fixture-stats',{cache:'no-store'})).json();
+    assert(stats.domain_unchanged,'Polling leaves all domain tables unchanged');
+    checks.textContent='PASS\n'+results.map(item=>'✓ '+item).join('\n');status.textContent='Browser checks passed';
+  } catch(error) {checks.textContent='FAIL: '+error.message;status.textContent='Browser checks failed';}
+};
+</script>

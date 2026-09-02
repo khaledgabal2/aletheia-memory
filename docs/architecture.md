@@ -36,14 +36,14 @@ CLI / Python / HTTP SDK / MCP / Console / Plugins / Adapters
                          |
                   SQLiteStore
                          |
-              SQLite schema 1.3.0
+              SQLite schema 1.3.1
 ```
 
 The implementation is local-first. The main durable dependency is SQLite. The HTTP service uses Python's standard `http.server` stack. The package declares no required runtime dependencies in `pyproject.toml`; `pytest` is a development extra.
 
 ## Storage Layer
 
-`SQLiteStore.open()` creates parent directories, opens SQLite with `check_same_thread=False`, enables foreign keys, sets a busy timeout, and uses WAL mode for file databases. `SQLiteStore.migrate()` executes `schema.sql`, applies compatibility/backfill routines, and records `schema_version = "1.3.0"`.
+`SQLiteStore.open()` creates parent directories, opens SQLite with `check_same_thread=False`, enables foreign keys, sets a busy timeout, and uses WAL mode for file databases. `SQLiteStore.migrate()` executes `schema.sql`, applies compatibility/backfill routines, and records `schema_version = "1.3.1"`.
 
 The schema includes tables for:
 
@@ -151,9 +151,10 @@ The encryption layer is part of production hardening and is implemented by
 `crypto.py` and `hardening.py`.
 
 Protected mode can encrypt secret-tier evidence content before it is stored.
-The current content format is `enc:v2:<key_id>:<salt>:<nonce>:<ciphertext>`.
+The current content format is
+`enc:v3:<key_id>:<iterations>:<salt>:<nonce>:<ciphertext>`.
 It uses AES-256-GCM with PBKDF2-HMAC-SHA256-derived local key material. Legacy
-`enc:v1` XOR/HMAC content remains readable for compatibility.
+`enc:v2` AES-GCM and `enc:v1` XOR/HMAC content remain readable for compatibility.
 
 Key records are stored in `encryption_key_records`, but raw key material is not
 stored there. Protected content key material is resolved from

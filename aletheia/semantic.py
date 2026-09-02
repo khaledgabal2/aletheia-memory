@@ -164,6 +164,10 @@ class HTTPEmbeddingProvider:
         dimension: int,
         api_key: str | None = None,
         timeout: float = 30.0,
+        document_prefix: str = "",
+        query_prefix: str = "",
+        model_revision: str = "",
+        local_only: bool = False,
     ) -> None:
         if not endpoint:
             raise ValueError(f"{name} embedding provider requires an endpoint.")
@@ -178,6 +182,15 @@ class HTTPEmbeddingProvider:
         self.dimension = dimension
         self.api_key = api_key
         self.timeout = timeout
+        self.document_prefix, self.query_prefix = document_prefix, query_prefix
+        # Nonempty only for an explicitly configured input/model preset.
+        self.input_signature = (hashlib.sha256(json.dumps([document_prefix, query_prefix, model_revision]).encode()).hexdigest()
+                                if document_prefix or query_prefix or model_revision else "")
+        self.opener = None
+        if local_only:
+            from aletheia.provider_http import local_opener
+            self.opener = local_opener(endpoint)
+            self.external_network_access = False
 
     def embed_texts(
         self,
@@ -190,7 +203,7 @@ class HTTPEmbeddingProvider:
     ) -> list[list[float]]:
         payload = {
             "model": self.model,
-            "input": texts,
+            "input": [(self.query_prefix if purpose == "semantic_query" else self.document_prefix) + text for text in texts],
             "metadata": {
                 "namespace": namespace,
                 "privacy_level": privacy_level,
@@ -205,12 +218,16 @@ class HTTPEmbeddingProvider:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with (self.opener.open if self.opener else urllib.request.urlopen)(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except urllib.error.URLError as exc:
             raise ValueError(f"Embedding provider {self.name!r} failed: {exc}") from exc
         vectors = self._extract_vectors(body)
+        if len(vectors) != len(texts):
+            raise ValueError(f"Embedding provider {self.name!r} returned the wrong number of vectors.")
         for vector in vectors:
+            if not all(math.isfinite(value) for value in vector):
+                raise ValueError(f"Embedding provider {self.name!r} returned a non-finite vector.")
             if len(vector) != self.dimension:
                 raise ValueError(
                     f"Embedding provider {self.name!r} returned dimension {len(vector)}, "
@@ -460,6 +477,10 @@ def provider_for_name(name: str | None, *, model: str | None = None, dimension: 
             dimension=resolved_dimension,
             api_key=api_key,
             timeout=timeout,
+            document_prefix=os.environ.get(f"{env_prefix}_DOCUMENT_PREFIX", ""),
+            query_prefix=os.environ.get(f"{env_prefix}_QUERY_PREFIX", ""),
+            model_revision=os.environ.get(f"{env_prefix}_MODEL_REVISION", ""),
+            local_only=os.environ.get(f"{env_prefix}_LOCAL_ONLY", "").lower() == "true",
         )
     raise ValueError(f"Unknown embedding provider: {name}")
 
@@ -520,6 +541,8 @@ def semantic_index_version(
             redaction_policy,
         ]
     )
+    if getattr(provider, "input_signature", ""):
+        raw += "|" + provider.input_signature
     return "siv_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import platform
+import re
 import shutil
 import sqlite3
 import statistics
@@ -13,16 +14,19 @@ import sys
 import tempfile
 import zipfile
 from dataclasses import asdict
+from functools import wraps
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 from aletheia.core.crypto import (
     AES_GCM_PASSPHRASE_ALGORITHM,
+    LEGACY_PBKDF2_ITERATIONS,
     LEGACY_XOR_HMAC_ALGORITHM,
     PBKDF2_KEY_DERIVATION,
     b64url_decode,
     b64url_encode,
+    constant_time_equal,
     decrypt_bytes_with_passphrase,
     decrypt_legacy_xor_hmac_bytes,
     decrypt_legacy_xor_hmac_content,
@@ -55,12 +59,14 @@ from aletheia.models import (
     SimpleRun,
     SupportBundle,
 )
-from aletheia.storage import SCHEMA_VERSION
+from aletheia.storage import SCHEMA_VERSION, SUPPORTED_MIGRATION_FROM
+from aletheia.version import software_version
 
 
 BACKUP_FORMAT_VERSION = "1"
 ENCRYPTION_PREFIX = "enc:"
-CONTENT_ENCRYPTION_VERSION = "v2"
+CONTENT_ENCRYPTION_VERSION = "v3"
+LEGACY_AES_CONTENT_ENCRYPTION_VERSION = "v2"
 LEGACY_CONTENT_ENCRYPTION_VERSION = "v1"
 SECRET_PRIVACY_LEVELS = {"private", "sensitive", "secret"}
 PRIVACY_ORDER = {"public": 0, "personal": 1, "private": 2, "sensitive": 2, "secret": 3}
@@ -94,6 +100,15 @@ M8_TABLES = {
 }
 
 
+def _atomic_store_write(operation):
+    """Keep multi-step hardening writes inside one explicit SQLite commit."""
+    @wraps(operation)
+    def wrapped(memory, *args, **kwargs):
+        with memory.store.transaction(immediate=True):
+            return operation(memory, *args, **kwargs)
+    return wrapped
+
+
 def create_backup(
     memory,
     *,
@@ -123,6 +138,7 @@ def create_backup(
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_id = new_id("bkp")
     created_at = utc_now_iso()
+    stored_schema_version = memory.health()["schema_version"]
     with tempfile.TemporaryDirectory(prefix="aletheia-backup-") as temp:
         temp_dir = Path(temp)
         payload_files: dict[str, bytes] = {
@@ -144,7 +160,7 @@ def create_backup(
             "namespace": namespace,
             "backup_type": backup_type,
             "format_version": BACKUP_FORMAT_VERSION,
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": stored_schema_version,
             "created_at": created_at,
             "created_by": created_by,
             "encrypted": encrypt,
@@ -200,7 +216,7 @@ def create_backup(
                 namespace,
                 backup_type,
                 BACKUP_FORMAT_VERSION,
-                SCHEMA_VERSION,
+                stored_schema_version,
                 str(archive_path),
                 int(encrypt),
                 key_id,
@@ -364,7 +380,10 @@ def restore_backup(
     dry_run: bool = True,
     verify_before: bool = True,
     run_integrity_after: bool = True,
+    trust_unauthenticated: bool = False,
 ) -> RestoreRun:
+    if mode not in {"new_database", "overwrite_existing", "in_place"}:
+        raise ValidationError("Restore mode must be new_database, overwrite_existing, or in_place.")
     started_at = utc_now_iso()
     warnings: list[str] = []
     status = "planned" if dry_run else "running"
@@ -382,6 +401,14 @@ def restore_backup(
         verified = verification_status == "passed"
         if not verified and not dry_run:
             raise ValidationError("Restore refused because backup verification failed: " + "; ".join(warnings))
+        if manifest and not manifest.get("encrypted"):
+            warnings.append(
+                "The archive is checksum-verified but unauthenticated; an attacker who can replace it can also replace its checksums."
+            )
+            if not dry_run and not trust_unauthenticated:
+                raise ValidationError(
+                    "Restore refused an unauthenticated archive. Use an encrypted backup, or explicitly set trust_unauthenticated after verifying its provenance."
+                )
     target = Path(target_db_path)
     if dry_run:
         return RestoreRun(
@@ -401,14 +428,33 @@ def restore_backup(
         )
     if mode == "new_database" and target.exists():
         raise ValidationError("Target database already exists; use overwrite_existing mode explicitly.")
-    if mode in {"overwrite_existing", "in_place"} and target.exists():
-        pre_restore = target.with_suffix(target.suffix + ".pre-restore")
-        shutil.copy2(target, pre_restore)
-        warnings.append(f"Existing target backed up to {pre_restore}.")
     if "database.sqlite" not in payload:
         raise ValidationError("Restore requires a database.sqlite payload.")
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload["database.sqlite"])
+    from aletheia import Memory
+    from aletheia.storage.review import rotate_generation
+    # Prepare the restored generation before it can replace any live state.
+    with tempfile.TemporaryDirectory(prefix="aletheia-restore-") as temp:
+        prepared = Path(temp) / "prepared.sqlite"
+        prepared.write_bytes(payload["database.sqlite"])
+        restored = Memory.open(str(prepared))
+        try:
+            with restored.store.transaction(immediate=True):
+                rotate_generation(restored.store.connection)
+            if mode in {"overwrite_existing", "in_place"} and target.exists():
+                pre_restore = target.with_suffix(target.suffix + ".pre-restore-" + new_id("backup"))
+                source = sqlite3.connect(target)
+                try:
+                    _sqlite_copy(source, pre_restore)
+                finally:
+                    source.close()
+                warnings.append(f"Existing target backed up to {pre_restore}.")
+            if mode == "new_database" or not target.exists():
+                from aletheia.onboarding import reserve_database
+                reserve_database(target)
+            _sqlite_copy(restored.store.connection, target)
+        finally:
+            restored.close()
     restored_counts = manifest.get("item_counts", {})
     integrity_summary: dict[str, Any] | None = None
     if run_integrity_after:
@@ -539,10 +585,17 @@ def enable_protected_mode(memory, *, protected: bool = True, actor: str = "user"
     return protected_mode_status(memory)
 
 
-def create_key(memory, *, provider: str, label: str, metadata: dict | None = None) -> EncryptionKeyRecord:
+def create_key(
+    memory,
+    *,
+    provider: str,
+    label: str,
+    metadata: dict | None = None,
+    key_id: str | None = None,
+) -> EncryptionKeyRecord:
     if provider not in {"passphrase", "environment", "file", "os_keyring"}:
         raise ValidationError("Unsupported key provider.")
-    key_id = new_id("key")
+    key_id = key_id or new_id("key")
     now = utc_now_iso()
     salt = b64url_encode(random_bytes(16))
     with memory.store.transaction():
@@ -597,16 +650,84 @@ def rotate_key(
     target: str = "content",
     dry_run: bool = True,
     force: bool = False,
+    new_key_env: str | None = None,
 ) -> KeyRotationEvent:
     old = get_key(memory, old_key_id)
-    affected = _encrypted_content_count(memory, old_key_id) if target == "content" else 0
+    if target != "content":
+        raise ValidationError("Key rotation currently supports target=content only.")
+    if old.status != "active":
+        raise ValidationError("Only an active content key can be rotated.")
+    affected = _encrypted_content_count(memory, old_key_id)
+    planned_new_key_id = "key_" + content_hash(
+        f"rotation\0{old_key_id}\0{new_key_label}"
+    )[:20]
+    expected_new_key_env = f"ALETHEIA_KEY_{planned_new_key_id}"
     if not dry_run and not force and not list_backups(memory, limit=1):
         raise ValidationError("Key rotation recommends a verified backup first; pass force to override.")
-    new_key = create_key(memory, provider=old.provider, label=new_key_label, metadata={"rotated_from": old_key_id})
+    new_secret = None
+    if not dry_run:
+        new_key_env = new_key_env or expected_new_key_env
+        if (
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{1,127}", new_key_env)
+            or new_key_env != expected_new_key_env
+        ):
+            raise ValidationError(
+                f"Applied content rotation requires new key material in {expected_new_key_env}."
+            )
+        new_secret = os.environ.get(new_key_env)
+        if not new_secret:
+            raise ValidationError(f"New content key material is missing from {new_key_env}.")
+        old_secret = _content_passphrase(old_key_id)
+        if constant_time_equal(new_secret, old_secret):
+            raise ValidationError("The new content key material must differ from the old key material.")
     now = utc_now_iso()
     status = "planned" if dry_run else "completed"
-    with memory.store.transaction():
-        if not dry_run:
+    event_id = new_id("krot")
+    with memory.store.transaction(immediate=True):
+        if dry_run:
+            new_key_id = planned_new_key_id
+        else:
+            new_key = create_key(
+                memory,
+                provider=old.provider,
+                label=new_key_label,
+                metadata={
+                    "rotated_from": old_key_id,
+                    **({"environment_variable": new_key_env} if new_key_env else {}),
+                },
+                key_id=planned_new_key_id,
+            )
+            new_key_id = new_key.id
+            if affected:
+                rows = memory.store.connection.execute(
+                    """
+                    SELECT id, content
+                    FROM evidence_events
+                    WHERE content LIKE ? OR content LIKE ? OR content LIKE ?
+                    ORDER BY id
+                    """,
+                    (
+                        f"enc:{LEGACY_CONTENT_ENCRYPTION_VERSION}:{old_key_id}:%",
+                        f"enc:{LEGACY_AES_CONTENT_ENCRYPTION_VERSION}:{old_key_id}:%",
+                        f"enc:{CONTENT_ENCRYPTION_VERSION}:{old_key_id}:%",
+                    ),
+                ).fetchall()
+                for row in rows:
+                    plaintext = reveal_content_from_storage(memory, row["content"])
+                    memory.store.connection.execute(
+                        "UPDATE evidence_events SET content = ? WHERE id = ? AND content = ?",
+                        (
+                            encrypt_content(
+                                plaintext,
+                                key_id=new_key_id,
+                                passphrase=str(new_secret),
+                            ),
+                            row["id"],
+                            row["content"],
+                        ),
+                    )
+                if _encrypted_content_count(memory, old_key_id):
+                    raise ValidationError("Content rotation did not replace every old-key payload.")
             memory.store.connection.execute(
                 "UPDATE encryption_key_records SET status = 'rotated', rotated_at = ? WHERE id = ?",
                 (now, old_key_id),
@@ -620,15 +741,22 @@ def rotate_key(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                new_id("krot"),
+                event_id,
                 old_key_id,
-                new_key.id,
+                new_key_id,
                 target,
                 int(dry_run),
                 affected,
                 status,
                 now,
-                json.dumps({"force": force}, sort_keys=True),
+                json.dumps(
+                    {
+                        "force": force,
+                        "new_key_env": new_key_env,
+                        "reencrypted_count": affected if not dry_run else 0,
+                    },
+                    sort_keys=True,
+                ),
             ),
         )
         memory._write_audit(
@@ -636,11 +764,11 @@ def rotate_key(
             target_type="encryption_key",
             target_id=old_key_id,
             action="key.rotate",
-            details={"new_key_id": new_key.id, "dry_run": dry_run, "affected_count": affected},
+            details={"new_key_id": new_key_id, "dry_run": dry_run, "affected_count": affected},
         )
     row = memory.store.connection.execute(
-        "SELECT * FROM key_rotation_events WHERE old_key_id = ? ORDER BY created_at DESC LIMIT 1",
-        (old_key_id,),
+        "SELECT * FROM key_rotation_events WHERE id = ?",
+        (event_id,),
     ).fetchone()
     return KeyRotationEvent.from_row(row)
 
@@ -663,9 +791,9 @@ def reveal_content_from_storage(memory, content: str) -> str:
     except ValueError as exc:
         raise ValidationError("Encrypted content marker is malformed.") from exc
     if version == CONTENT_ENCRYPTION_VERSION:
-        if len(parts) != 3:
+        if len(parts) != 4:
             raise ValidationError("Encrypted content marker is malformed.")
-        salt_b64, nonce_b64, cipher_b64 = parts
+        iterations, salt_b64, nonce_b64, cipher_b64 = parts
         cipher = b64url_decode(cipher_b64)
         return decrypt_bytes_with_passphrase(
             cipher,
@@ -673,6 +801,22 @@ def reveal_content_from_storage(memory, content: str) -> str:
             {
                 "algorithm": AES_GCM_PASSPHRASE_ALGORITHM,
                 "kdf": PBKDF2_KEY_DERIVATION,
+                "kdf_iterations": iterations,
+                "salt": salt_b64,
+                "nonce": nonce_b64,
+            },
+        ).decode("utf-8")
+    if version == LEGACY_AES_CONTENT_ENCRYPTION_VERSION:
+        if len(parts) != 3:
+            raise ValidationError("Encrypted content marker is malformed.")
+        salt_b64, nonce_b64, cipher_b64 = parts
+        return decrypt_bytes_with_passphrase(
+            b64url_decode(cipher_b64),
+            _content_passphrase(key_id),
+            {
+                "algorithm": AES_GCM_PASSPHRASE_ALGORITHM,
+                "kdf": PBKDF2_KEY_DERIVATION,
+                "kdf_iterations": LEGACY_PBKDF2_ITERATIONS,
                 "salt": salt_b64,
                 "nonce": nonce_b64,
             },
@@ -697,6 +841,7 @@ def encrypt_content(content: str, *, key_id: str, passphrase: str) -> str:
             "enc",
             CONTENT_ENCRYPTION_VERSION,
             key_id,
+            str(metadata["kdf_iterations"]),
             metadata["salt"],
             metadata["nonce"],
             b64url_encode(cipher),
@@ -749,19 +894,21 @@ def redact(
                     (replacement_text, content_hash(replacement_text), target_id),
                 )
                 for claim_id in affected["claims"]:
+                    claim = memory.read_claim(claim_id)
                     memory.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (claim_id,))
                     memory.store.connection.execute(
                         "UPDATE claims SET status = 'archived' WHERE id = ? AND status IN ('active', 'core')",
                         (claim_id,),
                     )
-                    memory._write_status_history(
-                        namespace=namespace,
-                        claim_id=claim_id,
-                        old_status="active",
-                        new_status="archived",
-                        reason="evidence.redacted",
-                        actor=actor,
-                    )
+                    if claim.status in {"active", "core"}:
+                        memory._write_status_history(
+                            namespace=namespace,
+                            claim_id=claim_id,
+                            old_status=claim.status,
+                            new_status="archived",
+                            reason="evidence.redacted",
+                            actor=actor,
+                        )
                 _invalidate_derived(memory, namespace, affected["claims"], reason)
                 _stale_semantic_for_targets(memory, namespace=namespace, target_ids=affected["claims"], reason="evidence.redacted")
             elif target_type == "claim":
@@ -1270,10 +1417,13 @@ def repair_integrity(memory, *, finding_id: str, dry_run: bool = True) -> Simple
 
 def migration_plan(memory, *, target_version: str = SCHEMA_VERSION) -> MigrationPlan:
     from_version = memory.health()["schema_version"]
-    steps = [{"name": f"Add M8 hardening table {table}", "table": table, "reversible": True} for table in sorted(M8_TABLES)]
+    if target_version != SCHEMA_VERSION:
+        raise ValidationError(f"This binary migrates only to storage {SCHEMA_VERSION}; use a backup for downgrade.")
+    steps = [{"name": "Install transactional review state, replay receipts and complete dependency triggers", "storage_version": SCHEMA_VERSION,
+              "reversible": False, "recovery": "Restore a pre-upgrade backup with the matching binary."}]
     plan_id = new_id("mplan")
     now = utc_now_iso()
-    warnings = ["Backup recommended before applying migration."]
+    warnings = ["Back up before applying migration. In-place downgrade is unsupported; retain the matching older binary for recovery."]
     with memory.store.transaction():
         memory.store.connection.execute(
             """
@@ -1281,7 +1431,7 @@ def migration_plan(memory, *, target_version: str = SCHEMA_VERSION) -> Migration
                 id, from_version, to_version, steps_json, irreversible,
                 backup_required, warnings_json, created_at, metadata_json
             )
-            VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
+            VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)
             """,
             (
                 plan_id,
@@ -1290,7 +1440,7 @@ def migration_plan(memory, *, target_version: str = SCHEMA_VERSION) -> Migration
                 json.dumps(steps, sort_keys=True),
                 json.dumps(warnings, sort_keys=True),
                 now,
-                json.dumps({"estimated_affected_tables": sorted(M8_TABLES)}, sort_keys=True),
+                json.dumps({"review_storage": ["review_state", "review_replays"], "dependency_inventory": "aletheia/storage/migrations/review_tables.json"}, sort_keys=True),
             ),
         )
     row = memory.store.connection.execute("SELECT * FROM migration_plans WHERE id = ?", (plan_id,)).fetchone()
@@ -1470,6 +1620,7 @@ def export_archive(
     return ExportManifest.from_row(row)
 
 
+@_atomic_store_write
 def import_archive(
     memory,
     *,
@@ -1805,17 +1956,18 @@ def release_manifest(memory, *, output_path: str | None = None) -> ReleaseManife
                 migration_range, test_summary_json, benchmark_summary_json,
                 created_at, metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '1.0.x -> 1.3.0', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 manifest_id,
-                SCHEMA_VERSION,
+                software_version(),
                 os.environ.get("GIT_COMMIT"),
                 now,
                 json.dumps([platform.python_version()], sort_keys=True),
                 json.dumps([platform.system().lower()], sort_keys=True),
                 json.dumps(package_files, sort_keys=True),
                 lock_hash,
+                f"{SUPPORTED_MIGRATION_FROM} -> {SCHEMA_VERSION}",
                 json.dumps({"unit": "run pytest", "live": "run live scorecards"}, sort_keys=True),
                 json.dumps({"latest_benchmark_id": latest_benchmark[0].id if latest_benchmark else None}, sort_keys=True),
                 now,
@@ -1909,10 +2061,21 @@ def _protected_content_key_configured(memory, protected: ProtectedModeConfig) ->
 
 
 def _sqlite_snapshot(memory, destination: Path) -> None:
+    _sqlite_copy(memory.store.connection, destination)
+
+
+def _sqlite_copy(source: sqlite3.Connection, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    target = sqlite3.connect(destination)
+    target = sqlite3.connect(destination, timeout=0.2)
     try:
-        memory.store.connection.backup(target)
+        last_progress = perf_counter()
+        def progress(status, remaining, total):
+            nonlocal last_progress
+            if status not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                last_progress = perf_counter()
+            if perf_counter() - last_progress >= 10:
+                raise ValidationError("SQLite copy timed out; let active writers finish and retry.")
+        source.backup(target, pages=256, progress=progress, sleep=0.05)
     finally:
         target.close()
 
@@ -2107,10 +2270,11 @@ def _encrypted_content_count(memory, key_id: str) -> int:
         """
         SELECT count(*) AS count
         FROM evidence_events
-        WHERE content LIKE ? OR content LIKE ?
+        WHERE content LIKE ? OR content LIKE ? OR content LIKE ?
         """,
         (
             f"enc:{LEGACY_CONTENT_ENCRYPTION_VERSION}:{key_id}:%",
+            f"enc:{LEGACY_AES_CONTENT_ENCRYPTION_VERSION}:{key_id}:%",
             f"enc:{CONTENT_ENCRYPTION_VERSION}:{key_id}:%",
         ),
     ).fetchone()["count"])
@@ -2338,6 +2502,8 @@ def _integrity_findings(memory, *, namespace: str | None, deep: bool) -> list[di
     health = memory.health()
     if health["schema_version"] != SCHEMA_VERSION:
         findings.append(_finding("critical", "schema_version", None, None, f"Schema is {health['schema_version']}, expected {SCHEMA_VERSION}.", False, "Run migration."))
+    elif not memory.store._schema_current():
+        findings.append(_finding("critical", "review_schema_integrity", None, None, "Review state or dependency triggers are incomplete.", False, "Back up and inspect the migration before allowing review."))
     tables = {row["name"] for row in memory.store.connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual table')").fetchall()}
     for table in sorted(M8_TABLES - tables):
         findings.append(_finding("critical", "missing_table", table, "table", f"Required table missing: {table}", False, "Run migration."))

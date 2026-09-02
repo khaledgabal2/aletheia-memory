@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 
 class AletheiaClientError(Exception):
@@ -42,6 +44,18 @@ class AletheiaServerError(AletheiaClientError):
     pass
 
 
+class AletheiaTransportError(AletheiaClientError):
+    pass
+
+
+class AletheiaUnsupportedFeatureError(AletheiaClientError):
+    pass
+
+
+class AletheiaStaleRevisionError(AletheiaClientError):
+    """Refresh the candidate and obtain another explicit decision; never auto-retry."""
+
+
 ERROR_TYPES = {
     "unauthorized": AletheiaUnauthorizedError,
     "forbidden": AletheiaForbiddenError,
@@ -49,6 +63,11 @@ ERROR_TYPES = {
     "integrity_gate_failed": AletheiaIntegrityGateError,
     "rate_limited": AletheiaRateLimitError,
     "idempotency_conflict": AletheiaValidationError,
+    "precondition_required": AletheiaValidationError,
+    "stale_revision": AletheiaStaleRevisionError,
+    "review_conflict": AletheiaValidationError,
+    "invalid_cursor": AletheiaValidationError,
+    "unsupported_contract": AletheiaUnsupportedFeatureError,
 }
 
 
@@ -61,6 +80,10 @@ class AletheiaClient:
         self.last_warnings: list[str] = []
         self.last_pagination: dict | None = None
         self.last_envelope: dict | None = None
+        # A sync client owns one coherent last-response snapshot. The async
+        # facade may call it from worker threads, so transport and metadata
+        # updates must be serialized.
+        self._request_lock = threading.RLock()
 
     def health(self, *, request_id: str | None = None) -> dict:
         return self._request("GET", "/v1/health", request_id=request_id)
@@ -68,17 +91,47 @@ class AletheiaClient:
     def version(self, *, request_id: str | None = None) -> dict:
         return self._request("GET", "/v1/version", request_id=request_id)
 
-    def check_compatibility(self) -> dict:
+    def current_principal(self, *, request_id: str | None = None) -> dict:
+        try:
+            return self._request("GET", "/v1/auth/me", request_id=request_id)
+        except AletheiaClientError as exc:
+            if exc.status_code != 404:
+                raise
+            raise AletheiaUnsupportedFeatureError(
+                "This service does not provide current-principal discovery. Use a service with the current-principal feature.",
+                code="unsupported_operation", status_code=404,
+                details={"required_feature": "current-principal"},
+            ) from exc
+
+    def check_compatibility(self, *, required_profiles: list[str] | None = None) -> dict:
+        if required_profiles is not None and (
+            not isinstance(required_profiles, (list, tuple))
+            or not all(isinstance(profile, str) and profile for profile in required_profiles)
+        ):
+            raise ValueError("required_profiles must be a list of non-empty profile names")
         report = self.compatibility_report()
         version = self.version()
         api_version = version.get("api_version")
-        compatible = api_version == "v1" and report.get("schema_version") == report.get("aletheia_version")
+        profiles = version.get("supported_profiles")
+        has_profile_discovery = isinstance(profiles, list) and all(isinstance(item, str) for item in profiles)
+        supported = sorted(set(profiles)) if has_profile_discovery else []
+        missing = sorted(set(required_profiles or []) - set(supported))
+        warnings = list(report.get("warnings") or [])
+        if not has_profile_discovery:
+            warnings.append("Legacy service: profile support is unknown; only existing v1 operations are available.")
+        if missing:
+            warnings.append("Required profiles unavailable: " + ", ".join(missing))
+        compatible = api_version == "v1" and report.get("api_version", api_version) == "v1" and not missing
         return {
             "compatible": compatible,
             "client_api_version": "v1",
             "server_api_version": api_version,
-            "server_version": version.get("service_version"),
-            "warnings": report.get("warnings", []),
+            "server_version": version.get("software_version", version.get("service_version")),
+            "supported_profiles": supported,
+            "missing_profiles": missing,
+            "limited_capabilities": not has_profile_discovery,
+            "service_identity": version.get("service_identity"),
+            "warnings": warnings,
             "report": report,
         }
 
@@ -91,8 +144,15 @@ class AletheiaClient:
     def remember(self, *, idempotency_key: str | None = None, **payload) -> dict:
         return self._request("POST", "/v1/remember", payload, idempotency_key=idempotency_key)
 
-    def remember_candidate(self, *, idempotency_key: str | None = None, **payload) -> dict:
-        return self.remember(idempotency_key=idempotency_key, write_mode="candidate", **payload)
+    def remember_candidate(self, *, idempotency_key: str | None = None, contract: str | None = None, **payload) -> dict:
+        if "write_mode" in payload:
+            raise TypeError("remember_candidate does not accept a write_mode override.")
+        if contract is not None:
+            if contract != "agent-onboarding-v1":
+                raise ValueError("Candidate creation supports agent-onboarding-v1 or legacy mode.")
+            if contract not in self.current_principal().get("supported_profiles", []):
+                raise AletheiaUnsupportedFeatureError("The service does not support agent-onboarding-v1.")
+        return self._request("POST", "/v1/remember", {"write_mode": "candidate", **payload}, idempotency_key=idempotency_key, contract=contract)
 
     def remember_active(self, *, idempotency_key: str | None = None, **payload) -> dict:
         return self.remember(idempotency_key=idempotency_key, write_mode="active", **payload)
@@ -148,6 +208,31 @@ class AletheiaClient:
 
     def promote_candidate(self, candidate_id: str, *, reason: str) -> dict:
         return self._request("POST", f"/v1/candidates/{candidate_id}/promote", {"reason": reason})
+
+    def _require_review_profile(self):
+        if "memory-review-v1" not in self.current_principal().get("supported_profiles", []):
+            raise AletheiaUnsupportedFeatureError("The service does not advertise memory-review-v1; guarded review is unavailable.", code="unsupported_operation")
+
+    def get_candidate_for_review(self, candidate_id: str) -> dict:
+        self._require_review_profile()
+        return self._request("GET", "/v1/candidates/" + quote(candidate_id, safe=""), contract="memory-review-v1")
+
+    def list_candidates_for_review(self, *, namespace: str, status: str | None = None,
+                                   memory_type: str | None = None, project_id: str | None = None,
+                                   limit: int = 50, cursor: str | None = None) -> list[dict]:
+        self._require_review_profile()
+        query = {name: value for name, value in dict(namespace=namespace, status=status, memory_type=memory_type,
+            project_id=project_id, limit=limit, cursor=cursor).items() if value is not None}
+        return self._request("GET", "/v1/candidates?" + urlencode(query), contract="memory-review-v1")
+
+    def review_candidate(self, candidate_id: str, *, action: str, reason: str,
+                         expected_revision: str, idempotency_key: str, request_id: str | None = None) -> dict:
+        if action not in {"promote", "reject"}:
+            raise ValueError("Review action must be promote or reject")
+        self._require_review_profile()
+        return self._request("POST", "/v1/candidates/" + quote(candidate_id, safe="") + "/" + action,
+            {"reason": reason, "expected_revision": expected_revision}, idempotency_key=idempotency_key,
+            request_id=request_id, contract="memory-review-v1")
 
     def audit(self, target_type: str, target_id: str, *, request_id: str | None = None) -> dict:
         return self._request("GET", f"/v1/audit/{target_type}/{target_id}", request_id=request_id)
@@ -333,6 +418,39 @@ class AletheiaClient:
         *,
         request_id: str | None = None,
         idempotency_key: str | None = None,
+        contract: str | None = None,
+    ) -> Any:
+        attempts = 2 if method == "GET" else 1
+        with self._request_lock:
+            self.last_request_id = None
+            self.last_warnings = []
+            self.last_pagination = None
+            self.last_envelope = None
+            for attempt in range(attempts):
+                try:
+                    return self._request_once(
+                        method,
+                        path,
+                        payload,
+                        request_id=request_id,
+                        idempotency_key=idempotency_key,
+                        contract=contract,
+                    )
+                except AletheiaTransportError:
+                    if attempt + 1 >= attempts:
+                        raise
+                    time.sleep(0.05)
+        raise AssertionError("unreachable")
+
+    def _request_once(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        *,
+        request_id: str | None = None,
+        idempotency_key: str | None = None,
+        contract: str | None = None,
     ) -> Any:
         raw = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
         headers = {"Accept": "application/json"}
@@ -344,6 +462,8 @@ class AletheiaClient:
             headers["X-Request-ID"] = request_id
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        if contract:
+            headers["X-Aletheia-Contract"] = contract
         request = urllib.request.Request(
             self.base_url + path,
             data=raw,
@@ -352,14 +472,44 @@ class AletheiaClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local SDK.
-                envelope = json.loads(response.read().decode("utf-8"))
+                body = response.read().decode("utf-8", errors="replace")
+                try:
+                    envelope = json.loads(body)
+                except json.JSONDecodeError as exc:
+                    raise AletheiaTransportError(
+                        "Aletheia returned a non-JSON success response.",
+                        code="invalid_response",
+                        status_code=response.status,
+                    ) from exc
+                if not isinstance(envelope, dict):
+                    raise AletheiaTransportError(
+                        "Aletheia returned a non-object JSON success response.",
+                        code="invalid_response",
+                        status_code=response.status,
+                    )
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8")
+            body = exc.read().decode("utf-8", errors="replace")
             try:
                 envelope = json.loads(body)
             except json.JSONDecodeError:
-                raise AletheiaServerError(body, status_code=exc.code) from exc
+                raise AletheiaTransportError(
+                    "Aletheia returned a non-JSON error response.",
+                    code="invalid_response",
+                    status_code=exc.code,
+                ) from exc
+            if not isinstance(envelope, dict):
+                raise AletheiaTransportError(
+                    "Aletheia returned a non-object JSON error response.",
+                    code="invalid_response",
+                    status_code=exc.code,
+                ) from exc
             self._raise_error(envelope, exc.code)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise AletheiaTransportError(
+                "Could not reach the Aletheia service within the configured timeout.",
+                code="transport_error",
+                details={"url": self.base_url + path},
+            ) from exc
         if "error" in envelope:
             self._raise_error(envelope, None)
         self.last_envelope = envelope
@@ -406,8 +556,11 @@ class AsyncAletheiaClient:
     async def version(self, **kwargs) -> dict:
         return await asyncio.to_thread(self._sync.version, **kwargs)
 
-    async def check_compatibility(self) -> dict:
-        return await asyncio.to_thread(self._sync.check_compatibility)
+    async def current_principal(self, **kwargs) -> dict:
+        return await asyncio.to_thread(self._sync.current_principal, **kwargs)
+
+    async def check_compatibility(self, **kwargs) -> dict:
+        return await asyncio.to_thread(self._sync.check_compatibility, **kwargs)
 
     async def context_pack(self, **payload) -> dict:
         return await asyncio.to_thread(self._sync.context_pack, **payload)
@@ -441,6 +594,15 @@ class AsyncAletheiaClient:
 
     async def promote_candidate(self, candidate_id: str, *, reason: str) -> dict:
         return await asyncio.to_thread(self._sync.promote_candidate, candidate_id, reason=reason)
+
+    async def get_candidate_for_review(self, candidate_id: str) -> dict:
+        return await asyncio.to_thread(self._sync.get_candidate_for_review, candidate_id)
+
+    async def list_candidates_for_review(self, **kwargs) -> list[dict]:
+        return await asyncio.to_thread(self._sync.list_candidates_for_review, **kwargs)
+
+    async def review_candidate(self, candidate_id: str, **kwargs) -> dict:
+        return await asyncio.to_thread(self._sync.review_candidate, candidate_id, **kwargs)
 
     async def audit(self, target_type: str, target_id: str) -> dict:
         return await asyncio.to_thread(self._sync.audit, target_type, target_id)

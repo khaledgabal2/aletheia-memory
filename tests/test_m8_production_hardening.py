@@ -13,7 +13,9 @@ from aletheia.cli.main import main
 from aletheia.core.errors import NotFoundError, ValidationError
 from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService
+from aletheia.version import software_version
 from aletheia.service.http import AletheiaService, openapi_schema
+from aletheia.storage import SCHEMA_VERSION, SUPPORTED_MIGRATION_FROM
 
 
 NAMESPACE = "user/default"
@@ -62,7 +64,7 @@ def _get(service: AletheiaService, path: str, token: str):
 def test_m8_migration_adds_hardening_tables_without_enabling_protection(tmp_path):
     memory = Memory.open(str(tmp_path / "migrate.db"), namespace=NAMESPACE)
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         tables = {
             row["name"]
             for row in memory.store.connection.execute(
@@ -239,6 +241,43 @@ def test_encrypted_backup_verify_restore_and_corruption_detection(tmp_path):
         memory.close()
 
 
+def test_unencrypted_restore_requires_explicit_provenance_trust(tmp_path):
+    source = Memory.open(str(tmp_path / "plain-source.db"), namespace=NAMESPACE)
+    archive = tmp_path / "plain.alet"
+    target = tmp_path / "plain-restored.db"
+    try:
+        claim = source.remember(
+            namespace=NAMESPACE,
+            memory_type="project",
+            subject="plain archive",
+            predicate="requires",
+            object="explicit provenance trust",
+        )
+        source.create_backup(output_path=str(archive), encrypt=False)
+        preview = source.restore_backup(
+            backup_path=str(archive), target_db_path=str(target), dry_run=True
+        )
+        assert any("unauthenticated" in warning for warning in preview.warnings)
+        with pytest.raises(ValidationError, match="unauthenticated archive"):
+            source.restore_backup(
+                backup_path=str(archive), target_db_path=str(target), dry_run=False
+            )
+        restored = source.restore_backup(
+            backup_path=str(archive),
+            target_db_path=str(target),
+            dry_run=False,
+            trust_unauthenticated=True,
+        )
+        assert restored.status == "completed"
+    finally:
+        source.close()
+    reopened = Memory.open(str(target), namespace=NAMESPACE, auto_migrate=False)
+    try:
+        assert reopened.read_claim(claim.id).object == "explicit provenance trust"
+    finally:
+        reopened.close()
+
+
 def test_redacted_logical_backup_excludes_raw_db_tokens_and_content(tmp_path):
     db_path = tmp_path / "redacted-source.db"
     backup_path = tmp_path / "redacted.alet"
@@ -311,7 +350,7 @@ def test_protected_mode_encrypts_secret_content_and_skips_secret_indexing(monkey
             "SELECT content FROM evidence_events WHERE id = ?",
             (event.id,),
         ).fetchone()["content"]
-        assert stored.startswith("enc:v2:")
+        assert stored.startswith("enc:v3:")
         assert "secret launch code" not in stored
         assert memory.read_event(event.id).content == "secret launch code is blue"
         duplicate = memory.write_event(
@@ -342,6 +381,51 @@ def test_protected_mode_encrypts_secret_content_and_skips_secret_indexing(monkey
 
         rotation = memory.rotate_key(old_key_id=keys[0].id, new_key_label="next", dry_run=True)
         assert rotation.status == "planned"
+        assert len(memory.list_keys()) == 1
+        new_key_env = f"ALETHEIA_KEY_{rotation.new_key_id}"
+        monkeypatch.setenv(new_key_env, "distinct-rotated-content-key")
+        applied = memory.rotate_key(
+            old_key_id=keys[0].id,
+            new_key_label="next",
+            dry_run=False,
+            force=True,
+            new_key_env=new_key_env,
+        )
+        assert applied.status == "completed"
+        assert applied.metadata["reencrypted_count"] == applied.affected_count
+        assert applied.affected_count == rotation.affected_count >= 1
+        rotated_content = memory.store.connection.execute(
+            "SELECT content FROM evidence_events WHERE id = ?", (event.id,)
+        ).fetchone()["content"]
+        assert rotated_content.startswith(f"enc:v3:{applied.new_key_id}:")
+        assert memory.read_event(event.id).content == "secret launch code is blue"
+        assert memory.get_key(keys[0].id).status == "rotated"
+    finally:
+        memory.close()
+
+
+def test_applied_key_rotation_requires_new_material_even_without_content(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALETHEIA_PROTECTED_KEY", PASSPHRASE)
+    memory = Memory.open(str(tmp_path / "empty-rotation.db"), namespace=NAMESPACE)
+    try:
+        memory.enable_protected_mode(actor="pytest")
+        old_key = memory.list_keys()[0]
+        planned = memory.rotate_key(
+            old_key_id=old_key.id,
+            new_key_label="empty-next",
+            dry_run=True,
+        )
+        expected_env = f"ALETHEIA_KEY_{planned.new_key_id}"
+        monkeypatch.delenv(expected_env, raising=False)
+        with pytest.raises(ValidationError, match="New content key material is missing"):
+            memory.rotate_key(
+                old_key_id=old_key.id,
+                new_key_label="empty-next",
+                dry_run=False,
+                force=True,
+            )
+        assert memory.get_key(old_key.id).status == "active"
+        assert len(memory.list_keys()) == 1
     finally:
         memory.close()
 
@@ -378,6 +462,7 @@ def test_redaction_forget_retention_integrity_and_migration_runs(tmp_path):
             object="sensitive note",
         )
         event_id = claim.evidence_ids[0]
+        memory.promote_claim(claim.id, "core", reason="Verify redaction history.", force=True)
         preview = memory.redact(
             target_id=event_id,
             target_type="evidence",
@@ -394,6 +479,15 @@ def test_redaction_forget_retention_integrity_and_migration_runs(tmp_path):
         assert applied.affected_counts["claims"] == [claim.id]
         assert memory.read_event(event_id).content == "[REDACTED]"
         assert memory.read_claim(claim.id).status == "archived"
+        redaction_history = memory.store.connection.execute(
+            """
+            SELECT old_status, new_status
+            FROM claim_status_history
+            WHERE claim_id = ? AND reason = 'evidence.redacted'
+            """,
+            (claim.id,),
+        ).fetchone()
+        assert tuple(redaction_history) == ("core", "archived")
         assert memory.list_tombstones(namespace=NAMESPACE)
 
         forget_claim = memory.remember(
@@ -813,7 +907,9 @@ def test_export_import_support_benchmark_release_readiness_and_compaction(tmp_pa
         }
 
         release = source.release_manifest(output_path=str(manifest_path))
-        assert release.version == "1.3.0"
+        assert release.version == software_version()
+        assert release.migration_range == f"{SUPPORTED_MIGRATION_FROM} -> {SCHEMA_VERSION}"
+        assert json.loads(manifest_path.read_text())["migration_range"] == release.migration_range
         assert manifest_path.exists()
 
         readiness = source.readiness_check(namespace=NAMESPACE)
@@ -844,13 +940,36 @@ def test_export_import_support_benchmark_release_readiness_and_compaction(tmp_pa
     finally:
         target.close()
 
+    reopened = Memory.open(str(tmp_path / "target.db"), namespace=NAMESPACE, auto_migrate=False)
+    try:
+        assert reopened.list_claims(namespace=NAMESPACE)
+        assert not reopened.store.connection.in_transaction
+    finally:
+        reopened.close()
+
+
+def test_release_migration_range_is_consistent_across_cli_and_http(tmp_path, capsys):
+    expected = f"{SUPPORTED_MIGRATION_FROM} -> {SCHEMA_VERSION}"
+    cli_db = tmp_path / "release-cli.db"
+    assert main(["release", "check", "--db", str(cli_db)]) == 0
+    assert json.loads(capsys.readouterr().out)["migration_range"] == expected
+
+    service, token = _service(tmp_path)
+    try:
+        status, body = _post(service, "/v1/release/manifest", token, {})
+        assert status == 200
+        assert body["data"]["version"] == software_version()
+        assert body["data"]["migration_range"] == expected
+    finally:
+        service.close()
+
 
 def test_m8_cli_and_http_surfaces(tmp_path, capsys):
     db_path = tmp_path / "cli.db"
     backup_path = tmp_path / "cli.alet"
     assert main(["init", "--db", str(db_path), "--protected"]) == 0
     init_status = json.loads(capsys.readouterr().out)
-    assert init_status["schema_version"] == "1.3.0"
+    assert init_status["schema_version"] == "1.3.1"
     assert main(["encrypt", "status", "--db", str(db_path)]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["enabled"] is True
@@ -941,7 +1060,7 @@ def test_m8_cli_and_http_surfaces(tmp_path, capsys):
             read_only_service.close()
 
         schema = openapi_schema()
-        assert schema["info"]["version"] == "1.3.0"
+        assert schema["info"]["version"] == software_version()
         assert "/v1/backups/create" in schema["paths"]
         assert "/v1/readiness/check" in schema["paths"]
     finally:

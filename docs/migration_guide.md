@@ -6,7 +6,7 @@ M12 upgrades the schema target to `1.3.0` and backfills governed LLM records:
 - LLM run, output, and safety-flag tables.
 - Public contracts for governed LLM providers, candidate extraction, provenance, and CLI commands.
 - Metadata-only persistent LLM output records by default; full output persistence requires explicit local opt-in with `ALETHEIA_LLM_OUTPUT_STORAGE=full`.
-- Compatibility and conformance records for the current v1.3.0 platform.
+- Compatibility and conformance records for the current v1.4.0 software platform.
 
 It does not call LLM providers, extract new memories, promote candidates, summarize evidence, resolve conflicts, or send any data over the network automatically.
 
@@ -36,8 +36,8 @@ M9 previously upgraded the schema target to `1.0.0` and backfilled stable platfo
 Plan and apply:
 
 ```bash
-aletheia migrate plan --db ./aletheia.db --target-version 1.3.0
-aletheia migrate apply --db ./aletheia.db --target-version 1.3.0 --backup-before --verify-after
+aletheia migrate plan --db ./aletheia.db --target-version 1.3.1
+aletheia migrate apply --db ./aletheia.db --target-version 1.3.1 --backup-before --verify-after
 ```
 
 After migration:

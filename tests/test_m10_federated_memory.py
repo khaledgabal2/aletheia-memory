@@ -13,6 +13,7 @@ from aletheia.core.errors import ValidationError
 from aletheia.core.time import utc_now
 from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService
+from aletheia.version import software_version
 from aletheia.service.http import AletheiaService, openapi_schema
 
 
@@ -50,7 +51,7 @@ def _copy_bundle(source: Path, destination: Path, overrides: dict[str, bytes]) -
 def test_m10_migration_backfills_federation_contracts_without_implicit_identity(tmp_path):
     memory = Memory.open(str(tmp_path / "m10.db"), namespace=NAMESPACE)
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         tables = {
             row["name"]
             for row in memory.store.connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
@@ -504,7 +505,7 @@ def test_m10_http_cli_openapi_and_sdk_surfaces(tmp_path, capsys):
     try:
         status, envelope = service.handle_http(method="GET", path="/v1/federation/status", headers=headers)
         assert status == 200
-        assert envelope["data"]["schema_version"] == "1.3.0"
+        assert envelope["data"]["schema_version"] == "1.3.1"
 
         status, envelope = service.handle_http(method="POST", path="/v1/federation/identity", headers=headers, body=_json({"display_name": "HTTP M10"}))
         assert status == 200
@@ -515,7 +516,7 @@ def test_m10_http_cli_openapi_and_sdk_surfaces(tmp_path, capsys):
         assert len(envelope["data"]) == 3
 
         schema = openapi_schema()
-        assert schema["info"]["version"] == "1.3.0"
+        assert schema["info"]["version"] == software_version()
         for path in [
             "/v1/federation/status",
             "/v1/peers/{peer_id}/trust",

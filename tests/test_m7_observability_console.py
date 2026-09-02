@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -10,6 +10,8 @@ from aletheia import Memory
 from aletheia.core.ids import new_id
 from aletheia.core.time import utc_now, utc_now_iso
 from aletheia.models import ServiceConfig
+from aletheia.service.auth import AuthService
+from aletheia.version import software_version
 from aletheia.service.http import AletheiaService, openapi_schema
 
 
@@ -61,6 +63,7 @@ def _issue_console_login_token(memory: Memory, *, namespaces: list[str] | None =
     now = utc_now()
     metadata = {
         "expires_at": (now + timedelta(minutes=30)).isoformat(),
+        "token_lookup": _hash(raw),
         "namespace_grants": namespaces or [NAMESPACE],
         "capabilities": capabilities or ["memory:read", "memory:review", "memory:admin", "memory:jobs", "memory:policy"],
         "privacy_ceiling": "secret",
@@ -107,7 +110,7 @@ def test_m7_migration_adds_operational_tables_without_user_side_effects(tmp_path
     memory = Memory.open(str(tmp_path / "migrate.db"), namespace=NAMESPACE)
     try:
         health = memory.health()
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == "1.3.1"
         tables = {
             row["name"]
             for row in memory.store.connection.execute(
@@ -281,6 +284,99 @@ def test_console_auth_session_csrf_dashboard_and_confirmed_actions(tmp_path):
         service.close()
 
 
+def test_console_login_secrets_are_never_persisted_as_idempotency_receipts(tmp_path):
+    service = _service(tmp_path, console_enabled=True)
+    try:
+        raw = _issue_console_login_token(service.memory)
+        status, envelope = _post(
+            service,
+            "/v1/console/login",
+            {"login_token": raw},
+            **{"Idempotency-Key": "never-store-login"},
+        )
+        assert status == 200
+        assert "session_token" in envelope["data"]
+        assert "Set-Cookie" in envelope["_headers"]
+        assert "Secure" not in envelope["_headers"]["Set-Cookie"]
+        assert service.memory.store.connection.execute(
+            "SELECT count(*) FROM idempotency_records WHERE idempotency_key='never-store-login'"
+        ).fetchone()[0] == 0
+    finally:
+        service.close()
+
+
+def test_console_lookup_is_constant_cost_cookie_is_secure_remotely_and_headers_are_internal(
+    tmp_path, monkeypatch
+):
+    service = _service(tmp_path, console_enabled=True)
+    try:
+        for index in range(20):
+            now = utc_now()
+            with service.memory.store.transaction():
+                service.memory.store.connection.execute(
+                    """
+                    INSERT INTO console_sessions (
+                        id, client_id, token_id, namespace_grants_json,
+                        capabilities_json, privacy_ceiling, created_at, expires_at,
+                        revoked_at, metadata_json
+                    ) VALUES (?, NULL, NULL, ?, ?, 'personal', ?, ?, NULL, ?)
+                    """,
+                    (
+                        f"csess_noise_{index}",
+                        json.dumps([NAMESPACE]),
+                        json.dumps(["memory:read"]),
+                        now.isoformat(),
+                        (now + timedelta(hours=1)).isoformat(),
+                        json.dumps(
+                            {
+                                "session_token_lookup": _hash(f"noise-{index}"),
+                                "session_token_hash": AuthService.hash_secret(f"noise-{index}"),
+                            }
+                        ),
+                    ),
+                )
+
+        raw = _issue_console_login_token(service.memory)
+        service.config = replace(service.config, allow_remote=True)
+        status, login = _post(service, "/v1/console/login", {"login_token": raw})
+        assert status == 200
+        assert "Secure" in login["_headers"]["Set-Cookie"]
+        session_token = login["data"]["session_token"]
+        csrf_token = login["data"]["csrf_token"]
+
+        original = AuthService.verify_secret_hash
+        calls = []
+
+        def counting(value, stored):
+            calls.append(stored)
+            return original(value, stored)
+
+        monkeypatch.setattr(AuthService, "verify_secret_hash", staticmethod(counting))
+        status, _ = _get(
+            service, "/v1/console/session", **{"X-Console-Session": session_token}
+        )
+        assert status == 200
+        assert len(calls) <= 1
+
+        status, _ = _post(
+            service,
+            f"/v1/dashboard/preferences?namespace={NAMESPACE}",
+            {"preference_key": "_headers", "value": {"X-Injected": "unsafe"}},
+            **{"X-Console-Session": session_token, "X-CSRF-Token": csrf_token},
+        )
+        assert status == 200
+        status, preferences = _get(
+            service,
+            f"/v1/dashboard/preferences?namespace={NAMESPACE}",
+            **{"X-Console-Session": session_token},
+        )
+        assert status == 200
+        assert "_headers" not in preferences
+        assert preferences["data"]["_headers"] == {"X-Injected": "unsafe"}
+    finally:
+        service.close()
+
+
 def test_dashboard_saved_views_delete_and_openapi_include_m7_paths(tmp_path):
     service = _service(tmp_path, console_enabled=True)
     try:
@@ -302,12 +398,109 @@ def test_dashboard_saved_views_delete_and_openapi_include_m7_paths(tmp_path):
         assert deleted["data"]["deleted"] == view_id
 
         paths = openapi_schema()["paths"]
-        assert openapi_schema()["info"]["version"] == "1.3.0"
+        assert openapi_schema()["info"]["version"] == software_version()
         assert "/v1/dashboard/overview" in paths
         assert "/v1/reviews/{review_task_id}/resolve" in paths
         assert "/v1/traces/retrieval" in paths
         assert "/v1/metrics/latest" in paths
         assert "/v1/reports/export" in paths
+    finally:
+        service.close()
+
+
+def test_report_export_cannot_escape_service_safe_roots(tmp_path):
+    service = _service(tmp_path)
+    try:
+        auth = AuthService(service.memory)
+        client = auth.create_client(name="report-reader", client_type="test")
+        _, raw = auth.create_token(
+            client_id=client.id,
+            namespace_grants=[NAMESPACE],
+            capabilities=["memory:read"],
+        )
+        escaped = tmp_path.parent / f"{tmp_path.name}-escaped-report.md"
+        status, body = _post(service, "/v1/reports/export", {
+            "namespace": NAMESPACE,
+            "report_type": "memory_health",
+            "output_path": str(escaped),
+        }, Authorization=f"Bearer {raw}")
+        assert status == 403
+        assert body["error"]["code"] == "forbidden"
+        assert not escaped.exists()
+
+        status, default_report = _post(service, "/v1/reports/export", {
+            "namespace": NAMESPACE,
+            "report_type": "memory_health",
+        }, Authorization=f"Bearer {raw}")
+        assert status == 200
+        default_path = Path(default_report["data"]["file_path"])
+        assert default_path.parent == tmp_path / "reports"
+        assert default_path.is_file()
+
+        admin = auth.create_client(name="report-admin", client_type="test")
+        _, admin_raw = auth.create_token(
+            client_id=admin.id,
+            namespace_grants=[NAMESPACE],
+            capabilities=["memory:read", "memory:admin"],
+        )
+        allowed = tmp_path / "report.md"
+        status, _ = _post(service, "/v1/reports/export", {
+            "namespace": NAMESPACE,
+            "report_type": "memory_health",
+            "output_path": str(allowed),
+        }, Authorization=f"Bearer {admin_raw}")
+        assert status == 200
+        assert allowed.is_file()
+
+        status, body = _post(service, "/v1/reports/export", {
+            "namespace": NAMESPACE,
+            "report_type": "memory_health",
+            "output_path": [str(tmp_path / "not-a-string.md")],
+        }, Authorization=f"Bearer {admin_raw}")
+        assert status == 400
+        assert body["error"]["code"] == "validation_error"
+
+        database = Path(service.config.db_path)
+        for protected in (database, Path(str(database) + "-wal"), Path(str(database) + "-shm")):
+            status, body = _post(service, "/v1/reports/export", {
+                "namespace": NAMESPACE,
+                "report_type": "memory_health",
+                "output_path": str(protected),
+            }, Authorization=f"Bearer {admin_raw}")
+            assert status == 400
+            assert body["error"]["code"] == "validation_error"
+        assert service.memory.health()["status"] == "ok"
+        operation = openapi_schema()["paths"]["/v1/reports/export"]["post"]
+        assert operation["x-permissions"]["conditional"]["output_path"] == ["memory:admin"]
+    finally:
+        service.close()
+
+
+def test_notification_mutation_requires_target_namespace_access(tmp_path):
+    service = _service(tmp_path)
+    try:
+        notification = service.memory.create_notification(
+            "user/other",
+            notification_type="review_task",
+            title="Other namespace",
+            message="Must not be mutated cross-namespace.",
+        )
+        auth = AuthService(service.memory)
+        client = auth.create_client(name="namespace-reader", client_type="test")
+        _, raw = auth.create_token(
+            client_id=client.id,
+            namespace_grants=[NAMESPACE],
+            capabilities=["memory:read"],
+        )
+        status, body = _post(
+            service,
+            f"/v1/notifications/{notification.id}/dismiss",
+            {},
+            Authorization=f"Bearer {raw}",
+        )
+        assert status == 403
+        assert body["error"]["code"] == "forbidden"
+        assert service.memory.get_notification(notification.id).status == "unread"
     finally:
         service.close()
 

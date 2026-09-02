@@ -219,15 +219,26 @@ class SQLiteFTSRetriever:
             clauses.append("claims_fts MATCH ?")
             params.append(match)
 
-        sql = f"""
-            SELECT c.*
-            FROM claims_fts
-            JOIN claims c ON c.id = claims_fts.claim_id
-            WHERE {' AND '.join(clauses)}
-            GROUP BY c.id
-            ORDER BY c.created_at DESC, c.id ASC
-            LIMIT ?
-        """
+        if match:
+            sql = f"""
+                SELECT c.*
+                FROM claims_fts
+                JOIN claims c ON c.id = claims_fts.claim_id
+                WHERE {' AND '.join(clauses)}
+                GROUP BY c.id
+                ORDER BY c.created_at DESC, c.id ASC
+                LIMIT ?
+            """
+        else:
+            # An empty search is a bounded recent-claims listing and does not
+            # scan the FTS virtual table.
+            sql = f"""
+                SELECT c.*
+                FROM claims c
+                WHERE {' AND '.join(clauses)}
+                ORDER BY c.created_at DESC, c.id ASC
+                LIMIT ?
+            """
         params.append(candidate_limit)
         rows = self.connection.execute(sql, params).fetchall()
         claim_ids = [row["id"] for row in rows]

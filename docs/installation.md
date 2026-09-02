@@ -1,8 +1,10 @@
 # Installation
 
-This guide covers installing Aletheia v1.3.1, verifying the command line,
-initializing a local database, and finding the help documents that ship with
-the package.
+This guide covers Aletheia 1.4.0, verifying the command line,
+initializing a local database, and finding installed help. Follow the
+[zero-model quickstart](quickstart.md) for the primary first-run journey:
+evidence, candidate, explicit review, lexical context, provenance and reopen.
+Memory needs neither Desktop nor Relay, and the core demo needs no models.
 
 ## Requirements
 
@@ -14,12 +16,12 @@ the package.
 The Python package name is `aletheia-memory`. The console script is named
 `aletheia`.
 
-## Install From GitHub
+## Install From PyPI
 
-Install the public repository directly:
+Install the published package:
 
 ```bash
-python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
+python -m pip install aletheia-memory
 ```
 
 Then verify the CLI:
@@ -29,23 +31,44 @@ aletheia --help
 aletheia docs list
 ```
 
-## Install From PyPI
+## 1.4.0 Upgrade And Packaged Starters
 
-Install the published `aletheia-memory` package from PyPI:
+Use `python -m pip install aletheia-memory==1.4.0` for the published release. For
+pre-publication review, install the reviewed `aletheia_memory-1.4.0-py3-none-any.whl`
+or matching source archive by local path.
+
+Before opening any existing database, read the
+[migration/backup guide](v1_4_0_migration_guide.md). Storage moves from 1.3.0 to
+1.3.1; older software cannot open the upgraded database. Keep the pre-upgrade
+backup and old binary for recovery. From the 1.4.0 environment:
 
 ```bash
-python -m pip install aletheia-memory
+aletheia examples create --type embedded --output ./memory-demo
+cd memory-demo
+python memory_demo.py
+aletheia doctor --read-only --db ./aletheia-demo.db --namespace user/demo --query architecture
 ```
 
-If pip reports that no matching distribution exists, install from GitHub or a
-release wheel instead.
+The starter creates a new database itself and refuses an existing one. See
+[examples](examples.md) for the separate scoped HTTP agent/operator demo.
+
+## Install From GitHub
+
+For an unreleased source checkout, install the public repository directly:
+
+```bash
+python -m pip install "git+https://github.com/khaledgabal2/aletheia-memory.git"
+```
+
+The source checkout can contain unreleased changes. Prefer the PyPI package for
+the published version.
 
 ## Install From A Release Wheel
 
 Install a downloaded release artifact into your environment:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.3.1-py3-none-any.whl
+python -m pip install ./dist/aletheia_memory-1.4.0-py3-none-any.whl
 ```
 
 Then verify the CLI:
@@ -81,10 +104,13 @@ aletheia init --db ./aletheia.db
 ```
 
 The command creates or migrates the database and prints the current health
-record. For repository development, use:
+record. It is a write operation, including when the file already exists.
+The 1.4 initialization mode reserves a fresh path and refuses existing files
+or symlinks; read-only diagnostics never initialize a missing database:
 
 ```bash
-uv run --extra dev aletheia init --db ./aletheia.db
+aletheia init --new --db ./fresh-demo.db
+aletheia doctor --read-only --db ./fresh-demo.db
 ```
 
 ## Verify Installed Help
@@ -114,9 +140,11 @@ aletheia docs build --db ./aletheia.db --output ./site
 The build command also writes `openapi.generated.json` when API reference
 generation is enabled.
 
-## First Memory Check
+## Trusted Operator CLI Reference
 
-Store a reviewed explicit memory:
+For the primary first-run experience, use the Python quickstart above. This
+lower-level CLI example writes an already-reviewed, active memory directly;
+it is not the candidate-first agent workflow:
 
 ```bash
 aletheia remember \
@@ -124,8 +152,8 @@ aletheia remember \
   --namespace user/default \
   --type preference \
   --subject user \
-  --predicate prefers_response_style \
-  --object "practical and direct"
+  --predicate prefers \
+  --object "careful architecture notes"
 ```
 
 Search it:
@@ -134,7 +162,8 @@ Search it:
 aletheia search \
   --db ./aletheia.db \
   --namespace user/default \
-  "response style"
+  --mode lexical \
+  "architecture"
 ```
 
 Build context for an agent:
@@ -143,7 +172,8 @@ Build context for an agent:
 aletheia context-pack \
   --db ./aletheia.db \
   --namespace user/default \
-  "How should I answer?"
+  --mode lexical \
+  "architecture"
 ```
 
 ## Development Verification

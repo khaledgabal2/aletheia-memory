@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import pytest
+
 from aletheia import Memory
+from aletheia.core.errors import ValidationError
 
 
 def test_health_remember_retrieve_and_audit(tmp_path):
     memory = Memory.open(str(tmp_path / "aletheia.db"))
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         claim = memory.remember(
             namespace="user/default",
             memory_type="preference",
@@ -30,6 +33,23 @@ def test_health_remember_retrieve_and_audit(tmp_path):
         assert audit["claim"]["id"] == claim.id
         assert audit["evidence"][0]["id"] == claim.evidence_ids[0]
         assert any(entry["action"] == "claim.write" for entry in audit["audit"])
+    finally:
+        memory.close()
+
+
+@pytest.mark.parametrize("privacy_level", ["Secret", "unknown", "", None, []])
+def test_core_event_write_rejects_unknown_privacy_levels(tmp_path, privacy_level):
+    memory = Memory.open(str(tmp_path / "privacy.db"))
+    try:
+        with pytest.raises(ValidationError, match="privacy_level"):
+            memory.write_event(
+                source_type="unit",
+                content="must not be stored with an unknown privacy level",
+                privacy_level=privacy_level,
+            )
+        assert memory.store.connection.execute(
+            "SELECT count(*) FROM evidence_events"
+        ).fetchone()[0] == 0
     finally:
         memory.close()
 
@@ -185,7 +205,7 @@ def test_migrations_are_idempotent_and_create_mvp_tables(tmp_path):
 
     memory = Memory.open(db_path)
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         rows = memory.store.connection.execute(
             """
             SELECT name

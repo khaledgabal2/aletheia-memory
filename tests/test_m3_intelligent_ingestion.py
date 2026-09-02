@@ -138,7 +138,14 @@ def test_candidate_edits_cannot_bypass_review_or_validation_gates(tmp_path):
                 reason="Attempt invalid confidence.",
                 edits={"suggested_confidence": 1.5},
             )
+        with pytest.raises(ValidationError, match="Unknown candidate review decision"):
+            memory.review_candidate(
+                candidate.id,
+                decision="promote",
+                reason="Promotion must create a claim through promote_candidate.",
+            )
         assert memory.read_candidate(candidate.id).candidate_status == "pending_review"
+        assert memory.list_claims(namespace=NAMESPACE) == []
     finally:
         memory.close()
 
@@ -435,7 +442,7 @@ def test_migration_m2_to_m3_is_idempotent_and_does_not_extract_or_index(tmp_path
     first.close()
     second = Memory.open(db)
     try:
-        assert second.health()["schema_version"] == "1.3.0"
+        assert second.health()["schema_version"] == "1.3.1"
         assert second.read_claim(claim.id).object == "memory integrity"
         names = {
             row["name"]

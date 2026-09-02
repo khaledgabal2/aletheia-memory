@@ -24,10 +24,37 @@ aletheia docs show index
 | Command | Purpose |
 | --- | --- |
 | `init` | Create or migrate a database and optionally enable protected mode. |
+| `init --new` | 1.4 development: exclusively create a new database; reject an existing file or symlink. |
 | `migrate` | Show current migration health. |
 | `migrate plan` | Preview migration work. |
 | `migrate apply` | Apply migrations, optionally with backup and verification. |
 | `migrate verify` | Verify schema and optional namespace integrity. |
+
+Memory 1.4.0 adds `doctor --read-only`. It inspects a local database
+without creation, migration or recorded diagnostics. `--config` reads existing
+service settings; `--db` overrides their database path. Use `--namespace` and
+`--query` for lexical first-run checks. Database inspection is trusted operator
+access, not an agent permission sandbox.
+
+`doctor --read-only --service-url http://127.0.0.1:8765` explicitly performs
+bounded service reads instead of opening a local database. `--token-env` selects
+an environment variable (default `ALETHEIA_TOKEN`); `--claim` checks a selected
+resource without printing its content. URLs must use a literal loopback address;
+redirects and proxies are disabled. Do not combine service mode with `--db` or
+`--config`. Remote deployments and provider model tests are outside this mode.
+
+Optional `--embedding-provider`/`--llm-provider` inspect built-in configuration
+without loading plugins. Only `--probe-provider` makes an explicit local endpoint
+reachability request; it submits no model input and does not validate model output.
+Unavailable optional providers are warnings. Exit 1 means a setup/read error;
+warnings such as pending review, no match or absent optional models return 0.
+
+`examples create --type embedded|http-agent --output NEW_DIRECTORY` copies packaged
+starters without opening any database. All example/adapter generators refuse an
+existing output directory, including symlinks; no overwrite mode is provided.
+Legacy `doctor` still records an operational diagnostic run and may migrate when
+opening Memory. Existing `init`, examples tracking and APIs otherwise retain
+their behavior. New flags/starters are not available in public 1.3.1.
 
 ## Memory Read And Write
 

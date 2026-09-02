@@ -108,7 +108,7 @@ class AuthService:
         if client_type not in CLIENT_TYPES:
             raise validation_error(f"Unknown client_type: {client_type}")
         client_id = new_id("cli")
-        with self.connection:
+        with self.memory.store.transaction():
             self.connection.execute(
                 """
                 INSERT INTO api_clients (id, name, client_type, status, created_at, metadata_json)
@@ -139,7 +139,7 @@ class AuthService:
 
     def disable_client(self, client_id: str) -> ApiClient:
         self.get_client(client_id)
-        with self.connection:
+        with self.memory.store.transaction():
             self.connection.execute(
                 "UPDATE api_clients SET status = 'disabled' WHERE id = ?",
                 (client_id,),
@@ -172,7 +172,7 @@ class AuthService:
         token_id = new_id("tok")
         token_prefix = raw_token[:12]
         now = utc_now_iso()
-        with self.connection:
+        with self.memory.store.transaction():
             self.connection.execute(
                 """
                 INSERT INTO api_tokens (
@@ -225,7 +225,7 @@ class AuthService:
 
     def revoke_token(self, token_id: str, *, reason: str | None = None) -> ApiToken:
         self.get_token(token_id)
-        with self.connection:
+        with self.memory.store.transaction():
             self.connection.execute(
                 """
                 UPDATE api_tokens
@@ -293,11 +293,20 @@ class AuthService:
         for row in rows:
             if not self.verify_secret_hash(raw_token, row["token_hash"]):
                 continue
+            if len(row["token_hash"]) == 64 and "$" not in row["token_hash"]:
+                # Keep the supported 1.3 migration bridge read-only: once a
+                # legacy token proves possession, immediately replace its
+                # unsalted verifier with the current versioned hash.
+                with self.memory.store.transaction(immediate=True):
+                    self.connection.execute(
+                        "UPDATE api_tokens SET token_hash = ? WHERE id = ? AND token_hash = ?",
+                        (self.hash_secret(raw_token), row["id"], row["token_hash"]),
+                    )
             token = self.get_token(row["id"])
             if token.status != "active":
                 raise unauthorized("Token is not active.")
             if token.expires_at and parse_iso(token.expires_at) and parse_iso(token.expires_at) <= utc_now():
-                with self.connection:
+                with self.memory.store.transaction():
                     self.connection.execute(
                         "UPDATE api_tokens SET status = 'expired' WHERE id = ?",
                         (token.id,),
@@ -315,6 +324,31 @@ class AuthService:
         if capability in context.capabilities or "memory:admin" in context.capabilities:
             return
         raise forbidden(f"Capability required: {capability}", {"required_capability": capability})
+
+    def current_principal(self, context: AuthContext) -> dict:
+        """Allowlist self metadata; never serialize ApiToken or arbitrary metadata."""
+        mode = "bearer" if context.token else "local_tokenless"
+        principal = None
+        if context.client is not None:
+            principal = {
+                "id": context.client.id,
+                "name": context.client.name,
+                "client_type": context.client.client_type,
+            }
+        elif context.token and context.token.metadata.get("console_session"):
+            mode = "console_session"
+            # A console session need not represent a registered API client.
+        granted = sorted(set(context.capabilities))
+        return {
+            "authentication_mode": mode,
+            "authenticated": context.token is not None,
+            "principal": principal,
+            "granted_capabilities": granted,
+            "capabilities": sorted(CAPABILITIES) if "memory:admin" in granted else granted,
+            "namespace_grants": sorted(set(context.namespace_grants)),
+            "privacy_ceiling": context.privacy_ceiling,
+            "expires_at": context.token.expires_at if context.token else None,
+        }
 
     def require_namespace(
         self,

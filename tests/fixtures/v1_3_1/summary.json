@@ -1,0 +1,31 @@
+{
+  "baseline_revision": "1cb3e607450b2d0d345cc3c06d73223b7f3e3fe4",
+  "full_schema_sha256": "c4eb3bfe1863bfcdc855c4c33560ac4c2222efedaba92c5279a5b619b066aaad",
+  "legacy_client_compatible": true,
+  "lifecycle": {
+    "candidate_count": 1,
+    "context_contains_claim": true,
+    "elapsed_seconds": 0.04,
+    "evidence_preserved_after_reopen": true,
+    "input": "User prefers careful architecture notes.",
+    "pending_results": 0,
+    "query": "architecture",
+    "retrieval_matches_claim": true,
+    "review": "explicit automated fixture decision",
+    "timing_scope": "automated lifecycle only; excludes installation and human reading/review"
+  },
+  "limitations": [
+    "Baseline evidence, not v1.4.0 conformance",
+    "No browser or migration verification yet",
+    "Synthetic IDs/times are retained; responses are observations, not byte-for-byte golden outputs"
+  ],
+  "openapi": "3.1.0",
+  "operation_ids": 0,
+  "operations": 213,
+  "path_query_parameters": 0,
+  "paths": 199,
+  "python": "3.13.13",
+  "schema_capture": "data extracted from real HTTP /v1/openapi.json envelope; selected paths retained",
+  "schemas": 2,
+  "unrestricted_request_bodies": 121
+}

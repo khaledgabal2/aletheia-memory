@@ -1,18 +1,18 @@
 # Near-Future Changes
 
-This document separates the current v1.3.1 package release from likely future directions.
+This document separates the current v1.4.0 source release from likely future directions.
 
 Current implementation source:
 
-- `pyproject.toml` declares package version `1.3.1`.
-- `aletheia/storage/sqlite.py` declares `SCHEMA_VERSION = "1.3.0"`.
+- `pyproject.toml` declares package version `1.4.0`.
+- `aletheia/storage/sqlite.py` declares `SCHEMA_VERSION = "1.3.1"`.
 - `docs/v1_public_contracts.md` defines stable v1 surfaces and semver policy.
 - `docs/m10_federated_memory_contract.md` is implemented as the M10 federation-beta milestone.
 - `docs/M11_Embedding_Integration_contract.md` is implemented as the M11 production semantic retrieval milestone.
 - `docs/M12_LLM_Integration_contract.md` is implemented as the M12 governed LLM memory formation milestone.
 - The current CLI, schema, HTTP routes, SDK, tests, and live scorecards include M10 federation, M11 semantic retrieval, and M12 LLM governance.
 
-## Stable In v1.3.0
+## Stable In v1.4.0
 
 The repository treats these as stable public contracts:
 
@@ -21,7 +21,7 @@ The repository treats these as stable public contracts:
 - MCP tool names and request shapes published by `aletheia mcp --list-tools`.
 - Stable-platform CLI groups: `doctor`, `compatibility`, `plugins`, `conformance`, `adapters`, `docs`, `examples`, `contracts`, `deprecations`, and `v1-gate`.
 - Archive and context-pack formats.
-- Database migration behavior from `1.0.x` to `1.3.0`.
+- Database migration behavior for the tested release path from storage schema `1.3.0` to `1.3.1`, including encrypted backup and recovery verification.
 
 M10 federation is present as an experimental federation-beta surface. It is additive and local-first.
 
@@ -124,4 +124,4 @@ Future milestones may add relay transports, richer peer discovery, stronger cryp
 
 ## Short Version
 
-Aletheia v1.3.0 is a local, stable, auditable memory platform with federation-beta support, production semantic retrieval, and governed LLM memory formation: embeddings improve recall and LLMs can draft candidates or summaries without turning Aletheia into a cloud service, global truth store, or unreviewed truth engine.
+Aletheia v1.4.0 is a local, stable, auditable memory platform with federation-beta support, production semantic retrieval, and governed LLM memory formation: embeddings improve recall and LLMs can draft candidates or summaries without turning Aletheia into a cloud service, global truth store, or unreviewed truth engine.

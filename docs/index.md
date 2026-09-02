@@ -1,6 +1,7 @@
 # Aletheia Documentation Index
 
-This is the public help map for Aletheia v1.3.1 on `main`.
+This help map covers Aletheia 1.4.0 and the compatible public v1.3.1 APIs.
+The primary Python quickstart works on both.
 Aletheia is a local, auditable memory system for AI agents. The production
 baseline is intentionally generic: product-specific integration layers belong
 on their own branches or forks.
@@ -26,11 +27,11 @@ aletheia docs build --db ./aletheia.db --output ./site
 New users should read:
 
 1. `installation.md`
-2. `introduction.md`
-3. `core_concepts.md`
-4. `memory_lifecycle.md`
-5. `interfaces.md`
-6. `cli_reference.md`
+2. [`quickstart.md`](quickstart.md): create, inspect, approve and recall the sample
+3. [`examples.md`](examples.md): connect a scoped HTTP agent with a separate operator
+4. `core_concepts.md` and `memory_lifecycle.md`
+5. `integration_guide.md`: optional semantic/LLM paths and other interfaces
+6. `security_privacy_guide.md` and `operations_guide.md` when operating a service
 
 Agent and tool integrators should read:
 
@@ -61,6 +62,7 @@ Plugin authors should read:
 | Document | Purpose |
 | --- | --- |
 | `installation.md` | Install Aletheia, verify the CLI, initialize a database, and locate installed docs. |
+| `quickstart.md` | Complete the model-free, explicitly reviewed Python lifecycle and verify persistence. |
 | `introduction.md` | Explain what Aletheia is, what it is not, and the trust boundaries. |
 | `architecture.md` | Describe the implemented layers, core modules, storage schema, and data flow. |
 | `core_concepts.md` | Define namespaces, evidence, candidates, claims, confidence, conflicts, context packs, and audit. |
@@ -79,7 +81,7 @@ Plugin authors should read:
 | `plugin_developer_guide.md` | Explain governed plugin manifests, permissions, compatibility, and conformance. |
 | `adapter_developer_guide.md` | Explain how to build and certify agent adapters. |
 | `examples.md` | Show example scaffolding and docs validation commands. |
-| `near_future_changes.md` | Summarize current v1.3.0 status and likely next changes. |
+| `near_future_changes.md` | Summarize current v1.4.0 status and likely next changes. |
 | `v1_public_contracts.md` | Document stable public contracts and compatibility expectations. |
 
 ## Repository Community Files
@@ -113,6 +115,32 @@ Aletheia is easiest to understand as layers:
 | Federation | `aletheia/core/federation.py` | `m10_federated_memory_contract.md`, `near_future_changes.md` |
 
 ## Contracts And Historical Design Docs
+
+The 1.4.0 design, prerelease evidence and final verification are recorded here:
+
+- [Release plan](v1_4_0_contract_hardening_and_developer_experience_plan.md)
+- [Phase 0 scope and decisions](v1_4_0_phase0_decisions.md)
+- [Phase 0 verification evidence](v1_4_0_phase0_evidence.md)
+- [Discovery foundation](v1_4_0_discovery_contract.md)
+- [Phase 1 verification evidence](v1_4_0_phase1_evidence.md)
+- [Read contract](v1_4_0_read_contract.md)
+- [Phase 2 verification evidence](v1_4_0_phase2_evidence.md)
+- [Phase 3 implementation decisions](v1_4_0_phase3_decisions.md)
+- [Phase 3 verification evidence](v1_4_0_phase3_evidence.md)
+- [Governed review contract](v1_4_0_review_contract.md)
+- [Review migration design](v1_4_0_review_migration_design.md)
+- [Upgrade and recovery guide](v1_4_0_migration_guide.md)
+- [Phase 4 verification evidence](v1_4_0_phase4_evidence.md)
+- [Candidate-first agent contract](v1_4_0_agent_onboarding_contract.md)
+- [Optional tested local model recipes](v1_4_0_local_model_recipes.md)
+- [Phase 5 verification evidence](v1_4_0_phase5_evidence.md)
+- [Release-candidate verification](v1_4_0_phase6_evidence.md)
+- [Final pre-publication verification](v1_4_0_final_verification.md)
+- [Final-review corrections and expanded verification](v1_4_0_review_closure.md)
+- [External-audit closure and latest verification](v1_4_0_external_audit_closure.md)
+- [Final independent re-review closure](v1_4_0_rereview_closure.md)
+- [Release approval and handoff](v1_4_0_release_handoff.md)
+- [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 
 The milestone contracts are included for maintainers and advanced users who
 need to understand why the implemented surfaces exist. They are not the fastest

@@ -7,8 +7,9 @@ import json
 import socket
 import sqlite3
 import threading
+import time
 import urllib.error
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -17,6 +18,7 @@ from aletheia.adapters import HttpAgentMemoryAdapter
 from aletheia.client import (
     AletheiaClient,
     AletheiaForbiddenError,
+    AletheiaTransportError,
     AletheiaValidationError,
     AsyncAletheiaClient,
 )
@@ -108,7 +110,7 @@ def test_m6_migration_adds_service_tables_without_tokens_or_daemons(tmp_path):
         )
         memory.store.migrate()
         health = memory.health()
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == "1.3.1"
         names = {
             row["name"]
             for row in memory.store.connection.execute(
@@ -278,6 +280,10 @@ def test_auth_tokens_are_hashed_and_enforce_revoke_expiry_capability_namespace_a
         {"namespace": NAMESPACE, "query": "legacy token"},
     )
     assert status == 200
+    upgraded = service.memory.store.connection.execute(
+        "SELECT token_hash FROM api_tokens WHERE id = ?", (legacy_token.id,)
+    ).fetchone()["token_hash"]
+    assert upgraded.startswith("pbkdf2_sha256$")
 
 
 def test_no_auth_context_is_least_privilege_for_local_namespace(tmp_path):
@@ -309,6 +315,32 @@ def test_no_auth_context_is_least_privilege_for_local_namespace(tmp_path):
     status, envelope = _post(service, "/v1/search", None, {"namespace": "user/other", "query": "anything"})
     assert status == 403
     assert envelope["error"]["code"] == "forbidden"
+
+
+def test_remember_validates_privacy_and_uses_one_level_for_evidence_and_candidate(tmp_path):
+    service, token = _service(tmp_path, privacy_ceiling="public")
+    try:
+        payload = {**_remember_payload(), "privacy_level": "public"}
+        status, envelope = _post(service, "/v1/remember", token, payload)
+        assert status == 200
+        candidate_id = envelope["data"]["candidate"]["id"]
+        candidate = service.memory.read_candidate(candidate_id)
+        event = service.memory.read_event(candidate.evidence_ids[0])
+        assert candidate.privacy_level == event.privacy_level == "public"
+
+        status, envelope = _post(
+            service, "/v1/remember", token, {**payload, "privacy_level": "classified"}
+        )
+        assert status == 400
+        assert envelope["error"]["code"] == "validation_error"
+
+        status, envelope = _post(
+            service, "/v1/remember", token, {**payload, "privacy_level": "personal"}
+        )
+        assert status == 403
+        assert envelope["error"]["code"] == "forbidden"
+    finally:
+        service.close()
 
 
 def test_claim_get_requires_capability_before_existence_lookup(tmp_path):
@@ -375,21 +407,37 @@ def test_http_boundary_rejects_oversized_and_malformed_lengths_before_body_read(
         thread.start()
 
         with socket.create_connection((host, port), timeout=2) as sock:
-            sock.sendall(b"POST /v1/remember HTTP/1.1\r\nHost: localhost\r\nContent-Length: 9\r\n\r\n")
+            sock.sendall(f"POST /v1/remember HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Length: 9\r\n\r\n".encode())
             response = b"".join(iter(lambda: sock.recv(4096), b""))
         assert b"413" in response
         assert b"payload_too_large" in response
 
         with socket.create_connection((host, port), timeout=2) as sock:
-            sock.sendall(b"POST /v1/remember HTTP/1.1\r\nHost: localhost\r\nContent-Length: nope\r\n\r\n")
+            sock.sendall(f"POST /v1/remember HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Length: nope\r\n\r\n".encode())
             response = b"".join(iter(lambda: sock.recv(4096), b""))
         assert b"400" in response
         assert b"validation_error" in response
+
+        with socket.create_connection((host, port), timeout=2) as sock:
+            sock.sendall(
+                f"PATCH /v1/unknown HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Length: 0\r\n\r\n".encode()
+            )
+            response = b"".join(iter(lambda: sock.recv(4096), b""))
+        assert b"404" in response
+        assert b"not_found" in response
+
+        with socket.create_connection((host, port), timeout=2) as sock:
+            sock.sendall(
+                f"POST /v1/remember HTTP/1.1\r\nHost: localhost:{port}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n".encode()
+            )
+            response = b"".join(iter(lambda: sock.recv(4096), b""))
+        assert b"400" in response
+        assert b"Transfer-Encoding" in response
     finally:
         daemon.shutdown()
 
 
-def test_http_catch_all_does_not_return_internal_exception_text(monkeypatch, tmp_path):
+def test_http_catch_all_does_not_return_internal_exception_text(monkeypatch, tmp_path, caplog):
     service, token = _service(tmp_path)
     assert token is not None
 
@@ -402,6 +450,38 @@ def test_http_catch_all_does_not_return_internal_exception_text(monkeypatch, tmp
     assert envelope["error"]["code"] == "internal_error"
     assert envelope["error"]["message"] == "Internal server error."
     assert "secret.db" not in json.dumps(envelope)
+    assert "Unhandled service request failure" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "path,payload",
+    [
+        ("/v1/context-pack", {"namespace": NAMESPACE, "query": "m6", "token_budget": "many"}),
+        ("/v1/retrieve", {"namespace": NAMESPACE, "query": "m6", "limit": []}),
+        ("/v1/retrieve", {"namespace": NAMESPACE, "query": "m6", "limit": 1.5}),
+        ("/v1/remember", {**_remember_payload(), "confidence": "certain"}),
+        ("/v1/remember", {**_remember_payload(), "confidence": float("nan")}),
+    ],
+)
+def test_malformed_numeric_fields_return_validation_envelopes(tmp_path, path, payload):
+    service, token = _service(tmp_path)
+    try:
+        status, envelope = _post(service, path, token, payload)
+        assert status == 400
+        assert envelope["error"]["code"] == "validation_error"
+    finally:
+        service.close()
+
+    service, token = _service(
+        tmp_path / "query",
+        capabilities=[*DEFAULT_LOCAL_AGENT_CAPABILITIES, "memory:review"],
+    )
+    try:
+        status, envelope = _get(service, f"/v1/candidates?namespace={NAMESPACE}&limit=abc", token)
+        assert status == 400
+        assert envelope["error"]["code"] == "validation_error"
+    finally:
+        service.close()
 
 
 def test_http_api_envelopes_idempotency_rate_limit_audit_and_admin_gates(tmp_path):
@@ -440,8 +520,9 @@ def test_http_api_envelopes_idempotency_rate_limit_audit_and_admin_gates(tmp_pat
     assert status == 403
 
     status, audit = _get(service, f"/v1/audit/candidate/{candidate_id}", token)
-    assert status == 200
-    assert any(entry["action"] == "service.remember_candidate" for entry in audit["data"]["audit"])
+    # Candidate inspection, including the audit view, requires review capability.
+    assert status == 403
+    assert audit["error"]["code"] == "forbidden"
     status, health_report = _get(service, f"/v1/health-report?namespace={NAMESPACE}", token)
     assert status == 403
     assert health_report["error"]["code"] == "forbidden"
@@ -449,6 +530,61 @@ def test_http_api_envelopes_idempotency_rate_limit_audit_and_admin_gates(tmp_pat
     rows = service.service_requests(limit=20)
     assert any(row["request_id"] == "req_unit" for row in rows)
     assert all(row["request_hash"] is None for row in rows)
+
+
+def test_generic_idempotency_is_scoped_to_the_authenticated_credential(tmp_path):
+    service, first_raw = _service(tmp_path, rate_limit_per_minute=20)
+    try:
+        first_context = service.auth.authenticate(f"Bearer {first_raw}")
+        _, second_raw = service.auth.create_token(
+            client_id=first_context.client_id,
+            namespace_grants=[NAMESPACE],
+            capabilities=list(first_context.capabilities),
+            privacy_ceiling=first_context.privacy_ceiling,
+        )
+        payload = _remember_payload()
+        first = _post(service, "/v1/remember", first_raw, payload, **{"Idempotency-Key": "per-credential"})
+        second = _post(service, "/v1/remember", second_raw, payload, **{"Idempotency-Key": "per-credential"})
+        assert first[0] == second[0] == 200
+        assert first[1]["data"]["candidate"]["id"] != second[1]["data"]["candidate"]["id"]
+        rows = service.memory.store.connection.execute(
+            "SELECT client_id, status FROM idempotency_records WHERE idempotency_key='per-credential'"
+        ).fetchall()
+        assert len(rows) == 2
+        assert len({row["client_id"] for row in rows}) == 2
+        assert {row["status"] for row in rows} == {"completed"}
+    finally:
+        service.close()
+
+
+def test_idempotency_reservation_blocks_a_competing_service(tmp_path):
+    service, raw = _service(tmp_path, rate_limit_per_minute=20)
+    other_memory = Memory.open(service.memory.store.path, auto_migrate=False)
+    other = AletheiaService(
+        other_memory,
+        ServiceConfig(db_path=service.memory.store.path, rate_limit_enabled=False),
+    )
+    headers = {"Idempotency-Key": "in-flight"}
+    options = dict(
+        method="POST",
+        endpoint="/v1/feedback",
+        headers=headers,
+        payload={"namespace": NAMESPACE},
+        request_hash="same-request",
+        namespace=NAMESPACE,
+        client_id="credential:" + service.auth.authenticate(f"Bearer {raw}").token_id,
+    )
+    try:
+        assert service._idempotency_replay(**options) is None
+        with pytest.raises(ServiceError, match="still in progress"):
+            other._idempotency_replay(**options)
+    finally:
+        with service.memory.store.transaction(immediate=True):
+            service.memory.store.connection.execute(
+                "DELETE FROM idempotency_records WHERE idempotency_key='in-flight'"
+            )
+        other.close()
+        service.close()
 
 
 def test_rate_limit_applies_per_token_and_can_be_disabled(tmp_path):
@@ -488,6 +624,41 @@ def test_rate_limit_applies_per_token_and_can_be_disabled(tmp_path):
     )[0] == 429
 
 
+def test_failed_bearer_authentication_is_rate_limited(tmp_path):
+    service, _ = _service(tmp_path, rate_limit_per_minute=1)
+    try:
+        first = _get(service, "/v1/auth/me", "invalid-bearer")
+        assert first[0] == 401
+        second = _get(service, "/v1/auth/me", "another-invalid-bearer")
+        assert second[0] == 429
+        assert second[1]["error"]["code"] == "rate_limited"
+    finally:
+        service.close()
+
+
+def test_failed_auth_uses_proxy_appended_forwarded_address(tmp_path):
+    service, _ = _service(tmp_path, rate_limit_per_minute=1)
+    service.config = replace(service.config, trust_proxy_headers=True)
+    try:
+        first = _get(
+            service,
+            "/v1/auth/me",
+            "invalid-one",
+            **{"X-Forwarded-For": "198.51.100.10, 203.0.113.9"},
+        )
+        second = _get(
+            service,
+            "/v1/auth/me",
+            "invalid-two",
+            **{"X-Forwarded-For": "198.51.100.11, 203.0.113.9"},
+        )
+        assert first[0] == 401
+        assert second[0] == 429
+        assert second[1]["error"]["code"] == "rate_limited"
+    finally:
+        service.close()
+
+
 def test_mcp_tools_are_candidate_first_logged_and_namespace_capability_aware(tmp_path):
     service, _token = _service(tmp_path, auth_required=False)
     registry = McpToolRegistry(service, namespace=NAMESPACE, mode="read_write_candidate")
@@ -508,14 +679,32 @@ def test_mcp_tools_are_candidate_first_logged_and_namespace_capability_aware(tmp
     )
     assert candidate["write_mode"] == "candidate"
     assert service.memory.list_claims(namespace=NAMESPACE) == []
-    audit = registry.invoke("memory_audit", {"target_type": "candidate", "target_id": candidate["candidate"]["id"]})
-    assert audit["audit"]
+    with pytest.raises(ServiceError) as denied:
+        registry.invoke("memory_audit", {"target_type": "candidate", "target_id": candidate["candidate"]["id"]})
+    assert denied.value.status_code == 403
 
     with pytest.raises(PermissionError):
         registry.invoke("memory_remember", {**_remember_payload(namespace=NAMESPACE), "write_mode": "active"})
     with pytest.raises(PermissionError):
         registry.invoke("memory_search", {"namespace": "user/other", "query": "m6"})
     assert any(row["tool_name"] == "memory_remember" for row in service.mcp_invocations(limit=20))
+
+    active = McpToolRegistry(service, namespace=NAMESPACE, mode="read_write_active")
+    result = active.invoke(
+        "memory_remember", {**_remember_payload(), "write_mode": "active"}
+    )
+    assert result["write_mode"] == "active"
+
+    admin = McpToolRegistry(service, namespace=NAMESPACE, mode="admin")
+    assert admin.invoke("memory_health", {})["namespace"] == NAMESPACE
+    endpoint, _, _ = admin._tool_to_http(
+        "memory_health", {"namespace": "user/default/projects/a&b"}
+    )
+    assert endpoint.endswith("namespace=user%2Fdefault%2Fprojects%2Fa%26b")
+    endpoint, _, _ = admin._tool_to_http(
+        "memory_audit", {"target_type": "claim/type", "target_id": "clm/a&b"}
+    )
+    assert endpoint == "/v1/audit/claim%2Ftype/clm%2Fa%26b"
 
 
 class _FakeResponse:
@@ -530,6 +719,10 @@ class _FakeResponse:
 
     def read(self):
         return json.dumps(self.envelope).encode("utf-8")
+
+    @property
+    def status(self):
+        return 200
 
 
 def test_python_client_and_adapter_send_headers_preserve_warnings_and_raise_typed_errors(monkeypatch):
@@ -633,6 +826,76 @@ def test_async_client_wraps_sync_client(monkeypatch):
     client = AsyncAletheiaClient("http://127.0.0.1:8765", "atl_raw")
     assert asyncio.run(client.health()) == {"status": "ok"}
     assert client.last_request_id == "req_async"
+
+
+def test_python_client_normalizes_transport_failures_retries_only_gets_and_serializes_async(monkeypatch):
+    calls = []
+
+    def unavailable(request, timeout):
+        calls.append(request.method)
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr("urllib.request.urlopen", unavailable)
+    client = AletheiaClient("http://127.0.0.1:8765")
+    client.last_request_id = "stale-request"
+    client.last_warnings = ["stale warning"]
+    client.last_pagination = {"next_cursor": "stale"}
+    client.last_envelope = {"data": "stale"}
+    with pytest.raises(AletheiaTransportError, match="Could not reach"):
+        client.health()
+    assert calls == ["GET", "GET"]
+    assert client.last_request_id is None
+    assert client.last_warnings == []
+    assert client.last_pagination is None
+    assert client.last_envelope is None
+    calls.clear()
+    with pytest.raises(AletheiaTransportError):
+        client.remember(namespace=NAMESPACE)
+    assert calls == ["POST"]
+
+    async_client = AsyncAletheiaClient("http://127.0.0.1:8765")
+    active = 0
+    maximum = 0
+    guard = threading.Lock()
+
+    def controlled(method, path, payload=None, **kwargs):
+        nonlocal active, maximum
+        with guard:
+            active += 1
+            maximum = max(maximum, active)
+        time.sleep(0.02)
+        with guard:
+            active -= 1
+        return {"path": path}
+
+    monkeypatch.setattr(async_client._sync, "_request_once", controlled)
+
+    async def both():
+        return await asyncio.gather(async_client.health(), async_client.version())
+
+    asyncio.run(both())
+    assert maximum == 1
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[1, 2]", b"\xff\xfe"])
+def test_python_client_rejects_invalid_response_documents(monkeypatch, body):
+    class RawResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return body
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: RawResponse())
+    client = AletheiaClient("http://127.0.0.1:8765")
+    with pytest.raises(AletheiaTransportError) as error:
+        client.health()
+    assert error.value.code == "invalid_response"
 
 
 def test_worker_runs_success_failure_and_respects_max_jobs(tmp_path):

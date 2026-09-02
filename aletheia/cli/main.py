@@ -11,11 +11,11 @@ import urllib.request
 import webbrowser
 from datetime import timedelta
 from pathlib import Path
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from aletheia import Memory
 from aletheia.core.errors import AletheiaError
-from aletheia.core.ids import new_id
+from aletheia.core.ids import content_hash, new_id
 from aletheia.core.time import utc_now, utc_now_iso
 from aletheia.help import docs_root, find_help_document, iter_help_documents, read_help_document
 from aletheia.retrieval.lexical import claim_text
@@ -23,7 +23,7 @@ from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService, DEFAULT_LOCAL_AGENT_CAPABILITIES
 from aletheia.service.errors import ServiceError
 from aletheia.service.http import AletheiaDaemon, AletheiaService, openapi_schema
-from aletheia.service.mcp import McpToolRegistry
+from aletheia.service.mcp import MODE_CAPABILITIES, McpToolRegistry
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init", help="Create or migrate a database.")
     init_parser.add_argument("--db", default="./aletheia.db")
+    init_parser.add_argument("--new", action="store_true", help="Create a fresh database only; refuse an existing destination.")
     init_parser.add_argument("--protected", action="store_true", help="Enable protected mode after initialization.")
 
     migrate_parser = subparsers.add_parser("migrate", help="Run database migrations.")
@@ -864,7 +865,12 @@ def build_parser() -> argparse.ArgumentParser:
     mcp.add_argument("--namespace")
     mcp.add_argument("--mode", choices=["read_only", "read_write_candidate", "read_write_active", "admin"])
     mcp.add_argument("--project")
-    mcp.add_argument("--token")
+    mcp.add_argument("--token", help=argparse.SUPPRESS)
+    mcp.add_argument(
+        "--token-env",
+        default="ALETHEIA_API_TOKEN",
+        help="Environment variable containing the MCP bearer token.",
+    )
     mcp.add_argument("--config")
     mcp.add_argument("--list-tools", action="store_true")
 
@@ -1147,9 +1153,18 @@ def _add_m10_parsers(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_m9_parsers(subparsers: argparse._SubParsersAction) -> None:
     doctor = subparsers.add_parser("doctor", help="Run M9 platform diagnostics.")
-    doctor.add_argument("--db", default="./aletheia.db")
+    doctor.add_argument("--db")
     doctor.add_argument("--service-url")
     doctor.add_argument("--service", dest="service_url")
+    doctor.add_argument("--read-only", action="store_true", help="Inspect setup without creating, migrating or recording domain data.")
+    doctor.add_argument("--config")
+    doctor.add_argument("--namespace", default="user/default")
+    doctor.add_argument("--query")
+    doctor.add_argument("--token-env", default="ALETHEIA_TOKEN", help="Environment variable containing the service token; never printed.")
+    doctor.add_argument("--claim", dest="claim_id")
+    doctor.add_argument("--embedding-provider")
+    doctor.add_argument("--llm-provider")
+    doctor.add_argument("--probe-provider", action="store_true", help="Explicitly check selected local provider endpoint reachability; no model input.")
 
     compatibility = subparsers.add_parser("compatibility", help="Inspect v1 compatibility.")
     compatibility_sub = compatibility.add_subparsers(dest="compatibility_command", required=True)
@@ -1274,8 +1289,8 @@ def _add_m9_parsers(subparsers: argparse._SubParsersAction) -> None:
     examples_list.add_argument("--db", default="./aletheia.db")
     examples_create = examples_sub.add_parser("create")
     examples_create.add_argument("--db", default="./aletheia.db")
-    examples_create.add_argument("--type", dest="example_type", choices=["generic-http", "mcp-client", "python-sdk"], default="generic-http")
-    examples_create.add_argument("--name", required=True)
+    examples_create.add_argument("--type", dest="example_type", choices=["generic-http", "mcp-client", "python-sdk", "embedded", "http-agent", "typescript-agent"], default="generic-http")
+    examples_create.add_argument("--name", default="memory-demo")
     examples_create.add_argument("--output", required=True)
     examples_test = examples_sub.add_parser("test")
     examples_test.add_argument("--db", default="./aletheia.db")
@@ -1366,6 +1381,11 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     restore_apply.add_argument("--namespace")
     restore_apply.add_argument("--passphrase")
     restore_apply.add_argument("--confirm")
+    restore_apply.add_argument(
+        "--trust-unauthenticated",
+        action="store_true",
+        help="Allow an unencrypted checksum-only archive after separately verifying its provenance.",
+    )
     restore_namespace = restore_sub.add_parser("namespace")
     restore_namespace.add_argument("backup_path")
     restore_namespace.add_argument("--db", default="./aletheia.db")
@@ -1398,6 +1418,10 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     keys_rotate.add_argument("--target", default="content")
     keys_rotate.add_argument("--apply", action="store_true")
     keys_rotate.add_argument("--force", action="store_true")
+    keys_rotate.add_argument(
+        "--new-key-env",
+        help="Dedicated environment variable holding the new key; defaults to ALETHEIA_KEY_<planned-new-key-id>.",
+    )
 
     redact = subparsers.add_parser("redact", help="Preview or apply redaction.")
     redact_sub = redact.add_subparsers(dest="redact_command", required=True)
@@ -1661,7 +1685,27 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "doctor":
+        if args.read_only:
+            from aletheia.diagnostics import diagnose
+            if args.service_url and (args.db or args.config):
+                raise AletheiaError("For read-only diagnostics, choose local --db/--config or --service-url, not both.")
+            report = diagnose(db_path=args.db, config_path=args.config, namespace=args.namespace, query=args.query,
+                service_url=args.service_url, token_env=args.token_env, claim_id=args.claim_id,
+                embedding_provider=args.embedding_provider, llm_provider=args.llm_provider, probe_provider=args.probe_provider)
+            _print_json(report)
+            return 1 if report["status"] == "error" else 0
+        if args.config or args.query is not None or args.claim_id or args.embedding_provider or args.llm_provider or args.probe_provider:
+            raise AletheiaError("Use --read-only with the onboarding diagnostic options.")
+        args.db = args.db or "./aletheia.db"
+    if args.command == "examples" and args.examples_command == "create" and args.example_type in {"embedded", "http-agent", "typescript-agent"}:
+        from aletheia.onboarding import create_starter
+        _print_json(create_starter(args.example_type, args.output))
+        return 0
     if args.command == "init":
+        if args.new:
+            from aletheia.onboarding import reserve_database
+            args.db = str(reserve_database(args.db))
         memory = Memory.open(args.db)
         try:
             if args.protected:
@@ -1683,10 +1727,18 @@ def _run(args: argparse.Namespace) -> int:
         return _run_console_serve(args)
     if args.command == "mcp":
         return _run_mcp(args)
+    if args.command == "api" and args.api_command == "ping":
+        return _run_api(None, args)
     if args.command == "docs" and args.docs_command in {"list", "path", "show"}:
         return _run_installed_docs(args)
 
-    memory = Memory.open(args.db, namespace=getattr(args, "namespace", "user/default"))
+    # Inspect/back up existing storage before an explicit migration. Fresh paths
+    # retain the historical command behavior, but existing data is not upgraded
+    # merely to generate a plan or take its pre-upgrade backup.
+    # Match SQLiteStore.open's expansion before making the safety decision.
+    args.db = str(Path(args.db).expanduser())
+    auto_migrate = not (args.command in {"migrate", "backup"} and Path(args.db).is_file() and Path(args.db).stat().st_size > 0)
+    memory = Memory.open(args.db, namespace=getattr(args, "namespace", "user/default"), auto_migrate=auto_migrate)
     try:
         if args.command == "migrate":
             return _run_migrate(memory, args)
@@ -1944,7 +1996,7 @@ def _run(args: argparse.Namespace) -> int:
             return _run_m10(memory, args)
     finally:
         memory.close()
-    return 0
+    raise AletheiaError(f"Unsupported command dispatch: {args.command}")
 
 
 def _run_installed_docs(args: argparse.Namespace) -> int:
@@ -2166,8 +2218,9 @@ def _run_m10(memory: Memory, args: argparse.Namespace) -> int:
 
 def _run_m9(memory: Memory, args: argparse.Namespace) -> int:
     if args.command == "doctor":
-        _print_json(asdict(memory.doctor_run(service_url=args.service_url)))
-        return 0
+        report = memory.doctor_run(service_url=args.service_url)
+        _print_json(asdict(report))
+        return 1 if report.status == "unhealthy" else 0
 
     if args.command == "compatibility":
         if args.compatibility_command == "report":
@@ -2448,6 +2501,7 @@ def _run_m8(memory: Memory, args: argparse.Namespace) -> int:
                 namespace=args.namespace,
                 passphrase=args.passphrase,
                 dry_run=False,
+                trust_unauthenticated=args.trust_unauthenticated,
             )))
             return 0
         if args.restore_command == "namespace":
@@ -2481,6 +2535,7 @@ def _run_m8(memory: Memory, args: argparse.Namespace) -> int:
                 target=args.target,
                 dry_run=not args.apply,
                 force=args.force,
+                new_key_env=args.new_key_env,
             )))
             return 0
 
@@ -3815,7 +3870,11 @@ def _run_console_serve(args: argparse.Namespace) -> int:
 
 
 def _run_mcp(args: argparse.Namespace) -> int:
-    token = args.token or os.environ.get("ALETHEIA_API_TOKEN")
+    if args.token:
+        raise AletheiaError(
+            "Do not pass MCP tokens in process arguments; set --token-env and provide the secret through that environment variable."
+        )
+    token = os.environ.get(args.token_env)
     config = ServiceConfig.load(
         args.config,
         overrides={
@@ -3828,6 +3887,12 @@ def _run_mcp(args: argparse.Namespace) -> int:
     )
     namespace = args.namespace or config.mcp_default_namespace
     mode = args.mode or config.mcp_default_mode
+    if mode not in MODE_CAPABILITIES:
+        raise AletheiaError(f"Unsupported MCP mode in configuration: {mode}")
+    config = replace(
+        config,
+        tokenless_capabilities=tuple(MODE_CAPABILITIES[mode]) if not token else None,
+    )
     service = AletheiaService(Memory.open(config.db_path), config)
     try:
         registry = McpToolRegistry(service, token=token, namespace=namespace, mode=mode)
@@ -3879,7 +3944,7 @@ def _run_clients(memory: Memory, args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_api(memory: Memory, args: argparse.Namespace) -> int:
+def _run_api(memory: Memory | None, args: argparse.Namespace) -> int:
     if args.api_command == "openapi":
         schema = openapi_schema()
         if args.output:
@@ -3903,11 +3968,14 @@ def _run_api(memory: Memory, args: argparse.Namespace) -> int:
         print(json.dumps(rows, indent=2))
         return 0
     if args.api_command == "ping":
+        from aletheia.core.platform import _open_loopback_url, _validate_service_url
+
+        _validate_service_url(args.url)
         url = args.url.rstrip("/") + "/v1/health"
-        with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 - local CLI.
+        with _open_loopback_url(url, timeout=5) as response:
             print(response.read().decode("utf-8"))
         return 0
-    return 0
+    raise AletheiaError(f"Unsupported api command: {args.api_command}")
 
 
 def _run_worker(memory: Memory, args: argparse.Namespace) -> int:
@@ -3952,6 +4020,7 @@ def _run_console(memory: Memory, args: argparse.Namespace) -> int:
         ]
         metadata = {
             "expires_at": expires_at.isoformat(),
+            "token_lookup": content_hash(raw),
             "namespace_grants": namespaces,
             "capabilities": capabilities,
             "privacy_ceiling": args.privacy_ceiling,

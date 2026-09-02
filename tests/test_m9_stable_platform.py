@@ -13,6 +13,7 @@ from aletheia.core.errors import ValidationError
 from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService
 from aletheia.service.http import AletheiaService, openapi_schema
+from aletheia.version import software_version
 
 
 NAMESPACE = "user/default"
@@ -86,14 +87,14 @@ stores_data = false
 def test_m9_migration_backfills_stable_platform_contracts(tmp_path):
     memory = Memory.open(str(tmp_path / "m9.db"), namespace=NAMESPACE)
     try:
-        assert memory.health()["schema_version"] == "1.3.0"
+        assert memory.health()["schema_version"] == "1.3.1"
         contracts = memory.list_public_contracts()
         names = {contract.name for contract in contracts}
         assert {"HTTP API v1", "Python SDK v1", "Plugin interface v1", "MCP tools v1"} <= names
         assert memory.check_deprecations()["status"] == "passed"
         report = memory.compatibility_report(include_runtime=False)
         assert report["api_version"] == "v1"
-        assert report["schema_version"] == "1.3.0"
+        assert report["schema_version"] == "1.3.1"
         assert any(entry["component_type"] == "plugin_api" for entry in report["matrix"])
         sdk_names = {record.sdk_name for record in memory.list_sdk_releases()}
         assert {"python-sync", "python-async"} <= sdk_names
@@ -211,7 +212,19 @@ def test_m9_conformance_docs_adapters_doctor_and_v1_gate(tmp_path):
         assert (tmp_path / "site" / "encryption_layer.md").exists()
         assert (tmp_path / "site" / "troubleshooting.md").exists()
         assert (tmp_path / "site" / "openapi.generated.json").exists()
-        assert memory.test_doc_examples()["status"] == "passed"
+        validation = memory.test_doc_examples()
+        assert validation["status"] == "passed"
+        assert validation["validated_categories"] == [
+            "adapters",
+            "cli",
+            "contracts",
+            "http",
+            "mcp",
+            "starters",
+        ]
+        assert all(
+            result["status"] == "passed" for result in validation["checks"].values()
+        )
 
         scaffold = memory.scaffold_adapter(
             adapter_type="python-sdk",
@@ -301,7 +314,7 @@ def test_m9_http_openapi_and_cli_surfaces(tmp_path, capsys):
         assert envelope["data"]["status"] == "passed"
 
         schema = openapi_schema()
-        assert schema["info"]["version"] == "1.3.0"
+        assert schema["info"]["version"] == software_version()
         assert "/v1/plugins" in schema["paths"]
         assert "/v1/v1-gate/run" in schema["paths"]
     finally:

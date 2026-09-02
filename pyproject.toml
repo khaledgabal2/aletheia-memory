@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aletheia-memory"
-version = "1.3.1"
+version = "1.4.0"
 description = "Local, auditable memory for AI agents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,7 +49,9 @@ cli = []
 server = []
 mcp = []
 dev = [
-  "pytest"
+  "pytest",
+  "jsonschema>=4.23,<5",
+  "openapi-spec-validator>=0.7,<0.9",
 ]
 
 [project.scripts]
@@ -62,18 +64,29 @@ addopts = "-q"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aletheia"]
+exclude = ["**/node_modules", "**/dist", "**/__pycache__", "**/*.py[cod]"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "aletheia_client.py" = "aletheia_client.py"
 "docs" = "aletheia/docs"
 
 [tool.hatch.build.targets.sdist]
+exclude = [
+  "**/node_modules",
+  "**/dist",
+  "/contracts/typescript/node_modules",
+  "/contracts/typescript/generated",
+  "/contracts/typescript/dist",
+  "**/__pycache__",
+  "**/*.py[cod]",
+]
 include = [
   "/aletheia",
   "/aletheia_client.py",
   "/docs",
   "/scripts",
   "/tests",
+  "/contracts",
   "/README.md",
   "/LICENSE",
   "/CONTRIBUTING.md",

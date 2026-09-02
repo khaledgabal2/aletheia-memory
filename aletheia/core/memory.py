@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import asdict, replace
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -191,6 +192,7 @@ CANDIDATE_STATUSES = {
     "needs_conflict_resolution",
     "invalid",
 }
+TERMINAL_CANDIDATE_STATUSES = {"promoted", "rejected", "merged", "duplicate"}
 CANDIDATE_EDITABLE_STATUSES = {
     "pending_review",
     "needs_evidence",
@@ -206,7 +208,6 @@ REVIEW_DECISIONS = {
     "needs_scope",
     "needs_conflict_resolution",
     "defer",
-    "promote",
 }
 ENTITY_TYPES = {
     "user",
@@ -462,6 +463,14 @@ RISK_PATTERNS = [
     ("unsafe_instruction", "critical", r"delete\s+all\s+other\s+memories"),
     ("memory_poisoning_attempt", "medium", r"permanent\s+memory"),
 ]
+
+
+def _atomic_review(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.store.transaction(immediate=True):
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class Memory:
@@ -913,6 +922,10 @@ class Memory:
         self._require_text(namespace, "namespace")
         self._require_text(source_type, "source_type")
         self._require_text(content, "content")
+        if not isinstance(privacy_level, str) or privacy_level not in PRIVACY_LEVELS:
+            raise ValidationError(
+                "privacy_level must be public, personal, private, sensitive, or secret."
+            )
 
         event_id = stable_event_id(
             namespace=namespace,
@@ -996,7 +1009,12 @@ class Memory:
             """,
             (namespace, limit),
         ).fetchall()
-        return [self.read_event(row["id"]) for row in rows]
+        events: list[EvidenceEvent] = []
+        for row in rows:
+            event = EvidenceEvent.from_row(row)
+            revealed = production.reveal_content_from_storage(self, event.content)
+            events.append(replace(event, content=revealed) if revealed != event.content else event)
+        return events
 
     def ingest(
         self,
@@ -1726,6 +1744,7 @@ class Memory:
         ).fetchall()
         return [self.read_candidate(row["id"]) for row in rows]
 
+    @_atomic_review
     def review_candidate(
         self,
         candidate_id: str,
@@ -1739,6 +1758,10 @@ class Memory:
             raise ValidationError(f"Unknown candidate review decision: {decision}")
         self._require_text(reason, "reason")
         candidate = self.read_candidate(candidate_id)
+        if candidate.candidate_status in TERMINAL_CANDIDATE_STATUSES:
+            raise ValidationError(
+                f"Candidate review is already terminal: {candidate.candidate_status}."
+            )
         new_status = {
             "validate": "validated",
             "reject": "rejected",
@@ -1747,7 +1770,6 @@ class Memory:
             "needs_conflict_resolution": "needs_conflict_resolution",
             "defer": candidate.candidate_status,
             "edit": candidate.candidate_status,
-            "promote": "promoted",
         }[decision]
         decision_id = new_id("xdec")
         now = utc_now_iso()
@@ -1797,6 +1819,7 @@ class Memory:
         ).fetchone()
         return ExtractionDecision.from_row(row)
 
+    @_atomic_review
     def promote_candidate(
         self,
         candidate_id: str,
@@ -1811,6 +1834,10 @@ class Memory:
             raise ValidationError(f"Candidate promotion target must be one of {sorted(PROMOTION_TARGETS)}.")
         self._require_text(reason, "reason")
         candidate = self.read_candidate(candidate_id)
+        if candidate.candidate_status in TERMINAL_CANDIDATE_STATUSES:
+            raise ValidationError(
+                f"Cannot promote candidate: candidate status is {candidate.candidate_status}"
+            )
         if edits:
             self.review_candidate(
                 candidate_id,
@@ -6130,6 +6157,7 @@ class Memory:
                                 "input_hash": input_digest,
                                 "provider_type": embedding.provider_type,
                                 "provider_version": embedding.provider_version,
+                                "input_signature": getattr(engine, "input_signature", ""),
                                 "privacy_level": privacy_level,
                                 "protected_mode_policy": semantic_policy,
                                 "redacted_input": indexed_text != text,
@@ -6369,7 +6397,8 @@ class Memory:
             """,
             params,
         ).fetchall()
-        return [Claim.from_row(row, self._evidence_ids_for_claim(row["id"])) for row in rows]
+        evidence = self._evidence_ids_for_claims([row["id"] for row in rows])
+        return [Claim.from_row(row, evidence.get(row["id"], [])) for row in rows]
 
     def remember(
         self,
@@ -6387,6 +6416,7 @@ class Memory:
         half_life_days: float | None = None,
         project_id: str | None = None,
         session_id: str | None = None,
+        privacy_level: str = "personal",
     ) -> Claim:
         namespace = namespace or self.namespace
         event_text = text or claim_text(subject, predicate, object)
@@ -6395,6 +6425,7 @@ class Memory:
             source_type=source_type,
             content=event_text,
             trust_level="user_asserted" if source_type == "manual" else "unknown",
+            privacy_level=privacy_level,
         )
         return self.write_claim(
             namespace=namespace,
@@ -6784,58 +6815,40 @@ class Memory:
             omitted=omitted,
         )
         if record_usage:
-            with self.store.transaction():
-                self._write_context_pack_log(
-                    context_pack_id=context_pack_id,
-                    namespace=namespace,
-                    query=query,
-                    session_id=session_id,
-                    project_id=project_id,
-                    token_budget=token_budget,
-                    item_count=len(pack.items()),
-                    metadata={
-                        "omitted_count": len(omitted),
-                        "include_confidence": include_confidence,
-                        "include_reflections": include_reflections,
-                        "include_inferences": include_inferences,
-                        "include_derivation_metadata": include_derivation_metadata,
-                        "ranking_policy_version_id": ranking_policy_version_id,
-                        "context_policy_version_id": context_policy_version_id,
-                    },
-                )
-                self._record_context_usage_in_transaction(
-                    namespace=namespace,
-                    context_pack_id=context_pack_id,
-                    query=query,
-                    session_id=session_id,
-                    project_id=project_id,
-                    item_count=len(pack.items()),
-                    token_estimate=used_tokens,
-                    metadata=pack.metadata,
-                )
-                for index, item in enumerate(pack.items(), start=1):
-                    target_type = "claim"
-                    target_id = item.claim_id
-                    if item.reflection_id:
-                        target_type = "reflection"
-                        target_id = item.reflection_id
-                    elif item.inference_id:
-                        target_type = "inference"
-                        target_id = item.inference_id
-                    self._record_usage_in_transaction(
-                        namespace=namespace,
-                        target_id=target_id,
-                        target_type=target_type,
-                        usage_type="included_in_context",
-                        query=query,
-                        session_id=session_id,
-                        project_id=project_id,
-                        context_pack_id=context_pack_id,
-                        rank=index,
-                        score=None,
-                        metadata={"section": item.reason, "source_kind": item.source_kind},
-                    )
+            self._record_context_pack_usage(pack, token_estimate=used_tokens, metadata={
+                "include_confidence": include_confidence,
+                "include_reflections": include_reflections,
+                "include_inferences": include_inferences,
+                "include_derivation_metadata": include_derivation_metadata,
+            })
         return pack
+
+    def _record_context_pack_usage(self, pack: ContextPack, *, metadata: dict, token_estimate: int | None = None) -> None:
+        """Record the pack actually delivered, after any service access filtering."""
+        with self.store.transaction():
+            self._write_context_pack_log(
+                context_pack_id=pack.id, namespace=pack.namespace, query=pack.query,
+                session_id=pack.session_id, project_id=pack.project_id, token_budget=pack.token_budget,
+                item_count=len(pack.items()), metadata={
+                    **metadata, "omitted_count": len(pack.omitted),
+                    "ranking_policy_version_id": pack.ranking_policy_version_id,
+                    "context_policy_version_id": pack.context_policy_version_id,
+                },
+            )
+            self._record_context_usage_in_transaction(
+                namespace=pack.namespace, context_pack_id=pack.id, query=pack.query,
+                session_id=pack.session_id, project_id=pack.project_id, item_count=len(pack.items()),
+                token_estimate=token_estimate if token_estimate is not None else sum(self._estimate_tokens(item.text) for item in pack.items()),
+                metadata=pack.metadata,
+            )
+            for index, item in enumerate(pack.items(), start=1):
+                target_type = "reflection" if item.reflection_id else "inference" if item.inference_id else "claim"
+                self._record_usage_in_transaction(
+                    namespace=pack.namespace, target_id=item.reflection_id or item.inference_id or item.claim_id,
+                    target_type=target_type, usage_type="included_in_context", query=pack.query,
+                    session_id=pack.session_id, project_id=pack.project_id, context_pack_id=pack.id,
+                    rank=index, score=None, metadata={"section": item.reason, "source_kind": item.source_kind},
+                )
 
     def resolve_claim(
         self,
@@ -7474,8 +7487,9 @@ class Memory:
             params,
         ).fetchall()
         grouped: dict[tuple[str, str], list[Claim]] = {}
+        evidence = self._evidence_ids_for_claims([row["id"] for row in rows])
         for row in rows:
-            claim = Claim.from_row(row, self._evidence_ids_for_claim(row["id"]))
+            claim = Claim.from_row(row, evidence.get(row["id"], []))
             grouped.setdefault((claim.subject, claim.predicate), []).append(claim)
         families: list[ConflictFamily] = []
         for (claim_subject, claim_predicate), claims in grouped.items():
@@ -8877,7 +8891,7 @@ class Memory:
         target_status: str,
     ) -> list[str]:
         failures: list[str] = []
-        if candidate.candidate_status in {"invalid", "rejected", "needs_evidence"}:
+        if candidate.candidate_status in {"invalid", "rejected", "promoted", "merged", "needs_evidence"}:
             failures.append(f"candidate status is {candidate.candidate_status}")
         if candidate.candidate_status == "duplicate" or candidate.duplicate_risk >= 0.95:
             failures.append("candidate is a duplicate without merge strategy")
@@ -11770,7 +11784,7 @@ class Memory:
         engine = provider_for_name(provider)
         latest = self.store.connection.execute(
             """
-            SELECT index_version, model, dimension
+            SELECT index_version, model, dimension, metadata_json
             FROM embeddings
             WHERE namespace = ?
               AND target_type = ?
@@ -11784,7 +11798,14 @@ class Memory:
             (namespace, target_type, engine.name, engine.model),
         ).fetchone()
         if not latest:
+            if getattr(engine, "input_signature", ""):
+                raise ValidationError("No compatible semantic index for this configured model. Index explicitly before semantic retrieval.")
             return {}
+        metadata = json.loads(latest["metadata_json"] or "{}")
+        if getattr(engine, "input_signature", "") or metadata.get("input_signature"):
+            expected = semantic_index_version(provider=engine, redaction_policy=metadata.get("protected_mode_policy", "index_public_and_personal_only"))
+            if latest["index_version"] != expected or latest["dimension"] != engine.dimension:
+                raise ValidationError("Semantic model, dimensions or input preset changed; explicitly reindex before retrieval.")
         engine = provider_for_name(provider, model=latest["model"], dimension=latest["dimension"])
         query_vector = engine.embed_texts(
             [query],

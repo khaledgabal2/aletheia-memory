@@ -185,9 +185,11 @@ class ServiceConfig:
     request_log_mode: str = "metadata_only"
     mcp_default_namespace: str = "user/default"
     mcp_default_mode: str = "read_write_candidate"
+    tokenless_capabilities: tuple[str, ...] | None = None
     worker_enabled: bool = False
     max_jobs_per_tick: int = 10
     max_request_bytes: int = 1_048_576
+    request_timeout_seconds: float = 10.0
     default_page_size: int = 50
     max_page_size: int = 200
     rate_limit_per_minute: int = 120
@@ -227,9 +229,11 @@ class ServiceConfig:
             "request_log_mode": security.get("request_log_mode", "metadata_only"),
             "mcp_default_namespace": mcp.get("default_namespace", "user/default"),
             "mcp_default_mode": mcp.get("default_mode", "read_write_candidate"),
+            "tokenless_capabilities": None,
             "worker_enabled": _bool(jobs.get("worker_enabled", False)),
             "max_jobs_per_tick": int(jobs.get("max_jobs_per_tick", 10)),
             "max_request_bytes": int(limits.get("max_request_bytes", 1_048_576)),
+            "request_timeout_seconds": float(limits.get("request_timeout_seconds", 10.0)),
             "default_page_size": int(limits.get("default_page_size", 50)),
             "max_page_size": int(limits.get("max_page_size", 200)),
             "rate_limit_per_minute": int(limits.get("rate_limit_per_minute", 120)),
@@ -273,6 +277,7 @@ class ServiceConfig:
             "mcp": {
                 "default_namespace": self.mcp_default_namespace,
                 "default_mode": self.mcp_default_mode,
+                "tokenless_capabilities": list(self.tokenless_capabilities or ()),
             },
             "jobs": {
                 "worker_enabled": self.worker_enabled,
@@ -280,6 +285,7 @@ class ServiceConfig:
             },
             "limits": {
                 "max_request_bytes": self.max_request_bytes,
+                "request_timeout_seconds": self.request_timeout_seconds,
                 "default_page_size": self.default_page_size,
                 "max_page_size": self.max_page_size,
                 "rate_limit_per_minute": self.rate_limit_per_minute,

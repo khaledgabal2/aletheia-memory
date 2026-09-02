@@ -179,6 +179,11 @@ class HTTPLLMProvider:
         external_network_access: bool = True,
         stores_data: str = "unknown",
         supports_no_log_mode: str = "unknown",
+        local_only: bool = False,
+        structured_output: bool = False,
+        thinking: bool | None = None,
+        context_length: int | None = None,
+        keep_alive: int | None = None,
     ) -> None:
         if not endpoint:
             raise ValueError(f"{name} LLM provider requires an endpoint.")
@@ -193,6 +198,13 @@ class HTTPLLMProvider:
         self.external_network_access = external_network_access
         self.stores_data = stores_data
         self.supports_no_log_mode = supports_no_log_mode
+        self.structured_output, self.thinking = structured_output, thinking
+        self.context_length, self.keep_alive = context_length, keep_alive
+        self.opener = None
+        if local_only:
+            from aletheia.provider_http import local_opener
+            self.opener = local_opener(endpoint)
+            self.external_network_access = False
 
     def complete_json(
         self,
@@ -211,7 +223,7 @@ class HTTPLLMProvider:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with (self.opener.open if self.opener else urllib.request.urlopen)(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except urllib.error.URLError as exc:
             raise ValueError(f"LLM provider {self.name!r} failed: {exc}") from exc
@@ -225,13 +237,22 @@ class HTTPLLMProvider:
 
     def _payload(self, *, messages: list[dict[str, str]], schema: dict[str, Any], temperature: float, max_tokens: int | None) -> dict[str, Any]:
         if self.provider_type == "ollama_style":
-            return {
+            payload = {
                 "model": self.model,
                 "messages": messages,
                 "stream": False,
-                "format": "json",
+                "format": schema if self.structured_output else "json",
                 "options": {"temperature": temperature},
             }
+            if max_tokens is not None:
+                payload["options"]["num_predict"] = max_tokens
+            if self.thinking is not None:
+                payload["think"] = self.thinking
+            if self.context_length is not None:
+                payload["options"]["num_ctx"] = self.context_length
+            if self.keep_alive is not None:
+                payload["keep_alive"] = self.keep_alive
+            return payload
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -325,6 +346,11 @@ def provider_for_name(name: str | None, *, model: str | None = None) -> LLMProvi
             external_network_access=(os.environ.get(f"{env_prefix}_EXTERNAL", "true").lower() == "true"),
             stores_data=os.environ.get(f"{env_prefix}_STORES_DATA") or os.environ.get(f"{prefix}_STORES_DATA") or "unknown",
             supports_no_log_mode=os.environ.get(f"{env_prefix}_NO_LOG") or os.environ.get(f"{prefix}_NO_LOG") or "unknown",
+            local_only=os.environ.get(f"{env_prefix}_LOCAL_ONLY", "").lower() == "true",
+            structured_output=os.environ.get(f"{env_prefix}_STRUCTURED_OUTPUT", "").lower() == "true",
+            thinking=(os.environ[f"{env_prefix}_THINK"].lower() == "true") if f"{env_prefix}_THINK" in os.environ else None,
+            context_length=int(os.environ[f"{env_prefix}_NUM_CTX"]) if f"{env_prefix}_NUM_CTX" in os.environ else None,
+            keep_alive=int(os.environ[f"{env_prefix}_KEEP_ALIVE"]) if f"{env_prefix}_KEEP_ALIVE" in os.environ else None,
         )
     raise ValueError(f"Unknown LLM provider: {name}")
 

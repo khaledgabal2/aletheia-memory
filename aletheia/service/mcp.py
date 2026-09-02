@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
+from urllib.parse import quote, urlencode
 
 from aletheia.core.ids import new_id
 from aletheia.models import ServiceConfig
@@ -58,6 +59,11 @@ class McpToolRegistry:
         self.token = token
         self.namespace = namespace or service.config.mcp_default_namespace
         self.mode = mode
+        if not token and not service.config.auth_required:
+            service.config = replace(
+                service.config,
+                tokenless_capabilities=tuple(MODE_CAPABILITIES[mode]),
+            )
 
     def list_tools(self) -> list[dict]:
         return [
@@ -196,10 +202,6 @@ class McpToolRegistry:
         headers = {"X-Request-ID": request_id}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        else:
-            token = self._mode_token()
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
         try:
             endpoint, payload, method = self._tool_to_http(tool_name, arguments)
             status, envelope = self.service.handle_http(
@@ -265,13 +267,15 @@ class McpToolRegistry:
         if tool_name == "memory_feedback":
             return "/v1/feedback", arguments, "POST"
         if tool_name == "memory_audit":
-            target_type = arguments.get("target_type", "claim")
-            return f"/v1/audit/{target_type}/{arguments['target_id']}", {}, "GET"
+            target_type = quote(str(arguments.get("target_type", "claim")), safe="")
+            target_id = quote(str(arguments["target_id"]), safe="")
+            return f"/v1/audit/{target_type}/{target_id}", {}, "GET"
         if tool_name == "memory_explain_claim":
-            return f"/v1/claims/{arguments['claim_id']}/explain", {}, "GET"
+            claim_id = quote(str(arguments["claim_id"]), safe="")
+            return f"/v1/claims/{claim_id}/explain", {}, "GET"
         if tool_name == "memory_health":
             namespace = arguments.get("namespace", self.namespace)
-            return f"/v1/health-report?namespace={namespace}", None, "GET"
+            return "/v1/health-report?" + urlencode({"namespace": namespace}), None, "GET"
         if tool_name == "memory_ingest":
             return "/v1/ingest", arguments, "POST"
         if tool_name == "memory_extract_candidates":
@@ -288,13 +292,17 @@ class McpToolRegistry:
             return "/v1/llm/suggest-duplicate-merge", arguments, "POST"
         if tool_name == "memory_list_candidates":
             namespace = arguments.get("namespace", self.namespace)
-            return f"/v1/candidates?namespace={namespace}", None, "GET"
+            return "/v1/candidates?" + urlencode({"namespace": namespace}), None, "GET"
         if tool_name == "memory_promote_candidate":
-            return f"/v1/candidates/{arguments['candidate_id']}/promote", {"reason": arguments["reason"]}, "POST"
+            candidate_id = quote(str(arguments["candidate_id"]), safe="")
+            return f"/v1/candidates/{candidate_id}/promote", {"reason": arguments["reason"]}, "POST"
         if tool_name == "memory_reject_candidate":
-            return f"/v1/candidates/{arguments['candidate_id']}/reject", {"reason": arguments["reason"]}, "POST"
+            candidate_id = quote(str(arguments["candidate_id"]), safe="")
+            return f"/v1/candidates/{candidate_id}/reject", {"reason": arguments["reason"]}, "POST"
         if tool_name == "memory_trace_derivation":
-            return f"/v1/derivation/{arguments['target_type']}/{arguments['target_id']}", None, "GET"
+            target_type = quote(str(arguments["target_type"]), safe="")
+            target_id = quote(str(arguments["target_id"]), safe="")
+            return f"/v1/derivation/{target_type}/{target_id}", None, "GET"
         if tool_name == "memory_record_outcome":
             return "/v1/outcomes", arguments, "POST"
         raise ValueError(f"Unknown MCP tool: {tool_name}")
@@ -312,12 +320,6 @@ class McpToolRegistry:
         if not self.token and namespace != self.namespace:
             raise PermissionError("MCP namespace is not granted in this mode.")
 
-    def _mode_token(self) -> str | None:
-        if self.service.config.auth_required:
-            return None
-        return None
-
-
 def config_for_mcp(db_path: str, namespace: str, mode: str) -> ServiceConfig:
     return ServiceConfig(
         db_path=db_path,
@@ -325,4 +327,5 @@ def config_for_mcp(db_path: str, namespace: str, mode: str) -> ServiceConfig:
         auth_required=False,
         mcp_default_namespace=namespace,
         mcp_default_mode=mode,
+        tokenless_capabilities=tuple(MODE_CAPABILITIES[mode]),
     )

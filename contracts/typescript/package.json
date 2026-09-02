@@ -1,0 +1,22 @@
+{
+  "name": "aletheia-memory-contract-checks",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "generate": "openapi-typescript ../../tests/fixtures/v1_3_1/openapi.json -o generated/baseline.d.ts",
+    "generate:discovery": "openapi-typescript generated/discovery.json -o generated/discovery.d.ts",
+    "generate:read": "openapi-typescript generated/read.json --default-non-nullable false -o generated/read.d.ts",
+    "generate:review": "openapi-typescript generated/review.json --default-non-nullable false -o generated/review.d.ts",
+    "generate:onboarding": "openapi-typescript generated/onboarding.json --default-non-nullable false -o generated/onboarding.d.ts",
+    "test": "node --expose-gc --test dist/poll.test.js ../../scripts/v1_4_transport_check.mjs",
+    "check": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.0",
+    "openapi-fetch": "0.17.0",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}
