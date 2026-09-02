@@ -51,7 +51,11 @@ def remember_response(service, payload, headers, request_id, request_hash):
         service.auth.require_namespace(context, namespace=namespace, project_id=payload.get("project_id"))
         service._require_read_session(payload, context)
         privacy = payload.get("privacy_level", "public" if context.privacy_ceiling == "public" else "personal")
-        if mode == "candidate" and (privacy not in PRIVACY_ORDER or not service.auth.privacy_allows(context, privacy)):
+        if privacy not in PRIVACY_ORDER:
+            raise validation_error(
+                "privacy_level must be public, personal, private, sensitive, or secret."
+            )
+        if mode == "candidate" and not service.auth.privacy_allows(context, privacy):
             raise forbidden("Requested privacy exceeds this credential's scope.")
         options = dict(method="POST", endpoint="/v1/remember", headers=headers, payload=payload,
             request_hash=content_hash(canonical(payload)) if negotiated else request_hash, namespace=namespace,

@@ -11,11 +11,11 @@ import urllib.request
 import webbrowser
 from datetime import timedelta
 from pathlib import Path
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from aletheia import Memory
 from aletheia.core.errors import AletheiaError
-from aletheia.core.ids import new_id
+from aletheia.core.ids import content_hash, new_id
 from aletheia.core.time import utc_now, utc_now_iso
 from aletheia.help import docs_root, find_help_document, iter_help_documents, read_help_document
 from aletheia.retrieval.lexical import claim_text
@@ -23,7 +23,7 @@ from aletheia.models import ServiceConfig
 from aletheia.service.auth import AuthService, DEFAULT_LOCAL_AGENT_CAPABILITIES
 from aletheia.service.errors import ServiceError
 from aletheia.service.http import AletheiaDaemon, AletheiaService, openapi_schema
-from aletheia.service.mcp import McpToolRegistry
+from aletheia.service.mcp import MODE_CAPABILITIES, McpToolRegistry
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -865,7 +865,12 @@ def build_parser() -> argparse.ArgumentParser:
     mcp.add_argument("--namespace")
     mcp.add_argument("--mode", choices=["read_only", "read_write_candidate", "read_write_active", "admin"])
     mcp.add_argument("--project")
-    mcp.add_argument("--token")
+    mcp.add_argument("--token", help=argparse.SUPPRESS)
+    mcp.add_argument(
+        "--token-env",
+        default="ALETHEIA_API_TOKEN",
+        help="Environment variable containing the MCP bearer token.",
+    )
     mcp.add_argument("--config")
     mcp.add_argument("--list-tools", action="store_true")
 
@@ -1413,6 +1418,10 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     keys_rotate.add_argument("--target", default="content")
     keys_rotate.add_argument("--apply", action="store_true")
     keys_rotate.add_argument("--force", action="store_true")
+    keys_rotate.add_argument(
+        "--new-key-env",
+        help="Dedicated environment variable holding the new key; defaults to ALETHEIA_KEY_<planned-new-key-id>.",
+    )
 
     redact = subparsers.add_parser("redact", help="Preview or apply redaction.")
     redact_sub = redact.add_subparsers(dest="redact_command", required=True)
@@ -1718,6 +1727,8 @@ def _run(args: argparse.Namespace) -> int:
         return _run_console_serve(args)
     if args.command == "mcp":
         return _run_mcp(args)
+    if args.command == "api" and args.api_command == "ping":
+        return _run_api(None, args)
     if args.command == "docs" and args.docs_command in {"list", "path", "show"}:
         return _run_installed_docs(args)
 
@@ -1985,7 +1996,7 @@ def _run(args: argparse.Namespace) -> int:
             return _run_m10(memory, args)
     finally:
         memory.close()
-    return 0
+    raise AletheiaError(f"Unsupported command dispatch: {args.command}")
 
 
 def _run_installed_docs(args: argparse.Namespace) -> int:
@@ -2207,8 +2218,9 @@ def _run_m10(memory: Memory, args: argparse.Namespace) -> int:
 
 def _run_m9(memory: Memory, args: argparse.Namespace) -> int:
     if args.command == "doctor":
-        _print_json(asdict(memory.doctor_run(service_url=args.service_url)))
-        return 0
+        report = memory.doctor_run(service_url=args.service_url)
+        _print_json(asdict(report))
+        return 1 if report.status == "unhealthy" else 0
 
     if args.command == "compatibility":
         if args.compatibility_command == "report":
@@ -2523,6 +2535,7 @@ def _run_m8(memory: Memory, args: argparse.Namespace) -> int:
                 target=args.target,
                 dry_run=not args.apply,
                 force=args.force,
+                new_key_env=args.new_key_env,
             )))
             return 0
 
@@ -3857,7 +3870,11 @@ def _run_console_serve(args: argparse.Namespace) -> int:
 
 
 def _run_mcp(args: argparse.Namespace) -> int:
-    token = args.token or os.environ.get("ALETHEIA_API_TOKEN")
+    if args.token:
+        raise AletheiaError(
+            "Do not pass MCP tokens in process arguments; set --token-env and provide the secret through that environment variable."
+        )
+    token = os.environ.get(args.token_env)
     config = ServiceConfig.load(
         args.config,
         overrides={
@@ -3870,6 +3887,12 @@ def _run_mcp(args: argparse.Namespace) -> int:
     )
     namespace = args.namespace or config.mcp_default_namespace
     mode = args.mode or config.mcp_default_mode
+    if mode not in MODE_CAPABILITIES:
+        raise AletheiaError(f"Unsupported MCP mode in configuration: {mode}")
+    config = replace(
+        config,
+        tokenless_capabilities=tuple(MODE_CAPABILITIES[mode]) if not token else None,
+    )
     service = AletheiaService(Memory.open(config.db_path), config)
     try:
         registry = McpToolRegistry(service, token=token, namespace=namespace, mode=mode)
@@ -3921,7 +3944,7 @@ def _run_clients(memory: Memory, args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_api(memory: Memory, args: argparse.Namespace) -> int:
+def _run_api(memory: Memory | None, args: argparse.Namespace) -> int:
     if args.api_command == "openapi":
         schema = openapi_schema()
         if args.output:
@@ -3945,11 +3968,14 @@ def _run_api(memory: Memory, args: argparse.Namespace) -> int:
         print(json.dumps(rows, indent=2))
         return 0
     if args.api_command == "ping":
+        from aletheia.core.platform import _open_loopback_url, _validate_service_url
+
+        _validate_service_url(args.url)
         url = args.url.rstrip("/") + "/v1/health"
-        with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 - local CLI.
+        with _open_loopback_url(url, timeout=5) as response:
             print(response.read().decode("utf-8"))
         return 0
-    return 0
+    raise AletheiaError(f"Unsupported api command: {args.api_command}")
 
 
 def _run_worker(memory: Memory, args: argparse.Namespace) -> int:
@@ -3994,6 +4020,7 @@ def _run_console(memory: Memory, args: argparse.Namespace) -> int:
         ]
         metadata = {
             "expires_at": expires_at.isoformat(),
+            "token_lookup": content_hash(raw),
             "namespace_grants": namespaces,
             "capabilities": capabilities,
             "privacy_ceiling": args.privacy_ceiling,

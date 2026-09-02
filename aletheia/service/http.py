@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import secrets
 import sqlite3
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,7 +23,7 @@ from aletheia.core.errors import AletheiaError, NotFoundError, ValidationError
 from aletheia.core.ids import content_hash, new_id
 from aletheia.core.time import parse_iso, utc_now, utc_now_iso
 from aletheia.models import ApiToken, ServiceConfig, ServiceHealth
-from aletheia.service.auth import AuthContext, AuthService
+from aletheia.service.auth import AuthContext, AuthService, PRIVACY_ORDER
 from aletheia.service.contracts import DISCOVERY_PATHS, apply_discovery_contracts
 from aletheia.service.reads import READ_POST_PATHS, ReadAccess, is_read_path
 from aletheia.service.read_contracts import apply_read_contracts, validate_read_input
@@ -48,6 +49,14 @@ PUBLIC_ENDPOINTS = {
 }
 
 STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@dataclass(frozen=True)
+class _ServiceData:
+    """Internal response metadata that cannot be forged by stored user data."""
+
+    data: Any
+    headers: Mapping[str, str]
 CONSOLE_API_PREFIXES = (
     "/v1/console",
     "/v1/dashboard",
@@ -441,6 +450,11 @@ class AletheiaService:
                 "Database temporarily busy; retain the same operation key when retrying." if busy else "Internal server error.",
                 status_code=status), request_id)
         except Exception:  # noqa: BLE001 - service boundary must envelope errors.
+            logging.getLogger(__name__).exception(
+                "Unhandled service request failure request_id=%s endpoint=%s",
+                request_id,
+                endpoint,
+            )
             status = 500
             response = self._error(ServiceError("internal_error", "Internal server error.", status_code=500), request_id)
         finally:
@@ -639,7 +653,7 @@ class AletheiaService:
             project_id=project_id,
             session_id=payload.get("session_id"),
             retrieval_mode=payload.get("retrieval_mode", "hybrid"),
-            token_budget=int(payload.get("token_budget", 1500)),
+            token_budget=self._integer(payload.get("token_budget", 1500), "token_budget"),
             include_reflections=bool(payload.get("include_reflections", True)),
             include_inferences=bool(payload.get("include_inferences", False)),
             include_derivation_metadata=bool(payload.get("include_derivation_metadata", False)),
@@ -688,7 +702,7 @@ class AletheiaService:
             namespace=namespace,
             query=payload.get("query", ""),
             mode=payload.get("mode", "hybrid"),
-            limit=int(payload.get("limit", 10)),
+            limit=self._integer(payload.get("limit", 10), "limit"),
             project_id=project_id,
             session_id=payload.get("session_id"),
             memory_types=payload.get("memory_types"),
@@ -781,6 +795,7 @@ class AletheiaService:
         namespace = self._required(payload, "namespace")
         project_id = payload.get("project_id")
         self.auth.require_namespace(auth_context, namespace=namespace, project_id=project_id)
+        privacy_level = self._requested_privacy(payload, auth_context)
         write_mode = payload.get("write_mode", "candidate")
         if write_mode == "active":
             self.auth.require_capability(auth_context, "memory:write_active")
@@ -791,16 +806,19 @@ class AletheiaService:
                 predicate=self._required(payload, "predicate"),
                 object=self._required(payload, "object"),
                 source_type=payload.get("source_type", "service"),
-                confidence=float(payload.get("confidence", 0.75)),
+                confidence=self._number(payload.get("confidence", 0.75), "confidence"),
                 project_id=project_id,
                 session_id=payload.get("session_id"),
                 status=payload.get("status", "active"),
+                privacy_level=privacy_level,
             )
             return {"write_mode": "active", "claim": asdict(claim)}
         if write_mode != "candidate":
             raise validation_error("write_mode must be candidate or active.")
         self.auth.require_capability(auth_context, "memory:write_candidate")
-        candidate = self._create_service_candidate(payload, auth_context)
+        candidate = self._create_service_candidate(
+            {**payload, "privacy_level": privacy_level}, auth_context
+        )
         return {"write_mode": "candidate", "candidate": asdict(candidate)}
 
     def _create_service_candidate(self, payload: dict, auth_context: AuthContext):
@@ -815,7 +833,7 @@ class AletheiaService:
             project_id=payload.get("project_id"),
             session_id=payload.get("session_id"),
             title=payload.get("title"),
-            privacy_level=payload.get("privacy_level", min_privacy(auth_context.privacy_ceiling, "personal")),
+            privacy_level=payload["privacy_level"],
             trust_level=payload.get("trust_level", "imported"),
             metadata={"service_write": True, "client_id": auth_context.client_id},
         )
@@ -872,11 +890,11 @@ class AletheiaService:
                     self._required(payload, "predicate"),
                     self._required(payload, "object"),
                     self._required(payload, "memory_type"),
-                    float(payload.get("confidence", 0.75)),
-                    float(payload.get("importance", 0.5)),
+                    self._number(payload.get("confidence", 0.75), "confidence"),
+                    self._number(payload.get("importance", 0.5), "importance"),
                     payload.get("half_life_days"),
                     json.dumps(payload.get("scope"), sort_keys=True) if payload.get("scope") else None,
-                    payload.get("privacy_level", "personal"),
+                    payload["privacy_level"],
                     now,
                     json.dumps({"service_candidate": True, "client_id": auth_context.client_id}, sort_keys=True),
                 ),
@@ -898,6 +916,18 @@ class AletheiaService:
                 details={"client_id": auth_context.client_id, "request_source": "http_or_mcp"},
             )
         return self.memory.read_candidate(candidate_id)
+
+    def _requested_privacy(self, payload: dict, auth_context: AuthContext) -> str:
+        privacy_level = payload.get(
+            "privacy_level", min_privacy(auth_context.privacy_ceiling, "personal")
+        )
+        if not isinstance(privacy_level, str) or privacy_level not in PRIVACY_ORDER:
+            raise validation_error(
+                "privacy_level must be public, personal, private, sensitive, or secret."
+            )
+        if not self.auth.privacy_allows(auth_context, privacy_level):
+            raise forbidden("Requested privacy_level exceeds the credential privacy ceiling.")
+        return privacy_level
 
     def _claim_endpoint(self, endpoint: str, auth_context: AuthContext) -> dict:
         parts = endpoint.split("/")
@@ -1227,7 +1257,7 @@ class AletheiaService:
                 retrieval_mode=payload.get("retrieval_mode", payload.get("mode", "hybrid")),
                 project_id=payload.get("project_id"),
                 session_id=payload.get("session_id"),
-                limit=int(payload.get("limit", 10)),
+                limit=self._integer(payload.get("limit", 10), "limit"),
             ))
         if method == "POST" and endpoint == "/v1/traces/context-pack":
             self._require(auth_context, "memory:read", payload)
@@ -1237,7 +1267,7 @@ class AletheiaService:
                 project_id=payload.get("project_id"),
                 session_id=payload.get("session_id"),
                 retrieval_mode=payload.get("retrieval_mode", "hybrid"),
-                token_budget=int(payload.get("token_budget", 2000)),
+                token_budget=self._integer(payload.get("token_budget", 2000), "token_budget"),
             ))
         if method == "GET" and endpoint == "/v1/traces":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
@@ -1850,6 +1880,7 @@ class AletheiaService:
                 target=payload.get("target", "content"),
                 dry_run=not bool(payload.get("apply", False)),
                 force=bool(payload.get("force", False)),
+                new_key_env=payload.get("new_key_env"),
             ))
 
         if method == "POST" and endpoint in {"/v1/redactions/preview", "/v1/redactions/apply"}:
@@ -1886,7 +1917,7 @@ class AletheiaService:
                 privacy_level=payload.get("privacy_level"),
                 source_type=payload.get("source_type"),
                 action=payload.get("action", "queue_review"),
-                after_days=int(payload.get("after_days", 365)),
+                after_days=self._integer(payload.get("after_days", 365), "after_days"),
                 reason=self._required(payload, "reason"),
             ))
         if method == "POST" and endpoint == "/v1/retention/run":
@@ -1965,18 +1996,43 @@ class AletheiaService:
             return 404, self._raw_response("Console asset not found.", content_type="text/plain")
         return 200, self._raw_response(CONSOLE_HTML, content_type="text/html; charset=utf-8")
 
-    def _console_login(self, payload: dict) -> dict:
+    def _console_login(self, payload: dict) -> _ServiceData:
         raw = self._required(payload, "login_token")
-        rows = self.memory.store.connection.execute(
+        lookup = content_hash(str(raw))
+        row = self.memory.store.connection.execute(
             """
             SELECT *
             FROM console_action_confirmations
             WHERE action_type = 'console_login_token'
+              AND json_extract(metadata_json, '$.token_lookup') = ?
             ORDER BY created_at DESC
-            LIMIT 100
-            """
-        ).fetchall()
-        row = next((item for item in rows if AuthService.verify_secret_hash(raw, item["confirmation_text"])), None)
+            LIMIT 1
+            """,
+            (lookup,),
+        ).fetchone()
+        if row and not AuthService.verify_secret_hash(str(raw), row["confirmation_text"]):
+            row = None
+        if row is None:
+            # A bounded bridge keeps pre-1.4 one-time tokens usable without
+            # making every login hash the entire historical table.
+            legacy_rows = self.memory.store.connection.execute(
+                """
+                SELECT *
+                FROM console_action_confirmations
+                WHERE action_type = 'console_login_token'
+                  AND json_extract(metadata_json, '$.token_lookup') IS NULL
+                ORDER BY created_at DESC
+                LIMIT 8
+                """
+            ).fetchall()
+            row = next(
+                (
+                    item
+                    for item in legacy_rows
+                    if AuthService.verify_secret_hash(str(raw), item["confirmation_text"])
+                ),
+                None,
+            )
         if not row:
             raise unauthorized("Invalid console login token.")
         metadata = json.loads(row["metadata_json"] or "{}")
@@ -1990,7 +2046,7 @@ class AletheiaService:
         session_id = new_id("csess")
         now = utc_now()
         session_expires = now + timedelta(minutes=self.config.console_session_ttl_minutes)
-        namespace_grants = metadata.get("namespace_grants") or ["*"]
+        namespace_grants = metadata.get("namespace_grants") or [self.memory.namespace]
         capabilities = metadata.get("capabilities") or ["memory:read"]
         privacy_ceiling = metadata.get("privacy_ceiling") or self.config.default_privacy_ceiling
         with self.memory.store.transaction():
@@ -2025,6 +2081,7 @@ class AletheiaService:
                     session_expires.isoformat(),
                     json.dumps(
                         {
+                            "session_token_lookup": content_hash(session_token),
                             "session_token_hash": self._hash_secret(session_token),
                             "csrf_token_hash": self._hash_secret(csrf_token),
                         },
@@ -2032,53 +2089,74 @@ class AletheiaService:
                     ),
                 ),
             )
-        return {
-            "session_id": session_id,
-            "session_token": session_token,
-            "csrf_token": csrf_token,
-            "expires_at": session_expires.isoformat(),
-            "_headers": {
-                "Set-Cookie": f"aletheia_console={session_token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={self.config.console_session_ttl_minutes * 60}"
+        return _ServiceData(
+            data={
+                "session_id": session_id,
+                "session_token": session_token,
+                "csrf_token": csrf_token,
+                "expires_at": session_expires.isoformat(),
             },
-        }
+            headers={
+                "Set-Cookie": f"aletheia_console={session_token}; {self._console_cookie_attributes()}; Max-Age={self.config.console_session_ttl_minutes * 60}"
+            },
+        )
 
-    def _console_logout(self, headers: Mapping[str, str]) -> dict:
+    def _console_logout(self, headers: Mapping[str, str]) -> _ServiceData | dict:
         raw_session = self._header(headers, "X-Console-Session") or self._cookie(headers, "aletheia_console")
         if not raw_session:
             return {"logged_out": False}
-        session_ids: list[str] = []
-        rows = self.memory.store.connection.execute(
-            """
-            SELECT id, metadata_json
-            FROM console_sessions
-            WHERE revoked_at IS NULL
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
-        for row in rows:
-            metadata = json.loads(row["metadata_json"] or "{}")
-            if AuthService.verify_secret_hash(raw_session, metadata.get("session_token_hash")):
-                session_ids.append(row["id"])
+        rows = self._console_session_rows(raw_session)
+        session_ids = [
+            row["id"]
+            for row in rows
+            if AuthService.verify_secret_hash(
+                raw_session,
+                json.loads(row["metadata_json"] or "{}").get("session_token_hash"),
+            )
+        ]
         with self.memory.store.transaction():
             for session_id in session_ids:
                 self.memory.store.connection.execute(
                     "UPDATE console_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
                     (utc_now_iso(), session_id),
                 )
-        return {
-            "logged_out": True,
-            "_headers": {"Set-Cookie": "aletheia_console=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"},
-        }
+        return _ServiceData(
+            data={"logged_out": True},
+            headers={
+                "Set-Cookie": f"aletheia_console=; {self._console_cookie_attributes()}; Max-Age=0"
+            },
+        )
 
-    def _console_session_for_token(self, raw_session: str):
+    def _console_session_rows(self, raw_session: str):
         rows = self.memory.store.connection.execute(
             """
             SELECT *
             FROM console_sessions
             WHERE revoked_at IS NULL
+              AND json_extract(metadata_json, '$.session_token_lookup') = ?
             ORDER BY created_at DESC
+            """,
+            (content_hash(raw_session),),
+        ).fetchall()
+        if rows:
+            return rows
+        return self.memory.store.connection.execute(
+            """
+            SELECT *
+            FROM console_sessions
+            WHERE revoked_at IS NULL
+              AND json_extract(metadata_json, '$.session_token_lookup') IS NULL
+            ORDER BY created_at DESC
+            LIMIT 8
             """
         ).fetchall()
+
+    def _console_cookie_attributes(self) -> str:
+        attributes = "HttpOnly; SameSite=Strict; Path=/"
+        return attributes + ("; Secure" if self.config.allow_remote else "")
+
+    def _console_session_for_token(self, raw_session: str):
+        rows = self._console_session_rows(raw_session)
         for row in rows:
             metadata = json.loads(row["metadata_json"] or "{}")
             if not AuthService.verify_secret_hash(raw_session, metadata.get("session_token_hash")):
@@ -2274,6 +2352,7 @@ class AletheiaService:
             return self.auth.authenticate(
                 None,
                 auth_required=self.config.auth_required or protected is None or bool(protected["enabled"]),
+                default_capabilities=list(self.config.tokenless_capabilities or ()),
                 default_namespace_grants=[self.memory.namespace],
                 default_privacy_ceiling=self.config.default_privacy_ceiling,
             )
@@ -2285,6 +2364,7 @@ class AletheiaService:
         return self.auth.authenticate(
             self._header(headers, "Authorization"),
             auth_required=auth_required,
+            default_capabilities=list(self.config.tokenless_capabilities or ()),
             default_namespace_grants=[self.memory.namespace],
             default_privacy_ceiling=self.config.default_privacy_ceiling,
         )
@@ -2678,7 +2758,7 @@ class AletheiaService:
             "source": payload.get("source", "user"),
             "note": payload.get("note"),
             "evidence_id": payload.get("evidence_id"),
-            "strength": float(payload.get("strength", 1.0)),
+            "strength": self._number(payload.get("strength", 1.0), "strength"),
         }
 
     def _outcome_args(self, payload: dict) -> dict:
@@ -2826,7 +2906,7 @@ class AletheiaService:
             "source_reflection_ids": payload.get("source_reflection_ids"),
             "title": self._required(payload, "title"),
             "text": payload.get("text"),
-            "abstraction_level": int(payload.get("abstraction_level", 2)),
+            "abstraction_level": self._integer(payload.get("abstraction_level", 2), "abstraction_level"),
             "project_id": payload.get("project_id"),
             "reason": self._required(payload, "reason"),
             "builder": payload.get("builder", "manual"),
@@ -2862,7 +2942,7 @@ class AletheiaService:
             "baseline_policy_version_id": payload.get("baseline_policy_version_id"),
             "objective": payload.get("objective", "balanced"),
             "dry_run": self._bool(payload.get("dry_run", True)),
-            "max_trials": int(payload.get("max_trials", 50)),
+            "max_trials": self._integer(payload.get("max_trials", 50), "max_trials"),
             "constraints": payload.get("constraints"),
         }
 
@@ -2873,7 +2953,7 @@ class AletheiaService:
             "learning_targets": payload.get("learning_targets"),
             "eval_set_id": payload.get("eval_set_id"),
             "dry_run": self._bool(payload.get("dry_run", True)),
-            "max_proposals": int(payload.get("max_proposals", 10)),
+            "max_proposals": self._integer(payload.get("max_proposals", 10), "max_proposals"),
         }
 
     def _review_policy_args(self, payload: dict) -> dict:
@@ -2896,7 +2976,7 @@ class AletheiaService:
             "namespace": self._required(payload, "namespace"),
             "job_type": self._required(payload, "job_type"),
             "payload": payload.get("payload") or {},
-            "priority": float(payload.get("priority", 0.5)),
+            "priority": self._number(payload.get("priority", 0.5), "priority"),
             "run_after": parse_iso(run_after) if run_after else None,
         }
 
@@ -2904,7 +2984,7 @@ class AletheiaService:
         return {
             "namespace": payload.get("namespace"),
             "job_type": payload.get("job_type"),
-            "max_jobs": int(payload.get("max_jobs", 10)),
+            "max_jobs": self._integer(payload.get("max_jobs", 10), "max_jobs"),
         }
 
     @staticmethod
@@ -2917,9 +2997,9 @@ class AletheiaService:
 
     def _success(self, *, data: Any, request_id: str, warnings: list[str], pagination: dict | None) -> dict:
         headers = None
-        if isinstance(data, dict) and "_headers" in data:
-            data = dict(data)
-            headers = data.pop("_headers")
+        if isinstance(data, _ServiceData):
+            headers = dict(data.headers)
+            data = data.data
         envelope = {"data": data, "request_id": request_id, "warnings": warnings, "pagination": pagination}
         if headers:
             envelope["_headers"] = headers
@@ -3014,7 +3094,10 @@ class AletheiaService:
         raise validation_error(f"The query parameter '{key}' is required.")
 
     def _limit(self, query: dict[str, list[str]]) -> int:
-        value = int(query.get("limit", [self.config.default_page_size])[0])
+        value = self._integer(
+            query.get("limit", [self.config.default_page_size])[0],
+            "limit",
+        )
         return max(1, min(value, self.config.max_page_size))
 
     @staticmethod
@@ -3024,10 +3107,35 @@ class AletheiaService:
             return default
         return value[0].strip().lower() in {"1", "true", "yes", "on"}
 
-    @staticmethod
-    def _pagination(count: int, query: dict[str, list[str]]) -> dict:
-        limit = int(query.get("limit", [count or 50])[0])
+    def _pagination(self, count: int, query: dict[str, list[str]]) -> dict:
+        limit = self._integer(query.get("limit", [count or 50])[0], "limit")
         return {"next_cursor": None, "limit": limit}
+
+    @staticmethod
+    def _integer(value: Any, field: str) -> int:
+        if isinstance(value, bool):
+            raise validation_error(f"The field '{field}' must be an integer.")
+        try:
+            result = int(value)
+        except (TypeError, ValueError) as exc:
+            raise validation_error(f"The field '{field}' must be an integer.") from exc
+        if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+            raise validation_error(f"The field '{field}' must be an integer.")
+        if isinstance(value, str) and not re.fullmatch(r"[+-]?\d+", value.strip()):
+            raise validation_error(f"The field '{field}' must be an integer.")
+        return result
+
+    @staticmethod
+    def _number(value: Any, field: str) -> float:
+        if isinstance(value, bool):
+            raise validation_error(f"The field '{field}' must be a number.")
+        try:
+            result = float(value)
+        except (TypeError, ValueError) as exc:
+            raise validation_error(f"The field '{field}' must be a number.") from exc
+        if not math.isfinite(result):
+            raise validation_error(f"The field '{field}' must be a finite number.")
+        return result
 
     @staticmethod
     def _validate_bind_policy(config: ServiceConfig) -> None:
@@ -3119,10 +3227,20 @@ class AletheiaDaemon:
 class AletheiaRequestHandler(BaseHTTPRequestHandler):
     service: AletheiaService
 
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(max(0.1, self.service.config.request_timeout_seconds))
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
         self._handle()
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
+        self._handle()
+
+    def do_PUT(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
+        self._handle()
+
+    def do_PATCH(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
         self._handle()
 
     def do_DELETE(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
@@ -3135,6 +3253,16 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
         request_id = self.headers.get("X-Request-ID") or new_id("req")
         if not self._origin_allowed():
             self._send_payload(403, self.service._error(forbidden("Host or Origin is not allowed for this local service."), request_id))
+            return
+        transfer_encoding = self.headers.get("Transfer-Encoding")
+        if transfer_encoding and transfer_encoding.lower() != "identity":
+            self._send_payload(
+                400,
+                self.service._error(
+                    validation_error("Transfer-Encoding is not supported; send Content-Length."),
+                    request_id,
+                ),
+            )
             return
         raw_length = self.headers.get("Content-Length", "0")
         try:
@@ -3159,7 +3287,17 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
                 ),
             )
             return
-        body = self.rfile.read(length) if length else b""
+        try:
+            body = self.rfile.read(length) if length else b""
+        except (TimeoutError, OSError):
+            self._send_payload(
+                408,
+                self.service._error(
+                    ServiceError("request_timeout", "Request body timed out.", status_code=408),
+                    request_id,
+                ),
+            )
+            return
         status, payload = self.service.handle_http(
             method=self.command,
             path=self.path,

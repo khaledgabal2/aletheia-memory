@@ -10,6 +10,7 @@ import platform as py_platform
 import socket
 import sqlite3
 import sys
+import tempfile
 import time
 import tomllib
 import urllib.error
@@ -973,6 +974,7 @@ def build_docs(
         example_validation = test_doc_examples(memory)
         if example_validation["status"] != "passed":
             warning_count += 1
+    build_status = "passed" if example_validation["status"] in {"passed", "skipped"} else "failed"
     for rel, text in docs.items():
         (out / rel).write_text(text, encoding="utf-8")
     build_id = new_id("docs")
@@ -983,12 +985,13 @@ def build_docs(
                 id, version, output_path, status, examples_validated,
                 warning_count, created_at, metadata_json
             )
-            VALUES (?, ?, ?, 'passed', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 build_id,
                 software_version(),
                 str(out),
+                build_status,
                 int(validate_examples),
                 warning_count,
                 utc_now_iso(),
@@ -1027,10 +1030,104 @@ def docs_status(memory) -> dict:
 
 
 def test_doc_examples(memory) -> dict:
+    """Compile and inspect the shipped examples instead of trusting catalog rows."""
+    checks: dict[str, dict[str, Any]] = {}
+
+    def run(name: str, operation) -> None:
+        try:
+            detail = operation()
+            checks[name] = {"status": "passed", "detail": detail or "validated"}
+        except Exception as exc:  # noqa: BLE001 - every failed example is reported.
+            checks[name] = {"status": "failed", "detail": str(exc)}
+
     required_contracts = {"HTTP API v1", "Python SDK v1", "Plugin interface v1"}
-    names = {contract.name for contract in list_public_contracts(memory)}
-    missing = sorted(required_contracts - names)
-    return {"status": "passed" if not missing else "failed", "missing": missing, "validated_categories": ["cli", "python", "http", "mcp", "plugin", "adapter", "backup", "protected_mode"]}
+
+    def contracts() -> str:
+        names = {contract.name for contract in list_public_contracts(memory)}
+        missing = sorted(required_contracts - names)
+        if missing:
+            raise ValidationError("Missing public contracts: " + ", ".join(missing))
+        return ", ".join(sorted(required_contracts))
+
+    run("contracts", contracts)
+
+    with tempfile.TemporaryDirectory(prefix="aletheia-doc-examples-") as temp:
+        root = Path(temp)
+
+        def starters() -> str:
+            from aletheia.onboarding import STARTERS, create_starter
+
+            compiled: list[str] = []
+            for kind in sorted(STARTERS):
+                result = create_starter(kind, root / kind)
+                project = Path(result["path"])
+                for source in sorted(project.glob("*.py")):
+                    compile(source.read_text(encoding="utf-8"), str(source), "exec")
+                    compiled.append(f"{kind}/{source.name}")
+                if kind == "typescript-agent":
+                    package = json.loads((project / "package.json").read_text(encoding="utf-8"))
+                    json.loads((project / "package-lock.json").read_text(encoding="utf-8"))
+                    if "build" not in package.get("scripts", {}):
+                        raise ValidationError("TypeScript starter has no build script.")
+                    for filename in ("agent.ts", "transport.ts", "schema.d.ts", "tsconfig.json"):
+                        if not (project / filename).is_file():
+                            raise ValidationError(f"TypeScript starter is missing {filename}.")
+            return "compiled " + ", ".join(compiled)
+
+        run("starters", starters)
+
+    def cli() -> str:
+        from aletheia.cli.main import build_parser
+
+        parsed = build_parser().parse_args(["doctor", "--read-only", "--db", "example.db"])
+        if not parsed.read_only:
+            raise ValidationError("Read-only doctor example did not parse.")
+        return "doctor --read-only"
+
+    run("cli", cli)
+
+    def http() -> str:
+        from aletheia.service.http import openapi_schema
+
+        schema = openapi_schema()
+        required = {"/v1/version", "/v1/retrieve", "/v1/remember"}
+        missing = sorted(required - set(schema.get("paths", {})))
+        if missing:
+            raise ValidationError("OpenAPI is missing example paths: " + ", ".join(missing))
+        return f"{len(schema['paths'])} OpenAPI paths"
+
+    run("http", http)
+
+    def mcp() -> str:
+        from aletheia.models import ServiceConfig
+        from aletheia.service.http import AletheiaService
+        from aletheia.service.mcp import McpToolRegistry
+
+        registry = McpToolRegistry(
+            AletheiaService(memory, ServiceConfig(db_path=memory.store.path, auth_required=False)),
+            namespace=memory.namespace,
+        )
+        names = {tool["name"] for tool in registry.list_tools()}
+        required = {"memory_context_pack", "memory_search", "memory_remember"}
+        if not required.issubset(names):
+            raise ValidationError("MCP starter tools are incomplete.")
+        return ", ".join(sorted(required))
+
+    run("mcp", mcp)
+
+    def adapters() -> str:
+        for adapter_type in ("generic-http", "mcp-client", "python-sdk"):
+            compile(_adapter_loop_source(adapter_type), f"{adapter_type}/agent_loop.py", "exec")
+        return "generic-http, mcp-client, python-sdk"
+
+    run("adapters", adapters)
+    failed = sorted(name for name, result in checks.items() if result["status"] == "failed")
+    return {
+        "status": "failed" if failed else "passed",
+        "failed": failed,
+        "checks": checks,
+        "validated_categories": sorted(checks),
+    }
 
 
 def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
@@ -1063,8 +1160,28 @@ def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
             recommendations.append("Start service with: aletheia serve --db <db>")
     else:
         add("service_reachable", "skipped", "No service URL supplied.")
-    add("mcp_available", "passed", "MCP registry importable.")
-    add("console_available", "passed", "Console HTML bundled.")
+    try:
+        from aletheia.service.mcp import McpToolRegistry
+
+        mcp_available = callable(McpToolRegistry)
+    except (ImportError, AttributeError):
+        mcp_available = False
+    add(
+        "mcp_available",
+        "passed" if mcp_available else "failed",
+        "MCP registry importable." if mcp_available else "MCP registry import failed.",
+    )
+    try:
+        from aletheia.service.http import CONSOLE_HTML
+
+        console_available = "<!doctype html>" in CONSOLE_HTML.lower()
+    except (ImportError, AttributeError):
+        console_available = False
+    add(
+        "console_available",
+        "passed" if console_available else "failed",
+        "Console HTML bundled." if console_available else "Console HTML is unavailable.",
+    )
     protected = memory.protected_mode_status()
     add("protected_mode", "passed" if protected.enabled else "warning", "Protected mode enabled." if protected.enabled else "Protected mode disabled.")
     backups = memory.list_backups(limit=1)
@@ -1077,8 +1194,24 @@ def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
     add("plugin_compatibility", "warning" if incompatible else "passed", f"{len(incompatible)} incompatible plugin(s).")
     if incompatible:
         recommendations.append("Disable or reinstall incompatible plugins.")
-    add("sdk_compatibility", "passed", "Python SDK v1 registered.")
-    add("environment", "passed", "No external telemetry configured by default.")
+    contract_names = {contract.name for contract in list_public_contracts(memory)}
+    sdk_available = "Python SDK v1" in contract_names
+    add(
+        "sdk_compatibility",
+        "passed" if sdk_available else "failed",
+        "Python SDK v1 registered." if sdk_available else "Python SDK v1 contract is missing.",
+    )
+    environment_supported = sys.version_info >= (3, 11) and sqlite3.sqlite_version_info >= (3, 35)
+    add(
+        "environment",
+        "passed" if environment_supported else "failed",
+        (
+            f"Python {py_platform.python_version()} and SQLite {sqlite3.sqlite_version} supported; "
+            "external telemetry is disabled by default."
+            if environment_supported
+            else f"Unsupported Python/SQLite runtime: {py_platform.python_version()} / {sqlite3.sqlite_version}."
+        ),
+    )
     status = "healthy" if not warnings else "healthy_with_warnings"
     if any(check["status"] == "failed" for check in checks):
         status = "unhealthy"

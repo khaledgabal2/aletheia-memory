@@ -81,7 +81,7 @@ Plugin authors should read:
 | `plugin_developer_guide.md` | Explain governed plugin manifests, permissions, compatibility, and conformance. |
 | `adapter_developer_guide.md` | Explain how to build and certify agent adapters. |
 | `examples.md` | Show example scaffolding and docs validation commands. |
-| `near_future_changes.md` | Summarize current v1.3.0 status and likely next changes. |
+| `near_future_changes.md` | Summarize current v1.4.0 status and likely next changes. |
 | `v1_public_contracts.md` | Document stable public contracts and compatibility expectations. |
 
 ## Repository Community Files
@@ -137,6 +137,7 @@ The 1.4.0 design, prerelease evidence and final verification are recorded here:
 - [Release-candidate verification](v1_4_0_phase6_evidence.md)
 - [Final pre-publication verification](v1_4_0_final_verification.md)
 - [Final-review corrections and expanded verification](v1_4_0_review_closure.md)
+- [External-audit closure and latest verification](v1_4_0_external_audit_closure.md)
 - [Release approval and handoff](v1_4_0_release_handoff.md)
 - [Model-free tutorial draft](v1_4_0_quickstart_draft.md)
 

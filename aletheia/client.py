@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -42,6 +44,10 @@ class AletheiaServerError(AletheiaClientError):
     pass
 
 
+class AletheiaTransportError(AletheiaClientError):
+    pass
+
+
 class AletheiaUnsupportedFeatureError(AletheiaClientError):
     pass
 
@@ -74,6 +80,10 @@ class AletheiaClient:
         self.last_warnings: list[str] = []
         self.last_pagination: dict | None = None
         self.last_envelope: dict | None = None
+        # A sync client owns one coherent last-response snapshot. The async
+        # facade may call it from worker threads, so transport and metadata
+        # updates must be serialized.
+        self._request_lock = threading.RLock()
 
     def health(self, *, request_id: str | None = None) -> dict:
         return self._request("GET", "/v1/health", request_id=request_id)
@@ -410,6 +420,34 @@ class AletheiaClient:
         idempotency_key: str | None = None,
         contract: str | None = None,
     ) -> Any:
+        attempts = 2 if method == "GET" else 1
+        with self._request_lock:
+            for attempt in range(attempts):
+                try:
+                    return self._request_once(
+                        method,
+                        path,
+                        payload,
+                        request_id=request_id,
+                        idempotency_key=idempotency_key,
+                        contract=contract,
+                    )
+                except AletheiaTransportError:
+                    if attempt + 1 >= attempts:
+                        raise
+                    time.sleep(0.05)
+        raise AssertionError("unreachable")
+
+    def _request_once(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        *,
+        request_id: str | None = None,
+        idempotency_key: str | None = None,
+        contract: str | None = None,
+    ) -> Any:
         raw = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
         headers = {"Accept": "application/json"}
         if raw is not None:
@@ -430,14 +468,44 @@ class AletheiaClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local SDK.
-                envelope = json.loads(response.read().decode("utf-8"))
+                body = response.read().decode("utf-8", errors="replace")
+                try:
+                    envelope = json.loads(body)
+                except json.JSONDecodeError as exc:
+                    raise AletheiaTransportError(
+                        "Aletheia returned a non-JSON success response.",
+                        code="invalid_response",
+                        status_code=response.status,
+                    ) from exc
+                if not isinstance(envelope, dict):
+                    raise AletheiaTransportError(
+                        "Aletheia returned a non-object JSON success response.",
+                        code="invalid_response",
+                        status_code=response.status,
+                    )
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8")
+            body = exc.read().decode("utf-8", errors="replace")
             try:
                 envelope = json.loads(body)
             except json.JSONDecodeError:
-                raise AletheiaServerError(body, status_code=exc.code) from exc
+                raise AletheiaTransportError(
+                    "Aletheia returned a non-JSON error response.",
+                    code="invalid_response",
+                    status_code=exc.code,
+                ) from exc
+            if not isinstance(envelope, dict):
+                raise AletheiaTransportError(
+                    "Aletheia returned a non-object JSON error response.",
+                    code="invalid_response",
+                    status_code=exc.code,
+                ) from exc
             self._raise_error(envelope, exc.code)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise AletheiaTransportError(
+                "Could not reach the Aletheia service within the configured timeout.",
+                code="transport_error",
+                details={"url": self.base_url + path},
+            ) from exc
         if "error" in envelope:
             self._raise_error(envelope, None)
         self.last_envelope = envelope

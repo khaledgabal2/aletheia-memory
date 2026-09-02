@@ -9,6 +9,9 @@ Final pre-publication checks are recorded in [final verification](v1_4_0_final_v
 The subsequent five findings and their verified corrections are recorded in
 [final-review corrections](v1_4_0_review_closure.md), which supersedes the earlier
 readiness claim and identifies the expanded gates for the corrected build.
+The later baseline review and all reconciled corrections are recorded in
+[external audit closure](v1_4_0_external_audit_closure.md); that record and its
+304-test gate are authoritative for the current branch.
 This document prepares Phase 7. It does not authorize merging, advisory
 publication, GitHub release creation, TestPyPI/PyPI uploads or branch-rule changes.
 The owner asked to review approvals only after implementation and verification.
@@ -48,6 +51,7 @@ against `codex/v1.4-discovery`; review the phase-specific ranges recorded below.
 | Phase 6 candidate integration | `codex/v1.4-release-candidate` | `6bba7f83697aa7ab67a97f2c6d9e2afc6616fae9` |
 | Final release preparation | `codex/v1.4-final-release` | `1a68eed4687054d927bf44d12493c913fcd467a4` |
 | Final-review corrections | `codex/v1.4-final-release` | `d0515980de763d554ad08d9ca1e657ddf1224951` |
+| External-audit corrections | `codex/v1.4-final-release` | `e8b0c5897d85b2a35debc94a5a7edf3942623865` |
 
 GitHub security forks do not execute Actions. GitHub also documents that its
 advisory merge action does not enforce branch protection. Do not use that action
@@ -62,12 +66,15 @@ represent this ruleset. No protection setting was changed for this release.
 
 ## Completed final preparation
 
-Final 1.4.0 metadata/docs and corrected artifacts are prepared. Linux Python
-3.11–3.13 and macOS each pass 283 regressions; all generated HTTP clients,
+Final 1.4.0 metadata/docs and corrected artifacts are prepared. The latest
+macOS gate passes 304 regressions; the prior Linux Python 3.11–3.13 gate passed
+283 tests per interpreter before the external-audit corrections and must be
+rerun by protected CI. All generated HTTP clients,
 24 Node lifecycle/transport checks, actual browser reads/reviews, old-binary
 upgrade/recovery for absolute/tilde paths, and installed wheel/sdist examples
 pass. The starter also passes ten cancellation/CLI checks on Node 26 and 22.
-All five final-review findings are corrected, with regression evidence above. A cold-install
+All final-review and reconciled external-audit findings are corrected, with
+regression evidence above. A cold-install
 and explicit-review walkthrough is measured, with its agent-run/human-usability
 limits documented. Source/code review was performed by the implementing agent;
 it is not an independent security audit. The five-minute human target remains

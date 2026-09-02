@@ -293,6 +293,15 @@ class AuthService:
         for row in rows:
             if not self.verify_secret_hash(raw_token, row["token_hash"]):
                 continue
+            if len(row["token_hash"]) == 64 and "$" not in row["token_hash"]:
+                # Keep the supported 1.3 migration bridge read-only: once a
+                # legacy token proves possession, immediately replace its
+                # unsalted verifier with the current versioned hash.
+                with self.memory.store.transaction(immediate=True):
+                    self.connection.execute(
+                        "UPDATE api_tokens SET token_hash = ? WHERE id = ? AND token_hash = ?",
+                        (self.hash_secret(raw_token), row["id"], row["token_hash"]),
+                    )
             token = self.get_token(row["id"])
             if token.status != "active":
                 raise unauthorized("Token is not active.")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import os
 import threading
 from contextlib import contextmanager
 from importlib import resources
@@ -59,6 +60,16 @@ class SQLiteStore:
         if path != ":memory:":
             expanded_path = str(Path(path).expanduser())
             Path(expanded_path).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                descriptor = os.open(
+                    expanded_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+            except FileExistsError:
+                pass
+            else:
+                os.close(descriptor)
         else:
             expanded_path = path
         # Explicit transaction control prevents a bare DML statement from

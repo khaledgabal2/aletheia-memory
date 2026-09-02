@@ -350,7 +350,7 @@ def test_protected_mode_encrypts_secret_content_and_skips_secret_indexing(monkey
             "SELECT content FROM evidence_events WHERE id = ?",
             (event.id,),
         ).fetchone()["content"]
-        assert stored.startswith("enc:v2:")
+        assert stored.startswith("enc:v3:")
         assert "secret launch code" not in stored
         assert memory.read_event(event.id).content == "secret launch code is blue"
         duplicate = memory.write_event(
@@ -381,6 +381,51 @@ def test_protected_mode_encrypts_secret_content_and_skips_secret_indexing(monkey
 
         rotation = memory.rotate_key(old_key_id=keys[0].id, new_key_label="next", dry_run=True)
         assert rotation.status == "planned"
+        assert len(memory.list_keys()) == 1
+        new_key_env = f"ALETHEIA_KEY_{rotation.new_key_id}"
+        monkeypatch.setenv(new_key_env, "distinct-rotated-content-key")
+        applied = memory.rotate_key(
+            old_key_id=keys[0].id,
+            new_key_label="next",
+            dry_run=False,
+            force=True,
+            new_key_env=new_key_env,
+        )
+        assert applied.status == "completed"
+        assert applied.metadata["reencrypted_count"] == applied.affected_count
+        assert applied.affected_count == rotation.affected_count >= 1
+        rotated_content = memory.store.connection.execute(
+            "SELECT content FROM evidence_events WHERE id = ?", (event.id,)
+        ).fetchone()["content"]
+        assert rotated_content.startswith(f"enc:v3:{applied.new_key_id}:")
+        assert memory.read_event(event.id).content == "secret launch code is blue"
+        assert memory.get_key(keys[0].id).status == "rotated"
+    finally:
+        memory.close()
+
+
+def test_applied_key_rotation_requires_new_material_even_without_content(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALETHEIA_PROTECTED_KEY", PASSPHRASE)
+    memory = Memory.open(str(tmp_path / "empty-rotation.db"), namespace=NAMESPACE)
+    try:
+        memory.enable_protected_mode(actor="pytest")
+        old_key = memory.list_keys()[0]
+        planned = memory.rotate_key(
+            old_key_id=old_key.id,
+            new_key_label="empty-next",
+            dry_run=True,
+        )
+        expected_env = f"ALETHEIA_KEY_{planned.new_key_id}"
+        monkeypatch.delenv(expected_env, raising=False)
+        with pytest.raises(ValidationError, match="New content key material is missing"):
+            memory.rotate_key(
+                old_key_id=old_key.id,
+                new_key_label="empty-next",
+                dry_run=False,
+                force=True,
+            )
+        assert memory.get_key(old_key.id).status == "active"
+        assert len(memory.list_keys()) == 1
     finally:
         memory.close()
 

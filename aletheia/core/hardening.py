@@ -6,6 +6,7 @@ import io
 import json
 import os
 import platform
+import re
 import shutil
 import sqlite3
 import statistics
@@ -20,10 +21,12 @@ from typing import Any
 
 from aletheia.core.crypto import (
     AES_GCM_PASSPHRASE_ALGORITHM,
+    LEGACY_PBKDF2_ITERATIONS,
     LEGACY_XOR_HMAC_ALGORITHM,
     PBKDF2_KEY_DERIVATION,
     b64url_decode,
     b64url_encode,
+    constant_time_equal,
     decrypt_bytes_with_passphrase,
     decrypt_legacy_xor_hmac_bytes,
     decrypt_legacy_xor_hmac_content,
@@ -62,7 +65,8 @@ from aletheia.version import software_version
 
 BACKUP_FORMAT_VERSION = "1"
 ENCRYPTION_PREFIX = "enc:"
-CONTENT_ENCRYPTION_VERSION = "v2"
+CONTENT_ENCRYPTION_VERSION = "v3"
+LEGACY_AES_CONTENT_ENCRYPTION_VERSION = "v2"
 LEGACY_CONTENT_ENCRYPTION_VERSION = "v1"
 SECRET_PRIVACY_LEVELS = {"private", "sensitive", "secret"}
 PRIVACY_ORDER = {"public": 0, "personal": 1, "private": 2, "sensitive": 2, "secret": 3}
@@ -581,10 +585,17 @@ def enable_protected_mode(memory, *, protected: bool = True, actor: str = "user"
     return protected_mode_status(memory)
 
 
-def create_key(memory, *, provider: str, label: str, metadata: dict | None = None) -> EncryptionKeyRecord:
+def create_key(
+    memory,
+    *,
+    provider: str,
+    label: str,
+    metadata: dict | None = None,
+    key_id: str | None = None,
+) -> EncryptionKeyRecord:
     if provider not in {"passphrase", "environment", "file", "os_keyring"}:
         raise ValidationError("Unsupported key provider.")
-    key_id = new_id("key")
+    key_id = key_id or new_id("key")
     now = utc_now_iso()
     salt = b64url_encode(random_bytes(16))
     with memory.store.transaction():
@@ -639,16 +650,84 @@ def rotate_key(
     target: str = "content",
     dry_run: bool = True,
     force: bool = False,
+    new_key_env: str | None = None,
 ) -> KeyRotationEvent:
     old = get_key(memory, old_key_id)
-    affected = _encrypted_content_count(memory, old_key_id) if target == "content" else 0
+    if target != "content":
+        raise ValidationError("Key rotation currently supports target=content only.")
+    if old.status != "active":
+        raise ValidationError("Only an active content key can be rotated.")
+    affected = _encrypted_content_count(memory, old_key_id)
+    planned_new_key_id = "key_" + content_hash(
+        f"rotation\0{old_key_id}\0{new_key_label}"
+    )[:20]
+    expected_new_key_env = f"ALETHEIA_KEY_{planned_new_key_id}"
     if not dry_run and not force and not list_backups(memory, limit=1):
         raise ValidationError("Key rotation recommends a verified backup first; pass force to override.")
-    new_key = create_key(memory, provider=old.provider, label=new_key_label, metadata={"rotated_from": old_key_id})
+    new_secret = None
+    if not dry_run:
+        new_key_env = new_key_env or expected_new_key_env
+        if (
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{1,127}", new_key_env)
+            or new_key_env != expected_new_key_env
+        ):
+            raise ValidationError(
+                f"Applied content rotation requires new key material in {expected_new_key_env}."
+            )
+        new_secret = os.environ.get(new_key_env)
+        if not new_secret:
+            raise ValidationError(f"New content key material is missing from {new_key_env}.")
+        old_secret = _content_passphrase(old_key_id)
+        if constant_time_equal(new_secret, old_secret):
+            raise ValidationError("The new content key material must differ from the old key material.")
     now = utc_now_iso()
     status = "planned" if dry_run else "completed"
-    with memory.store.transaction():
-        if not dry_run:
+    event_id = new_id("krot")
+    with memory.store.transaction(immediate=True):
+        if dry_run:
+            new_key_id = planned_new_key_id
+        else:
+            new_key = create_key(
+                memory,
+                provider=old.provider,
+                label=new_key_label,
+                metadata={
+                    "rotated_from": old_key_id,
+                    **({"environment_variable": new_key_env} if new_key_env else {}),
+                },
+                key_id=planned_new_key_id,
+            )
+            new_key_id = new_key.id
+            if affected:
+                rows = memory.store.connection.execute(
+                    """
+                    SELECT id, content
+                    FROM evidence_events
+                    WHERE content LIKE ? OR content LIKE ? OR content LIKE ?
+                    ORDER BY id
+                    """,
+                    (
+                        f"enc:{LEGACY_CONTENT_ENCRYPTION_VERSION}:{old_key_id}:%",
+                        f"enc:{LEGACY_AES_CONTENT_ENCRYPTION_VERSION}:{old_key_id}:%",
+                        f"enc:{CONTENT_ENCRYPTION_VERSION}:{old_key_id}:%",
+                    ),
+                ).fetchall()
+                for row in rows:
+                    plaintext = reveal_content_from_storage(memory, row["content"])
+                    memory.store.connection.execute(
+                        "UPDATE evidence_events SET content = ? WHERE id = ? AND content = ?",
+                        (
+                            encrypt_content(
+                                plaintext,
+                                key_id=new_key_id,
+                                passphrase=str(new_secret),
+                            ),
+                            row["id"],
+                            row["content"],
+                        ),
+                    )
+                if _encrypted_content_count(memory, old_key_id):
+                    raise ValidationError("Content rotation did not replace every old-key payload.")
             memory.store.connection.execute(
                 "UPDATE encryption_key_records SET status = 'rotated', rotated_at = ? WHERE id = ?",
                 (now, old_key_id),
@@ -662,15 +741,22 @@ def rotate_key(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                new_id("krot"),
+                event_id,
                 old_key_id,
-                new_key.id,
+                new_key_id,
                 target,
                 int(dry_run),
                 affected,
                 status,
                 now,
-                json.dumps({"force": force}, sort_keys=True),
+                json.dumps(
+                    {
+                        "force": force,
+                        "new_key_env": new_key_env,
+                        "reencrypted_count": affected if not dry_run else 0,
+                    },
+                    sort_keys=True,
+                ),
             ),
         )
         memory._write_audit(
@@ -678,11 +764,11 @@ def rotate_key(
             target_type="encryption_key",
             target_id=old_key_id,
             action="key.rotate",
-            details={"new_key_id": new_key.id, "dry_run": dry_run, "affected_count": affected},
+            details={"new_key_id": new_key_id, "dry_run": dry_run, "affected_count": affected},
         )
     row = memory.store.connection.execute(
-        "SELECT * FROM key_rotation_events WHERE old_key_id = ? ORDER BY created_at DESC LIMIT 1",
-        (old_key_id,),
+        "SELECT * FROM key_rotation_events WHERE id = ?",
+        (event_id,),
     ).fetchone()
     return KeyRotationEvent.from_row(row)
 
@@ -705,9 +791,9 @@ def reveal_content_from_storage(memory, content: str) -> str:
     except ValueError as exc:
         raise ValidationError("Encrypted content marker is malformed.") from exc
     if version == CONTENT_ENCRYPTION_VERSION:
-        if len(parts) != 3:
+        if len(parts) != 4:
             raise ValidationError("Encrypted content marker is malformed.")
-        salt_b64, nonce_b64, cipher_b64 = parts
+        iterations, salt_b64, nonce_b64, cipher_b64 = parts
         cipher = b64url_decode(cipher_b64)
         return decrypt_bytes_with_passphrase(
             cipher,
@@ -715,6 +801,22 @@ def reveal_content_from_storage(memory, content: str) -> str:
             {
                 "algorithm": AES_GCM_PASSPHRASE_ALGORITHM,
                 "kdf": PBKDF2_KEY_DERIVATION,
+                "kdf_iterations": iterations,
+                "salt": salt_b64,
+                "nonce": nonce_b64,
+            },
+        ).decode("utf-8")
+    if version == LEGACY_AES_CONTENT_ENCRYPTION_VERSION:
+        if len(parts) != 3:
+            raise ValidationError("Encrypted content marker is malformed.")
+        salt_b64, nonce_b64, cipher_b64 = parts
+        return decrypt_bytes_with_passphrase(
+            b64url_decode(cipher_b64),
+            _content_passphrase(key_id),
+            {
+                "algorithm": AES_GCM_PASSPHRASE_ALGORITHM,
+                "kdf": PBKDF2_KEY_DERIVATION,
+                "kdf_iterations": LEGACY_PBKDF2_ITERATIONS,
                 "salt": salt_b64,
                 "nonce": nonce_b64,
             },
@@ -739,6 +841,7 @@ def encrypt_content(content: str, *, key_id: str, passphrase: str) -> str:
             "enc",
             CONTENT_ENCRYPTION_VERSION,
             key_id,
+            str(metadata["kdf_iterations"]),
             metadata["salt"],
             metadata["nonce"],
             b64url_encode(cipher),
@@ -2165,10 +2268,11 @@ def _encrypted_content_count(memory, key_id: str) -> int:
         """
         SELECT count(*) AS count
         FROM evidence_events
-        WHERE content LIKE ? OR content LIKE ?
+        WHERE content LIKE ? OR content LIKE ? OR content LIKE ?
         """,
         (
             f"enc:{LEGACY_CONTENT_ENCRYPTION_VERSION}:{key_id}:%",
+            f"enc:{LEGACY_AES_CONTENT_ENCRYPTION_VERSION}:{key_id}:%",
             f"enc:{CONTENT_ENCRYPTION_VERSION}:{key_id}:%",
         ),
     ).fetchone()["count"])

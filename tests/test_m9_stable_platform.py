@@ -212,7 +212,19 @@ def test_m9_conformance_docs_adapters_doctor_and_v1_gate(tmp_path):
         assert (tmp_path / "site" / "encryption_layer.md").exists()
         assert (tmp_path / "site" / "troubleshooting.md").exists()
         assert (tmp_path / "site" / "openapi.generated.json").exists()
-        assert memory.test_doc_examples()["status"] == "passed"
+        validation = memory.test_doc_examples()
+        assert validation["status"] == "passed"
+        assert validation["validated_categories"] == [
+            "adapters",
+            "cli",
+            "contracts",
+            "http",
+            "mcp",
+            "starters",
+        ]
+        assert all(
+            result["status"] == "passed" for result in validation["checks"].values()
+        )
 
         scaffold = memory.scaffold_adapter(
             adapter_type="python-sdk",

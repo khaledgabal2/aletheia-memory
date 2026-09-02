@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -63,6 +63,7 @@ def _issue_console_login_token(memory: Memory, *, namespaces: list[str] | None =
     now = utc_now()
     metadata = {
         "expires_at": (now + timedelta(minutes=30)).isoformat(),
+        "token_lookup": _hash(raw),
         "namespace_grants": namespaces or [NAMESPACE],
         "capabilities": capabilities or ["memory:read", "memory:review", "memory:admin", "memory:jobs", "memory:policy"],
         "privacy_ceiling": "secret",
@@ -296,9 +297,82 @@ def test_console_login_secrets_are_never_persisted_as_idempotency_receipts(tmp_p
         assert status == 200
         assert "session_token" in envelope["data"]
         assert "Set-Cookie" in envelope["_headers"]
+        assert "Secure" not in envelope["_headers"]["Set-Cookie"]
         assert service.memory.store.connection.execute(
             "SELECT count(*) FROM idempotency_records WHERE idempotency_key='never-store-login'"
         ).fetchone()[0] == 0
+    finally:
+        service.close()
+
+
+def test_console_lookup_is_constant_cost_cookie_is_secure_remotely_and_headers_are_internal(
+    tmp_path, monkeypatch
+):
+    service = _service(tmp_path, console_enabled=True)
+    try:
+        for index in range(20):
+            now = utc_now()
+            with service.memory.store.transaction():
+                service.memory.store.connection.execute(
+                    """
+                    INSERT INTO console_sessions (
+                        id, client_id, token_id, namespace_grants_json,
+                        capabilities_json, privacy_ceiling, created_at, expires_at,
+                        revoked_at, metadata_json
+                    ) VALUES (?, NULL, NULL, ?, ?, 'personal', ?, ?, NULL, ?)
+                    """,
+                    (
+                        f"csess_noise_{index}",
+                        json.dumps([NAMESPACE]),
+                        json.dumps(["memory:read"]),
+                        now.isoformat(),
+                        (now + timedelta(hours=1)).isoformat(),
+                        json.dumps(
+                            {
+                                "session_token_lookup": _hash(f"noise-{index}"),
+                                "session_token_hash": AuthService.hash_secret(f"noise-{index}"),
+                            }
+                        ),
+                    ),
+                )
+
+        raw = _issue_console_login_token(service.memory)
+        service.config = replace(service.config, allow_remote=True)
+        status, login = _post(service, "/v1/console/login", {"login_token": raw})
+        assert status == 200
+        assert "Secure" in login["_headers"]["Set-Cookie"]
+        session_token = login["data"]["session_token"]
+        csrf_token = login["data"]["csrf_token"]
+
+        original = AuthService.verify_secret_hash
+        calls = []
+
+        def counting(value, stored):
+            calls.append(stored)
+            return original(value, stored)
+
+        monkeypatch.setattr(AuthService, "verify_secret_hash", staticmethod(counting))
+        status, _ = _get(
+            service, "/v1/console/session", **{"X-Console-Session": session_token}
+        )
+        assert status == 200
+        assert len(calls) <= 1
+
+        status, _ = _post(
+            service,
+            f"/v1/dashboard/preferences?namespace={NAMESPACE}",
+            {"preference_key": "_headers", "value": {"X-Injected": "unsafe"}},
+            **{"X-Console-Session": session_token, "X-CSRF-Token": csrf_token},
+        )
+        assert status == 200
+        status, preferences = _get(
+            service,
+            f"/v1/dashboard/preferences?namespace={NAMESPACE}",
+            **{"X-Console-Session": session_token},
+        )
+        assert status == 200
+        assert "_headers" not in preferences
+        assert preferences["data"]["_headers"] == {"X-Injected": "unsafe"}
     finally:
         service.close()
 

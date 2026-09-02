@@ -329,6 +329,25 @@ def test_service_unavailable_and_cli_diagnostics_never_create_database(tmp_path,
     assert list(tmp_path.iterdir()) == []
 
 
+def test_cli_ping_and_mcp_secret_validation_do_not_create_storage_and_new_db_is_private(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit):
+        main(["api", "ping", "--url", "http://example.com", "--db", "ping.db"])
+    assert "loopback" in capsys.readouterr().err
+    assert not (tmp_path / "ping.db").exists()
+
+    with pytest.raises(SystemExit):
+        main(["mcp", "--db", "mcp.db", "--token", "visible-secret"])
+    assert "process arguments" in capsys.readouterr().err
+    assert not (tmp_path / "mcp.db").exists()
+
+    memory = Memory.open(str(tmp_path / "private.db"))
+    memory.close()
+    assert (tmp_path / "private.db").stat().st_mode & 0o777 == 0o600
+
+
 @pytest.mark.parametrize("document", ["README.md", "docs/quickstart.md"])
 def test_primary_documentation_is_the_actual_packaged_example(document):
     root = Path(__file__).resolve().parents[1]

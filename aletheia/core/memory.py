@@ -1005,7 +1005,12 @@ class Memory:
             """,
             (namespace, limit),
         ).fetchall()
-        return [self.read_event(row["id"]) for row in rows]
+        events: list[EvidenceEvent] = []
+        for row in rows:
+            event = EvidenceEvent.from_row(row)
+            revealed = production.reveal_content_from_storage(self, event.content)
+            events.append(replace(event, content=revealed) if revealed != event.content else event)
+        return events
 
     def ingest(
         self,
@@ -6385,7 +6390,8 @@ class Memory:
             """,
             params,
         ).fetchall()
-        return [Claim.from_row(row, self._evidence_ids_for_claim(row["id"])) for row in rows]
+        evidence = self._evidence_ids_for_claims([row["id"] for row in rows])
+        return [Claim.from_row(row, evidence.get(row["id"], [])) for row in rows]
 
     def remember(
         self,
@@ -6403,6 +6409,7 @@ class Memory:
         half_life_days: float | None = None,
         project_id: str | None = None,
         session_id: str | None = None,
+        privacy_level: str = "personal",
     ) -> Claim:
         namespace = namespace or self.namespace
         event_text = text or claim_text(subject, predicate, object)
@@ -6411,6 +6418,7 @@ class Memory:
             source_type=source_type,
             content=event_text,
             trust_level="user_asserted" if source_type == "manual" else "unknown",
+            privacy_level=privacy_level,
         )
         return self.write_claim(
             namespace=namespace,
@@ -7472,8 +7480,9 @@ class Memory:
             params,
         ).fetchall()
         grouped: dict[tuple[str, str], list[Claim]] = {}
+        evidence = self._evidence_ids_for_claims([row["id"] for row in rows])
         for row in rows:
-            claim = Claim.from_row(row, self._evidence_ids_for_claim(row["id"]))
+            claim = Claim.from_row(row, evidence.get(row["id"], []))
             grouped.setdefault((claim.subject, claim.predicate), []).append(claim)
         families: list[ConflictFamily] = []
         for (claim_subject, claim_predicate), claims in grouped.items():
