@@ -234,7 +234,10 @@ def test_failed_guesses_are_bounded_and_stalled_tls_does_not_block_accept(servic
 
 
 def test_database_replacement_changes_identity(services, tmp_path):
+    from aletheia.service.local_files import identity_directory
     service = services()
+    home_relative = "~/" + os.path.relpath(service.config.db_path, Path.home())
+    assert identity_directory(home_relative) == service.service.local_pairing.directory
     fingerprint = service.service.local_pairing.fingerprint
     service.shutdown()
     database = tmp_path / "memory.db"

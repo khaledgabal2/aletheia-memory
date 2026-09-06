@@ -21,7 +21,7 @@ def private_directory(path: Path) -> Path:
 def identity_directory(db_path: str, root: str | None = None) -> Path:
     if db_path == ":memory:":
         raise ValueError("Local pairing requires a persistent database.")
-    database = Path(db_path).resolve(strict=True)
+    database = Path(db_path).expanduser().resolve(strict=True)
     info = database.stat()
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
         raise ValueError("Local pairing requires a database file owned by this user.")
