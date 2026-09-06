@@ -2,6 +2,18 @@
 
 All notable public changes to Aletheia are tracked here.
 
+## 1.5.0.dev0 — Unreleased
+
+- Automatically advertise participating local POSIX daemons with owner-only,
+  expiring registrations and explicit opt-out; clean up on normal exit/SIGTERM.
+- Add local pairing v1: owner-issued single-use codes, explicit limited grants,
+  persistent database-bound TLS identity, expiring credentials, and self-revocation.
+- Require the original encrypted transport for pairing-issued HTTP credentials;
+  record secret-free issuance/revocation audit events. Existing API/storage
+  contracts remain compatible; no database migration is added.
+- Validate the new contract and lifecycle with 17 tests; full regression suite: 329.
+  See [local pairing](docs/local_pairing_v1.md) for scope and platform limits.
+
 ## 1.4.1
 
 Packaging metadata correction.

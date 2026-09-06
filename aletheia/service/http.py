@@ -23,6 +23,8 @@ from aletheia.core.errors import AletheiaError, NotFoundError, ValidationError
 from aletheia.core.ids import content_hash, new_id
 from aletheia.core.time import parse_iso, utc_now, utc_now_iso
 from aletheia.models import ApiToken, ServiceConfig, ServiceHealth
+from aletheia.service.local_pairing import LocalPairing, PAIRING_PATHS
+from aletheia.service.local_discovery import LocalAdvertisement
 from aletheia.service.auth import AuthContext, AuthService, PRIVACY_ORDER
 from aletheia.service.contracts import DISCOVERY_PATHS, apply_discovery_contracts
 from aletheia.service.reads import READ_POST_PATHS, ReadAccess, is_read_path
@@ -305,6 +307,8 @@ class AletheiaService:
         self.auth = AuthService(memory)
         self.lock = threading.RLock()
         self.service_identity = new_id("service")
+        self.local_pairing: LocalPairing | None = None
+        self._closed = False
         from aletheia.service.reviews import ReviewProtocol
         self.review_protocol = ReviewProtocol(self)
 
@@ -322,15 +326,34 @@ class AletheiaService:
         return service
 
     def close(self) -> None:
-        self.memory.close()
+        with self.lock:
+            if not self._closed:
+                self.memory.close()
+                self._closed = True
 
     def handle_http(
         self, *, method: str, path: str, headers: Mapping[str, str], body: bytes = b"",
+        transport_identity: str | None = None,
     ) -> tuple[int, dict]:
         # HTTP handlers share one SQLite connection. Keep authentication writes
         # and request logging out of another request's read transaction.
         with self.lock:
-            return self._handle_http(method=method, path=path, headers=headers, body=body)
+            if path.split("?", 1)[0] in PAIRING_PATHS:
+                request_id = new_id("req")
+                try:
+                    if path not in PAIRING_PATHS or len(body) > 4096:
+                        raise validation_error("Invalid local pairing request.")
+                    if self.local_pairing is None:
+                        raise ServiceError("pairing_unavailable", "Local pairing is not enabled.", status_code=503)
+                    data = self.local_pairing.handle(method.upper(), path, self._json_body(body), dict(headers), transport_identity)
+                    response = self._success(data=data, request_id=request_id, warnings=[], pagination=None)
+                    response["_headers"] = {"Cache-Control": "no-store"}
+                    return 200, response
+                except ServiceError as exc:
+                    return exc.status_code, self._error(exc, request_id)
+                except Exception:
+                    return 500, self._error(ServiceError("pairing_failed", "Local pairing could not be completed.", status_code=500), request_id)
+            return self._handle_http(method=method, path=path, headers=headers, body=body, transport_identity=transport_identity)
 
     def _handle_http(
         self,
@@ -339,6 +362,7 @@ class AletheiaService:
         path: str,
         headers: Mapping[str, str],
         body: bytes = b"",
+        transport_identity: str | None = None,
     ) -> tuple[int, dict]:
         started = time.perf_counter()
         method = method.upper()
@@ -365,6 +389,9 @@ class AletheiaService:
                 namespace_for_log = query["namespace"][0]
             try:
                 auth_context = self._authenticate(method, endpoint, headers)
+                paired_identity = auth_context.token.metadata.get("local_pairing_identity") if auth_context.token else None
+                if paired_identity and paired_identity != transport_identity:
+                    raise unauthorized("This paired credential requires its original encrypted service identity.")
             except ServiceError as exc:
                 if self.config.rate_limit_enabled and exc.status_code == 401:
                     self._check_rate_limit("auth-failure:" + self._anonymous_rate_limit_identity(headers))
@@ -627,7 +654,10 @@ class AletheiaService:
 
     def _discovery_metadata(self) -> dict:
         self.review_protocol.state()
-        return {**discovery_metadata(), "service_identity": self.service_identity}
+        metadata = discovery_metadata()
+        if self.local_pairing is not None:
+            metadata["supported_features"].append("local-pairing-v1")
+        return {**metadata, "service_identity": self.service_identity}
 
     def service_health(self) -> ServiceHealth:
         health = self.memory.health()
@@ -3198,6 +3228,8 @@ class AletheiaDaemon:
         self.httpd: ThreadingHTTPServer | None = None
         self._worker_stop = threading.Event()
         self._worker_thread: threading.Thread | None = None
+        self._advertisement: LocalAdvertisement | None = None
+        self._close_lock = threading.Lock()
 
     def start(self) -> tuple[str, int]:
         service = self.service
@@ -3206,8 +3238,36 @@ class AletheiaDaemon:
             pass
 
         Handler.service = service
-        self.httpd = ThreadingHTTPServer((self.config.host, self.config.port), Handler)
+        class LocalHTTPServer(ThreadingHTTPServer):
+            running = threading.Event()
+            def serve_forever(self, *args, **kwargs):
+                self.running.set()
+                try:
+                    return super().serve_forever(*args, **kwargs)
+                finally:
+                    self.running.clear()
+        self.httpd = LocalHTTPServer((self.config.host, self.config.port), Handler)
         host, port = self.httpd.server_address
+        try:
+            if host == "127.0.0.1" and not self.config.allow_remote:
+                if self.config.local_pairing_enabled and self.config.auth_required:
+                    if os.name != "posix":
+                        raise ValueError("Local pairing currently requires POSIX file ownership protections.")
+                    self.service.local_pairing = LocalPairing(service, port)
+                    self.service.local_pairing.start()
+                if self.config.advertise_local and os.name == "posix":
+                    self._advertisement = LocalAdvertisement(port=port, service_identity=service.service_identity,
+                        label=self.config.service_name, directory=self.config.discovery_directory)
+                    try:
+                        self._advertisement.start()
+                    except (OSError, ValueError):
+                        logging.getLogger(__name__).warning("Local advertising is unavailable; use a manual address.")
+                        self._advertisement = None
+        except Exception:
+            self._close_auxiliary()
+            self.httpd.server_close()
+            self.service.close()
+            raise
         self.service.log_service_instance(instance_id=self.instance_id, status="running", port=port)
         if self.config.worker_enabled:
             self._start_worker_loop()
@@ -3220,16 +3280,36 @@ class AletheiaDaemon:
         try:
             self.httpd.serve_forever()
         finally:
+            self._worker_stop.set()
+            if self._worker_thread and self._worker_thread.is_alive():
+                self._worker_thread.join(timeout=2)
+            self._close_auxiliary()
+            self.httpd.server_close()
             self.service.close()
 
     def shutdown(self) -> None:
         self._worker_stop.set()
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=2)
+        self._close_auxiliary()
         if self.httpd is not None:
-            self.httpd.shutdown()
+            if self.httpd.running.is_set():
+                self.httpd.shutdown()
             self.httpd.server_close()
         self.service.close()
+
+    def _close_auxiliary(self) -> None:
+        with self._close_lock:
+            if self._advertisement:
+                try:
+                    self._advertisement.close()
+                except OSError:
+                    logging.getLogger(__name__).warning("Local registration cleanup was unavailable; its lease will expire.")
+                finally:
+                    self._advertisement = None
+            if self.service.local_pairing:
+                self.service.local_pairing.close()
+                self.service.local_pairing = None
 
     def _start_worker_loop(self) -> None:
         if self._worker_thread and self._worker_thread.is_alive():
@@ -3280,6 +3360,12 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         request_id = self.headers.get("X-Request-ID") or new_id("req")
+        if self.path.split("?", 1)[0] in PAIRING_PATHS:
+            request_id = new_id("req")
+        if any(len(self.headers.get_all(name, [])) > 1 for name in ("Content-Length", "Transfer-Encoding", "Authorization", "Content-Type")):
+            self.close_connection = True
+            self._send_payload(400, self.service._error(validation_error("Duplicate request headers are not allowed."), request_id))
+            return
         if not self._origin_allowed():
             self._send_payload(403, self.service._error(forbidden("Host or Origin is not allowed for this local service."), request_id))
             return
@@ -3307,7 +3393,7 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
                 ),
             )
             return
-        if length > self.service.config.max_request_bytes:
+        if length > min(self.service.config.max_request_bytes, 4096 if self.path.split("?", 1)[0] in PAIRING_PATHS else self.service.config.max_request_bytes):
             self._send_payload(
                 413,
                 self.service._error(
@@ -3332,6 +3418,7 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
             path=self.path,
             headers={key: value for key, value in self.headers.items()},
             body=body,
+            transport_identity=getattr(self.server, "transport_identity", None),
         )
         self._send_payload(status, payload)
 
@@ -3354,14 +3441,14 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
             if origin is None:
                 return True
             parsed = urlparse(origin)
-            return (parsed.scheme == "http" and parsed.netloc == authority.netloc
+            return (parsed.scheme == ("https" if getattr(self.server, "transport_identity", None) else "http") and parsed.netloc == authority.netloc
                     and not parsed.path and not parsed.query and not parsed.fragment)
         except ValueError:
             return False
 
     def _send_payload(self, status: int, payload: dict) -> None:
         response_headers = payload.pop("_headers", {}) if isinstance(payload, dict) else {}
-        if self.path.split("?", 1)[0] in {*DISCOVERY_PATHS, "/v1/remember"} or is_read_path(self.path.split("?", 1)[0]):
+        if self.path.split("?", 1)[0] in {*DISCOVERY_PATHS, *PAIRING_PATHS, "/v1/remember"} or is_read_path(self.path.split("?", 1)[0]):
             response_headers["Cache-Control"] = "no-store"
             request_id = payload.get("request_id") if isinstance(payload, dict) else None
             if isinstance(request_id, str) and len(request_id) <= 200 and all(32 <= ord(c) < 127 for c in request_id):
@@ -3706,4 +3793,5 @@ def openapi_schema() -> dict:
     }
     from aletheia.service.review_contracts import apply_review_contracts
     from aletheia.service.onboarding_contract import apply_onboarding_contract
-    return apply_onboarding_contract(apply_review_contracts(apply_read_contracts(apply_discovery_contracts(schema))))
+    from aletheia.service.pairing_contract import apply_pairing_contract
+    return apply_pairing_contract(apply_onboarding_contract(apply_review_contracts(apply_read_contracts(apply_discovery_contracts(schema)))))
