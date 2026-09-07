@@ -651,6 +651,81 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        LocalPairingCanceled: {
+            /** @constant */
+            canceled: true;
+        };
+        LocalPairingCanceledEnvelope: {
+            data: components["schemas"]["LocalPairingCanceled"];
+            pagination?: null;
+            request_id: string;
+            warnings: string[];
+        };
+        LocalPairingCredential: {
+            certificate_sha256: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** @constant */
+            protocol: "aletheia-local-pairing-v1";
+            service_identity: string;
+            /** @description Sensitive bearer; returned once over pinned TLS to the credential host. */
+            token: string;
+        };
+        LocalPairingCredentialEnvelope: {
+            data: components["schemas"]["LocalPairingCredential"];
+            pagination?: null;
+            request_id: string;
+            warnings: string[];
+        };
+        LocalPairingInfo: {
+            certificate_pem: string;
+            certificate_sha256: string;
+            /** @constant */
+            protocol: "aletheia-local-pairing-v1";
+            public_port: number;
+            service_identity: string;
+            tls_port: number;
+        };
+        LocalPairingInfoEnvelope: {
+            data: components["schemas"]["LocalPairingInfo"];
+            pagination?: null;
+            request_id: string;
+            warnings: string[];
+        };
+        LocalPairingInspection: {
+            capabilities: ("memory:audit" | "memory:read" | "memory:review")[];
+            certificate_sha256: string;
+            client_name: string;
+            expires_at_ms: number;
+            namespace_grants: string[];
+            /** @enum {unknown} */
+            privacy_ceiling: "public" | "personal" | "private" | "sensitive" | "secret";
+            /** @constant */
+            protocol: "aletheia-local-pairing-v1";
+            service_identity: string;
+            token_ttl_seconds: number;
+        };
+        LocalPairingInspectionEnvelope: {
+            data: components["schemas"]["LocalPairingInspection"];
+            pagination?: null;
+            request_id: string;
+            warnings: string[];
+        };
+        LocalPairingRequest: {
+            /** Format: uuid */
+            invitation_id: string;
+            secret: string;
+        };
+        LocalPairingRevoked: {
+            /** @constant */
+            revoked: true;
+        };
+        LocalPairingRevokedEnvelope: {
+            data: components["schemas"]["LocalPairingRevoked"];
+            pagination?: null;
+            request_id: string;
+            warnings: string[];
+        };
         OpenApiDocument: {
             components: {
                 [key: string]: unknown;

@@ -18,6 +18,10 @@ also checks that a missing path is refused without creating a database.
 Release preparation updates metadata to 1.5.0 and adds the repeatable installed
 recovery gate to the required CI build job.
 
+The generated-contract CI gate also identified a stale packaged TypeScript
+schema. Regenerating it adds the new pairing model definitions to the bundled
+component types; existing endpoint types are unchanged.
+
 ## Local evidence
 
 Validated on macOS 26.6.2 arm64 with Python 3.13.13 using synthetic data and
@@ -30,6 +34,7 @@ disposable service, discovery, identity, and installation directories.
 | Source installation | Fresh core-only environment; cryptography 50.0.1 (resolver selection); dependency check passes |
 | Existing-data baseline | Actual published 1.4.1 in a separate environment, creating claims, evidence, and candidates |
 | Installed onboarding | Both distributions pass packaged documentation/embedded and HTTP starter flows: explicit approval, decline, persistence, safe rerun, and read-only diagnosis |
+| Generated TypeScript | Baseline, discovery, reads, review, and onboarding consumers pass against actual services; type-check/build and 24 transport/polling checks pass on Node 26.0.0 |
 | CLI and startup | Installed console script, packaged pairing help, fresh initialization, service readiness, and quoted home-relative paths without automatic migration |
 | Pairing | Exact owner grants, one-use completion, authenticated access over verified TLS, and plaintext rejection |
 | Running lifecycle | Actual 10-second lease renewal, SIGTERM removal, restart with the same certificate and credential, and rejection of unused codes from the old instance |

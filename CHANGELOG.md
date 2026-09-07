@@ -19,6 +19,8 @@ All notable public changes to Aletheia are tracked here.
   Runtime dependencies and the storage schema are unchanged from 1.4.1.
 - Expand quoted `~` database paths during the service schema precheck so an
   existing database starts without requiring `--auto-migrate`.
+- Refresh the packaged TypeScript starter's generated schema with the new
+  pairing model definitions; existing endpoint types remain unchanged.
 
 ## 1.4.1
 
