@@ -197,6 +197,11 @@ class ServiceConfig:
     trust_proxy_headers: bool = False
     console_enabled: bool = False
     console_session_ttl_minutes: int = 60
+    advertise_local: bool = True
+    service_name: str = "Aletheia Memory"
+    discovery_directory: str | None = None
+    local_pairing_enabled: bool = False
+    identity_directory: str | None = None
 
     @classmethod
     def load(
@@ -216,8 +221,14 @@ class ServiceConfig:
         mcp = data.get("mcp", {})
         jobs = data.get("jobs", {})
         limits = data.get("limits", {})
+        local = data.get("local", {})
 
         values = {
+            "advertise_local": _bool(local.get("advertise", True)),
+            "service_name": local.get("name", "Aletheia Memory"),
+            "discovery_directory": local.get("discovery_directory"),
+            "local_pairing_enabled": _bool(local.get("pairing", os.name == "posix")),
+            "identity_directory": local.get("identity_directory"),
             "db_path": server.get("db", "./aletheia.db"),
             "host": server.get("host", "127.0.0.1"),
             "port": int(server.get("port", 8765)),
@@ -260,6 +271,7 @@ class ServiceConfig:
 
     def redacted(self) -> dict:
         return {
+            "local": {"advertise": self.advertise_local, "name": self.service_name, "pairing": self.local_pairing_enabled},
             "server": {
                 "host": self.host,
                 "port": self.port,

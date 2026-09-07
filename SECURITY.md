@@ -37,3 +37,13 @@ Please include:
 
 See [docs/security_privacy_guide.md](docs/security_privacy_guide.md) for the
 full security and privacy model.
+
+## Unreleased Local Pairing
+
+The local pairing development contract requires a user-transferred certificate
+fingerprint before credentials, TLS-only paired authorization, owner-only identity
+and invitation files, explicit limited grants, expiry, and self-revocation.
+Discovery announcements remain untrusted. See [the protocol](docs/local_pairing_v1.md)
+for threat boundaries, rotation/recovery, and unsupported platforms. The owner of
+the database and OS account remains trusted; this is not isolation from code
+already running with that owner's privileges.

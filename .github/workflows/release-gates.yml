@@ -65,6 +65,12 @@ jobs:
           python -m venv /tmp/aletheia-sdist
           /tmp/aletheia-sdist/bin/python -m pip install dist/*.tar.gz
           python scripts/v1_4_onboarding_check.py --python /tmp/aletheia-sdist/bin/python
+      - name: Verify installed startup and recovery against published 1.4.1
+        run: |
+          python -m venv /tmp/aletheia-previous
+          /tmp/aletheia-previous/bin/python -m pip install aletheia-memory==1.4.1
+          python scripts/v1_5_install_recovery_check.py --python /tmp/aletheia-wheel/bin/python --previous-python /tmp/aletheia-previous/bin/python
+          python scripts/v1_5_install_recovery_check.py --python /tmp/aletheia-sdist/bin/python --previous-python /tmp/aletheia-previous/bin/python
 
   contract-toolchain:
     runs-on: ubuntu-latest

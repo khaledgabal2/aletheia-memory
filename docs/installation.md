@@ -1,6 +1,6 @@
 # Installation
 
-This guide covers Aletheia 1.4.1, verifying the command line,
+This guide covers Aletheia 1.5.0, verifying the command line,
 initializing a local database, and finding installed help. Follow the
 [zero-model quickstart](quickstart.md) for the primary first-run journey:
 evidence, candidate, explicit review, lexical context, provenance and reopen.
@@ -31,16 +31,21 @@ aletheia --help
 aletheia docs list
 ```
 
-## 1.4.0 Upgrade And Packaged Starters
+## 1.5.0 Upgrade And Packaged Starters
 
-Use `python -m pip install aletheia-memory==1.4.1` for the published release. For
-pre-publication review, install the reviewed `aletheia_memory-1.4.1-py3-none-any.whl`
+Use `python -m pip install aletheia-memory==1.5.0` for this release. For
+pre-publication review, install the reviewed `aletheia_memory-1.5.0-py3-none-any.whl`
 or matching source archive by local path.
 
-Before opening any existing database, read the
+Upgrading from Memory 1.4.0 or 1.4.1 adds no database migration or dependency
+upgrades; storage remains 1.3.1. Preserve your database backups and local identity
+directory. A normal service restart preserves paired credentials; a restored or
+relocated database needs fresh pairing because identity binds to its file.
+
+When upgrading from Memory 1.3.x, first read the
 [migration/backup guide](v1_4_0_migration_guide.md). Storage moves from 1.3.0 to
 1.3.1; older software cannot open the upgraded database. Keep the pre-upgrade
-backup and old binary for recovery. From the 1.4.0 environment:
+backup and old binary for recovery. From the installed 1.5.0 environment:
 
 ```bash
 aletheia examples create --type embedded --output ./memory-demo
@@ -68,7 +73,7 @@ the published version.
 Install a downloaded release artifact into your environment:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.4.1-py3-none-any.whl
+python -m pip install ./dist/aletheia_memory-1.5.0-py3-none-any.whl
 ```
 
 Then verify the CLI:
@@ -112,6 +117,20 @@ or symlinks; read-only diagnostics never initialize a missing database:
 aletheia init --new --db ./fresh-demo.db
 aletheia doctor --read-only --db ./fresh-demo.db
 ```
+
+## Start A Local Service
+
+Initialize a fresh database once, then start it without automatic migration:
+
+```bash
+aletheia init --new --db ./memory.db
+aletheia serve --db ./memory.db --service-name 'My Memory'
+```
+
+On POSIX, authenticated loopback services advertise themselves and enable local
+pairing automatically. Use `aletheia pairing invite --help` in another terminal
+to choose explicit grants. See [local pairing](local_pairing_v1.md) for the full
+owner workflow, directory settings, opt-outs, platform limits, and recovery.
 
 ## Verify Installed Help
 

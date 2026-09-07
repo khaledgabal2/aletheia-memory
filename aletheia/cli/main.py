@@ -859,6 +859,24 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--with-console", action="store_true")
     serve.add_argument("--no-console", action="store_true")
     serve.add_argument("--log-level", default="info")
+    serve.add_argument("--no-advertise", action="store_true")
+    serve.add_argument("--service-name")
+    serve.add_argument("--discovery-dir")
+    serve.add_argument("--no-local-pairing", action="store_true")
+    serve.add_argument("--identity-dir")
+
+    pairing = subparsers.add_parser("pairing", help="Issue a one-time code for an explicitly scoped local connection.")
+    pairing_sub = pairing.add_subparsers(dest="pairing_command", required=True)
+    invite = pairing_sub.add_parser("invite")
+    invite.add_argument("--db", required=True)
+    invite.add_argument("--port", required=True, type=int)
+    invite.add_argument("--name", required=True)
+    invite.add_argument("--namespace", action="append", required=True)
+    invite.add_argument("--capability", action="append", choices=["memory:read", "memory:audit", "memory:review"], required=True)
+    invite.add_argument("--privacy-ceiling", choices=["public", "personal", "private", "sensitive", "secret"], default="personal")
+    invite.add_argument("--token-ttl-seconds", type=int, default=86400)
+    invite.add_argument("--identity-dir")
+    invite.add_argument("--json", action="store_true")
 
     mcp = subparsers.add_parser("mcp", help="Run MCP-style memory tools over stdio.")
     mcp.add_argument("--db")
@@ -1720,6 +1738,20 @@ def _run(args: argparse.Namespace) -> int:
             print(json.dumps(memory.health(), indent=2))
         finally:
             memory.close()
+        return 0
+    if args.command == "pairing":
+        from aletheia.service.local_pairing import create_invitation
+        try:
+            code = create_invitation(db_path=args.db, public_port=args.port, root=args.identity_dir,
+                grants={"client_name": args.name, "namespace_grants": args.namespace, "capabilities": args.capability,
+                    "privacy_ceiling": args.privacy_ceiling, "token_ttl_seconds": args.token_ttl_seconds})
+        except (OSError, ValueError, KeyError) as exc:
+            raise AletheiaError("The local service could not be verified. Start it with local pairing enabled and check the database, port, and identity directory.") from exc
+        if args.json:
+            print(json.dumps({"pairing_code": code, "expires_in_seconds": 300}))
+        else:
+            print("Pairing code (expires in 5 minutes; share only with your local app):")
+            print(code)
         return 0
     if args.command == "serve":
         return _run_serve(args)
@@ -3813,6 +3845,11 @@ def _run_serve(args: argparse.Namespace) -> int:
     config = ServiceConfig.load(
         args.config,
         overrides={
+            "advertise_local": False if args.no_advertise else None,
+            "service_name": args.service_name,
+            "discovery_directory": args.discovery_dir,
+            "local_pairing_enabled": False if args.no_local_pairing else None,
+            "identity_directory": args.identity_dir,
             "db_path": args.db,
             "host": args.host,
             "port": args.port,
@@ -3833,8 +3870,21 @@ def _run_serve(args: argparse.Namespace) -> int:
     print(f"OpenAPI: http://{host}:{port}/v1/openapi.json", flush=True)
     if config.console_enabled:
         print(f"Console: http://{host}:{port}/console", flush=True)
-    daemon.serve_forever()
+    _serve_until_interrupted(daemon)
     return 0
+
+
+def _serve_until_interrupted(daemon: AletheiaDaemon) -> None:
+    import signal
+    def stop(_signum, _frame):
+        raise KeyboardInterrupt
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        daemon.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _run_console_serve(args: argparse.Namespace) -> int:
@@ -3865,7 +3915,7 @@ def _run_console_serve(args: argparse.Namespace) -> int:
     print(f"Console: {result_url}", flush=True)
     if args.open_browser:
         webbrowser.open(result_url)
-    daemon.serve_forever()
+    _serve_until_interrupted(daemon)
     return 0
 
 
