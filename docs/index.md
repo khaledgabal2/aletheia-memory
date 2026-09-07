@@ -1,6 +1,6 @@
 # Aletheia Documentation Index
 
-This help map covers Aletheia 1.4.0 and the compatible public v1.3.1 APIs.
+This help map covers Aletheia 1.5.0 and the compatible public v1.3.1 APIs.
 The primary Python quickstart works on both.
 Aletheia is a local, auditable memory system for AI agents. The production
 baseline is intentionally generic: product-specific integration layers belong
@@ -70,6 +70,7 @@ Plugin authors should read:
 | `interfaces.md` | Show how to use the Python kernel, CLI, HTTP API, SDK, MCP, console, plugins, and adapters. |
 | `cli_reference.md` | Map each command group to the functionality it controls. |
 | `http_api_reference.md` | Explain HTTP service discovery, auth shape, envelopes, and major route families. |
+| `local_pairing_v1.md` | Advertise local services and pair applications with explicit grants over verified TLS. |
 | `mcp_reference.md` | Explain MCP modes, tool behavior, and local-agent expectations. |
 | `integration_guide.md` | Show integration patterns for embedded Python, HTTP sidecars, SDKs, MCP, adapters, and plugins. |
 | `security_privacy_guide.md` | Explain local-first security, protected mode, tokens, privacy ceilings, and plugin controls. |
@@ -115,6 +116,9 @@ Aletheia is easiest to understand as layers:
 | Federation | `aletheia/core/federation.py` | `m10_federated_memory_contract.md`, `near_future_changes.md` |
 
 ## Contracts And Historical Design Docs
+
+The 1.5.0 installation, startup, pairing, and recovery gates are recorded in
+[release verification](v1_5_0_release_verification.md).
 
 The 1.4.0 design, prerelease evidence and final verification are recorded here:
 

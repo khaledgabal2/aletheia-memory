@@ -2,7 +2,7 @@
 
 All notable public changes to Aletheia are tracked here.
 
-## 1.5.0.dev0 — Unreleased
+## 1.5.0
 
 - Automatically advertise participating local POSIX daemons with owner-only,
   expiring registrations and explicit opt-out; clean up on normal exit/SIGTERM.
@@ -11,8 +11,14 @@ All notable public changes to Aletheia are tracked here.
 - Require the original encrypted transport for pairing-issued HTTP credentials;
   record secret-free issuance/revocation audit events. Existing API/storage
   contracts remain compatible; no database migration is added.
-- Validate the new contract and lifecycle with 17 tests; full regression suite: 329.
+- Validate the new contract and lifecycle with 17 pairing tests plus the
+  home-relative startup regression; full regression suite: 330.
   See [local pairing](docs/local_pairing_v1.md) for scope and platform limits.
+- Preserve home-relative database paths for pairing and validate installed wheel
+  and source packages through startup, restart, crash recovery, and backup restore.
+  Runtime dependencies and the storage schema are unchanged from 1.4.1.
+- Expand quoted `~` database paths during the service schema precheck so an
+  existing database starts without requiring `--auto-migrate`.
 
 ## 1.4.1
 

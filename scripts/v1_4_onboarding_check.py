@@ -149,6 +149,8 @@ def main():
     environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATH", "npm_config_cache") if key in os.environ}
     environment["PYTHONIOENCODING"] = "utf-8"
     with tempfile.TemporaryDirectory(prefix="aletheia-installed-onboarding-") as directory:
+        environment["ALETHEIA_DISCOVERY_DIR"] = str(Path(directory) / "discovery")
+        environment["ALETHEIA_IDENTITY_DIR"] = str(Path(directory) / "identities")
         result = subprocess.run([target, "-I", str(Path(__file__).resolve()), "--worker", *(["--typescript"] if args.typescript else [])], cwd=directory, env=environment, timeout=400 if args.typescript else 180)
     raise SystemExit(result.returncode)
 

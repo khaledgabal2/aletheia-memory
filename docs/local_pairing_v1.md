@@ -1,6 +1,6 @@
 # Local Registration And Pairing v1
 
-Unreleased in Memory 1.5.0.dev0. This is local application pairing, independent
+Available in Memory 1.5.0. This is local application pairing, independent
 of federation. The existing HTTP API and 1.4.1 client contracts remain compatible.
 No storage schema migration is added.
 
@@ -96,9 +96,38 @@ LAN discovery, enterprise identity, OS service supervision, or signed packaging.
 
 ## Validation
 
+The installed-artifact release gate is
+`python scripts/v1_5_install_recovery_check.py --python /fresh/venv/bin/python --previous-python /1.4.1/venv/bin/python`.
+Run it for both the wheel and source distribution, with no development extras
+in either installation. It uses disposable databases and loopback services to
+verify CLI startup, quoted `~` paths, lease renewal/expiry, restart and crash
+recovery, encrypted backup restore, identity loss, revocation, and opt-out.
+
 `tests/test_v1_5_local_pairing.py` covers multi-instance leases, shutdown/crash,
 opt-out, restarts/database replacement, permissions/grants, replay races,
 cancel/expiry/guess limits, TLS-only authorization, wrong certificate rejection,
 audit redaction, bounded slow handshakes, and OpenAPI profile conformance. The
-complete Memory suite passes 329 tests on macOS/Python 3.13.13. Desktop consumer
+complete Memory suite includes the service startup path regression in addition
+to the 17 pairing cases. Desktop consumer
 and real Keychain tests are recorded in the sibling Desktop pairing decision.
+
+## Recovery And Downgrade
+
+After a crash, restart the same database with the same identity directory.
+Unexpired credentials retain their certificate binding. The crashed registration
+expires within 30 seconds; it is an inert hint, not a reason to delete a database
+or identity. Expired discovery records currently remain on disk. If a consumer
+reaches its directory traversal bound, the owner must remove only verified
+expired registration files; automatic stale-record pruning is deferred.
+
+Preserve the identity directory alongside operational backups, keeping its
+owner-only permissions. Restoring or relocating a database changes its file
+binding and requires a new invitation even when identity files were preserved.
+Loss or replacement of identity files also requires new pairing. Revoke old
+credentials through `aletheia auth list-tokens` and `aletheia auth revoke-token`
+using the intended `--db`, then approve fresh grants.
+
+Storage remains readable by Memory 1.4.1. Before downgrading, stop 1.5.0 and revoke
+all pairing-issued credentials with owner administration. Memory 1.4.1 does not
+enforce their original TLS binding. Only then start the older service. Returning
+to 1.5.0 requires fresh credentials; no storage downgrade is necessary.

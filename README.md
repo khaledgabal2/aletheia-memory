@@ -25,7 +25,7 @@ clear audit trail.
 
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
-- Version: `1.4.1`
+- Version: `1.5.0`
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
@@ -512,11 +512,10 @@ A reviewed wheel can instead be installed by its local path. Development
 checkouts may contain unreleased changes; use a pinned published version for
 production. Never commit credentials or private databases.
 
-## Local Desktop Pairing (Unreleased)
+## Local Application Pairing
 
-The 1.5.0.dev0 candidate automatically advertises POSIX loopback services and
+Memory 1.5.0 automatically advertises POSIX loopback services and
 supports owner-approved, scoped pairing over a persistent local TLS identity.
 Use `aletheia pairing invite --help` to create a five-minute code. Discovery alone
 never authorizes access. See the [local pairing protocol](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/local_pairing_v1.md)
-for grants, opt-out, lifecycle, supported platforms, and recovery. This candidate
-has not been published as a release.
+for grants, opt-out, lifecycle, supported platforms, and recovery.
