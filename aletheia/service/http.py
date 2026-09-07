@@ -3206,10 +3206,10 @@ class AletheiaService:
 
     @staticmethod
     def _assert_current_schema(db_path: str) -> None:
-        path = Path(db_path)
+        path = Path(db_path).expanduser()
         if not path.exists():
             raise stale_schema("Database does not exist; run migrate or use --auto-migrate.")
-        connection = sqlite3.connect(db_path)
+        connection = sqlite3.connect(path)
         try:
             row = connection.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
         except sqlite3.Error as exc:

@@ -924,6 +924,26 @@ def test_worker_runs_success_failure_and_respects_max_jobs(tmp_path):
     assert any(row["action"] == "job.failed" for row in audit_rows)
 
 
+def test_home_relative_database_opens_when_auto_migrate_disabled(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+
+    monkeypatch.chdir(tmp_path)
+    database = tmp_path / "current.db"
+    Memory.open(str(database)).close()
+    spelling = "~/" + os.path.relpath(database, Path.home())
+    service = AletheiaService.open(ServiceConfig(db_path=spelling, auto_migrate=False))
+    try:
+        assert Path(service.memory.store.path).resolve() == database.resolve()
+        assert not (tmp_path / "~").exists()
+    finally:
+        service.close()
+    missing = "~/" + os.path.relpath(tmp_path / "missing.db", Path.home())
+    with pytest.raises(ServiceError, match="Database does not exist"):
+        AletheiaService.open(ServiceConfig(db_path=missing, auto_migrate=False))
+    assert not (tmp_path / "missing.db").exists()
+
+
 def test_stale_schema_refused_when_auto_migrate_disabled(tmp_path):
     db_path = tmp_path / "old.db"
     connection = sqlite3.connect(db_path)
