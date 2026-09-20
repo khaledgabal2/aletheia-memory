@@ -771,7 +771,7 @@ def test_python_client_and_adapter_send_headers_preserve_warnings_and_raise_type
             ),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aletheia.client._open_request", fake_urlopen)
     client = AletheiaClient("http://127.0.0.1:8765", "atl_raw", timeout=3)
     data = client.context_pack(namespace=NAMESPACE, query="m6")
     assert data["context_pack_id"] == "ctx_client"
@@ -813,7 +813,7 @@ def test_python_client_and_adapter_send_headers_preserve_warnings_and_raise_type
             ),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", validation_urlopen)
+    monkeypatch.setattr("aletheia.client._open_request", validation_urlopen)
     with pytest.raises(AletheiaValidationError):
         client.context_pack(namespace=NAMESPACE, query="bad")
 
@@ -822,7 +822,7 @@ def test_async_client_wraps_sync_client(monkeypatch):
     def fake_urlopen(request, timeout):
         return _FakeResponse({"data": {"status": "ok"}, "request_id": "req_async", "warnings": []})
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aletheia.client._open_request", fake_urlopen)
     client = AsyncAletheiaClient("http://127.0.0.1:8765", "atl_raw")
     assert asyncio.run(client.health()) == {"status": "ok"}
     assert client.last_request_id == "req_async"
@@ -835,7 +835,7 @@ def test_python_client_normalizes_transport_failures_retries_only_gets_and_seria
         calls.append(request.method)
         raise urllib.error.URLError("offline")
 
-    monkeypatch.setattr("urllib.request.urlopen", unavailable)
+    monkeypatch.setattr("aletheia.client._open_request", unavailable)
     client = AletheiaClient("http://127.0.0.1:8765")
     client.last_request_id = "stale-request"
     client.last_warnings = ["stale warning"]
@@ -891,7 +891,7 @@ def test_python_client_rejects_invalid_response_documents(monkeypatch, body):
         def read(self):
             return body
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: RawResponse())
+    monkeypatch.setattr("aletheia.client._open_request", lambda request, timeout: RawResponse())
     client = AletheiaClient("http://127.0.0.1:8765")
     with pytest.raises(AletheiaTransportError) as error:
         client.health()

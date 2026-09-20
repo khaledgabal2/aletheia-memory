@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 from aletheia import Memory
 from aletheia.core.errors import AletheiaError, NotFoundError, ValidationError
 from aletheia.core.ids import content_hash, new_id
+from aletheia.core.provider_work import ProviderInputsChanged, ProviderWork, ProviderWorkNeeded
 from aletheia.core.time import parse_iso, utc_now, utc_now_iso
 from aletheia.models import ApiToken, ServiceConfig, ServiceHealth
 from aletheia.service.local_pairing import LocalPairing, PAIRING_PATHS
@@ -336,10 +337,8 @@ class AletheiaService:
         self, *, method: str, path: str, headers: Mapping[str, str], body: bytes = b"",
         transport_identity: str | None = None,
     ) -> tuple[int, dict]:
-        # HTTP handlers share one SQLite connection. Keep authentication writes
-        # and request logging out of another request's read transaction.
-        with self.lock:
-            if path.split("?", 1)[0] in PAIRING_PATHS:
+        if path.split("?", 1)[0] in PAIRING_PATHS:
+            with self.lock:
                 request_id = new_id("req")
                 try:
                     if path not in PAIRING_PATHS or len(body) > 4096:
@@ -354,7 +353,7 @@ class AletheiaService:
                     return exc.status_code, self._error(exc, request_id)
                 except Exception:
                     return 500, self._error(ServiceError("pairing_failed", "Local pairing could not be completed.", status_code=500), request_id)
-            return self._handle_http(method=method, path=path, headers=headers, body=body, transport_identity=transport_identity)
+        return self._handle_http(method=method, path=path, headers=headers, body=body, transport_identity=transport_identity)
 
     def _handle_http(
         self,
@@ -377,7 +376,10 @@ class AletheiaService:
         status = 200
         response: dict[str, Any]
         try:
-            self.review_protocol.state()
+            with self.lock:
+                if self._closed:
+                    raise ServiceError("service_closed", "The service is closed.", status_code=503)
+                self.review_protocol.state()
             if method == "GET" and (endpoint == "/console" or endpoint.startswith("/console/")):
                 status, response = self._console_static(endpoint)
                 return status, response
@@ -389,13 +391,15 @@ class AletheiaService:
             if namespace_for_log is None and query.get("namespace"):
                 namespace_for_log = query["namespace"][0]
             try:
-                auth_context = self._authenticate(method, endpoint, headers)
+                with self.lock:
+                    auth_context = self._authenticate(method, endpoint, headers)
                 paired_identity = auth_context.token.metadata.get("local_pairing_identity") if auth_context.token else None
                 if paired_identity and paired_identity != transport_identity:
                     raise unauthorized("This paired credential requires its original encrypted service identity.")
             except ServiceError as exc:
                 if self.config.rate_limit_enabled and exc.status_code == 401:
-                    self._check_rate_limit("auth-failure:" + self._anonymous_rate_limit_identity(headers))
+                    with self.lock:
+                        self._check_rate_limit("auth-failure:" + self._anonymous_rate_limit_identity(headers))
                 raise
             client_id = auth_context.client_id
             idempotency_scope = (
@@ -412,10 +416,12 @@ class AletheiaService:
                     self._check_rate_limit(self._rate_limit_identity(auth_context, headers))
             if method == "POST" and endpoint == "/v1/remember":
                 from aletheia.service.onboarding_contract import remember_response
-                status, response = remember_response(self, payload, headers, request_id, request_hash)
+                with self.lock:
+                    status, response = remember_response(self, payload, headers, request_id, request_hash)
             elif self.review_protocol.handles(method, endpoint, self._header(headers, "X-Aletheia-Contract")):
-                status, response = self.review_protocol.process(method=method, endpoint=endpoint, query=query,
-                    payload=payload, headers=headers, request_id=request_id, request_hash=request_hash)
+                with self.lock:
+                    status, response = self.review_protocol.process(method=method, endpoint=endpoint, query=query,
+                        payload=payload, headers=headers, request_id=request_id, request_hash=request_hash)
             else:
                 with self.lock:
                     replay = self._idempotency_replay(
@@ -489,7 +495,7 @@ class AletheiaService:
             duration_ms = int((time.perf_counter() - started) * 1000)
             if idempotency_record_id is not None:
                 try:
-                    with self.memory.store.transaction(immediate=True):
+                    with self.lock, self.memory.store.transaction(immediate=True):
                         self.memory.store.connection.execute(
                             "DELETE FROM idempotency_records WHERE id=? AND status='in_progress'",
                             (idempotency_record_id,),
@@ -497,17 +503,18 @@ class AletheiaService:
                 except sqlite3.Error:
                     logging.getLogger(__name__).warning("Idempotency reservation cleanup unavailable.")
             try:
-                self._log_request(
-                    request_id=request_id,
-                    client_id=client_id,
-                    namespace=namespace_for_log,
-                    method=method,
-                    path=endpoint,
-                    status_code=status,
-                    duration_ms=duration_ms,
-                    request_hash=request_hash,
-                    response=response if "response" in locals() else None,
-                )
+                with self.lock:
+                    self._log_request(
+                        request_id=request_id,
+                        client_id=client_id,
+                        namespace=namespace_for_log,
+                        method=method,
+                        path=endpoint,
+                        status_code=status,
+                        duration_ms=duration_ms,
+                        request_hash=request_hash,
+                        response=response if "response" in locals() else None,
+                    )
             except sqlite3.Error:
                 # Operational logging must not replace a committed receipt or
                 # a structured failure. Governance audit remains transactional.
@@ -515,23 +522,52 @@ class AletheiaService:
         return status, response
 
     def _route_consistent(self, **kwargs):
+        work = ProviderWork()
+        if kwargs["method"] == "POST" and kwargs["endpoint"] == "/v1/jobs/run":
+            # Job ownership must survive provider snapshot rollback, including
+            # against a worker using a different service or SQLite connection.
+            with self.lock, self.memory.store.transaction(immediate=True):
+                if self._closed:
+                    raise ServiceError("service_closed", "The service is closed.", status_code=503)
+                context = self._authenticate(kwargs["method"], kwargs["endpoint"], kwargs["headers"], previous=kwargs["auth_context"])
+                OperationAccess(self, context).scope("memory:jobs", kwargs["payload"].get("namespace"))
+                jobs = self.memory._pending_jobs(**self._run_jobs_args(kwargs["payload"]))
+                work.claimed_jobs = [job.id for job in jobs if self.memory._claim_pending_job(job)]
+        try:
+            return self._route_with_provider_work(work, **kwargs)
+        except BaseException:
+            if work.claimed_jobs:
+                with self.lock:
+                    if not self._closed:
+                        for job_id in work.claimed_jobs:
+                            self.memory._fail_running_job(job_id, "Service request ended before job completion.")
+            raise
+
+    def _route_with_provider_work(self, work, **kwargs):
         endpoint, method = kwargs["endpoint"], kwargs["method"]
-        if is_read_path(endpoint) and (method == "GET" or endpoint in READ_POST_PATHS):
-            # One SQLite snapshot for authorization, provenance and serialization;
-            # the store lock also excludes other writers on this connection.
-            with self.lock, self.memory.store.transaction():
-                kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"])
-                validate_read_input(endpoint, kwargs["query"], kwargs["payload"], self._header(kwargs["headers"], "X-Aletheia-Contract"))
-                return self._route(**kwargs)
-        if endpoint.startswith(("/v1/llm/", "/v1/traces", "/v1/sessions", "/v1/claims/", "/v1/candidates/",
+        read = is_read_path(endpoint) and (method == "GET" or endpoint in READ_POST_PATHS)
+        consistent = read or endpoint.startswith(("/v1/llm/", "/v1/traces", "/v1/sessions", "/v1/claims/", "/v1/candidates/",
                                 "/v1/conflicts", "/v1/infer", "/v1/reflections", "/v1/derivation/", "/v1/eval/",
-                                "/v1/policies/", "/v1/jobs")) or endpoint in {"/v1/feedback", "/v1/outcomes", "/v1/retrieval-judgments", "/v1/extract"}:
-            # Keep target/provenance authorization and the resulting operation
-            # in one snapshot, including against other SQLite connections.
-            with self.memory.store.transaction(immediate=method in STATE_CHANGING_METHODS):
-                kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"])
-                return self._route(**kwargs)
-        return self._route(**kwargs)
+                                "/v1/policies/", "/v1/jobs")) or endpoint in {"/v1/feedback", "/v1/outcomes", "/v1/retrieval-judgments", "/v1/extract"}
+        while True:
+            try:
+                with self.lock:
+                    if self._closed:
+                        raise ServiceError("service_closed", "The service is closed.", status_code=503)
+                    if not consistent:
+                        kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"], previous=kwargs["auth_context"])
+                        return self._route(**kwargs)
+                    # Fresh authorization/provenance and final writes share a
+                    # snapshot. Missing provider work unwinds it before I/O.
+                    with self.memory.store.transaction(immediate=method in STATE_CHANGING_METHODS), work.snapshot():
+                        kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"], previous=kwargs["auth_context"])
+                        if read:
+                            validate_read_input(endpoint, kwargs["query"], kwargs["payload"], self._header(kwargs["headers"], "X-Aletheia-Contract"))
+                        return self._route(**kwargs)
+            except ProviderWorkNeeded as needed:
+                work.perform(needed)
+            except ProviderInputsChanged as exc:
+                raise ServiceError("provider_input_changed", str(exc), status_code=409) from None
 
     def _route(
         self,
@@ -700,6 +736,7 @@ class AletheiaService:
         project_id = payload.get("project_id")
         self.auth.require_namespace(auth_context, namespace=namespace, project_id=project_id)
         self._require_read_session(payload, auth_context)
+        access = ReadAccess(self, auth_context)
         pack = self.memory.context_pack(
             namespace=namespace,
             query=payload.get("query", ""),
@@ -712,8 +749,10 @@ class AletheiaService:
             include_derivation_metadata=bool(payload.get("include_derivation_metadata", False)),
             policy_version_id=payload.get("policy_version_id"),
             record_usage=False,
+            _read_access=access.allowed,
         )
-        pack, omitted_by_policy = ReadAccess(self, auth_context).filter_context(pack)
+        pack, omitted_by_policy = access.filter_context(pack)
+        omitted_by_policy = omitted_by_policy or any(not allowed for allowed in access.checked.values())
         if payload.get("record_usage", False):
             self.memory._record_context_pack_usage(pack, metadata={
                 "include_confidence": True,
@@ -751,6 +790,7 @@ class AletheiaService:
         project_id = payload.get("project_id")
         self.auth.require_namespace(auth_context, namespace=namespace, project_id=project_id)
         self._require_read_session(payload, auth_context)
+        access = ReadAccess(self, auth_context)
         results = self.memory.retrieve(
             namespace=namespace,
             query=payload.get("query", ""),
@@ -761,8 +801,8 @@ class AletheiaService:
             memory_types=payload.get("memory_types"),
             include_disputed=bool(payload.get("include_disputed", False)),
             include_archived=bool(payload.get("include_archived", False)),
+            _read_access=access.allowed,
         )
-        access = ReadAccess(self, auth_context)
         return [asdict(result) for result in access.filter_retrieval(results)]
 
     def _require_read_session(self, payload, auth_context):
@@ -1159,6 +1199,9 @@ class AletheiaService:
             return asdict(self.memory.enqueue_job(**self._enqueue_job_args(payload)))
         if method == "POST" and endpoint == "/v1/jobs/run":
             access.scope("memory:jobs", payload.get("namespace"))
+            work = ProviderWork.current()
+            if work is not None and work.claimed_jobs is not None:
+                return [asdict(item) for item in self.memory._run_claimed_jobs(work.claimed_jobs)]
             return [asdict(item) for item in self.memory.run_jobs(**self._run_jobs_args(payload))]
         if method == "GET" and endpoint == "/v1/jobs":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
@@ -1353,6 +1396,7 @@ class AletheiaService:
                 retrieval_mode=payload.get("retrieval_mode", "hybrid"),
                 token_budget=self._integer(payload.get("token_budget", 2000), "token_budget"),
                 context_filter=lambda pack: access.filter_context(pack)[0],
+                read_access=access.allowed,
                 claim_filter=lambda value: access.allowed("claim", value),
                 query_privacy=auth_context.privacy_ceiling,
             ))
@@ -2275,11 +2319,19 @@ class AletheiaService:
         attributes = "HttpOnly; SameSite=Strict; Path=/"
         return attributes + ("; Secure" if self.config.allow_remote else "")
 
-    def _console_session_for_token(self, raw_session: str):
+    def _console_session_for_token(self, raw_session: str, *, previous: AuthContext | None = None):
         rows = self._console_session_rows(raw_session)
         for row in rows:
             metadata = json.loads(row["metadata_json"] or "{}")
-            if not AuthService.verify_secret_hash(raw_session, metadata.get("session_token_hash")):
+            # Reuse only this request's proof of the exact credential, never its
+            # old grants or lifecycle state. The row is freshly read on replay.
+            verified = (previous is not None and previous.token is not None
+                        and previous.token.metadata.get("console_session")
+                        and previous.token.id == row["id"]
+                        and metadata.get("session_token_lookup") == content_hash(raw_session)
+                        and metadata.get("session_token_hash")
+                        and metadata["session_token_hash"] == previous.token.metadata.get("session_token_hash"))
+            if not verified and not AuthService.verify_secret_hash(raw_session, metadata.get("session_token_hash")):
                 continue
             expires_at = parse_iso(row["expires_at"])
             if expires_at and expires_at <= utc_now():
@@ -2458,14 +2510,14 @@ class AletheiaService:
         if namespace:
             self.auth.require_namespace(auth_context, namespace=namespace, project_id=payload.get("project_id"))
 
-    def _authenticate(self, method: str, endpoint: str, headers: Mapping[str, str]) -> AuthContext:
+    def _authenticate(self, method: str, endpoint: str, headers: Mapping[str, str], *, previous: AuthContext | None = None) -> AuthContext:
         if endpoint == "/v1/auth/me":
             raw_auth = self._header(headers, "Authorization")
             # Supplied credentials must be validated even in local tokenless mode.
             if raw_auth is not None:
                 return self.auth.authenticate(raw_auth, auth_required=True)
             if self._header(headers, "X-Console-Session") or self._cookie(headers, "aletheia_console"):
-                return self._authenticate_console_or_api(method, endpoint, headers)
+                return self._authenticate_console_or_api(method, endpoint, headers, previous=previous)
             protected = self.memory.store.connection.execute(
                 "SELECT enabled FROM protected_mode_config WHERE id = 'protected_default'"
             ).fetchone()
@@ -2479,7 +2531,7 @@ class AletheiaService:
         if endpoint == "/v1/console/login":
             return AuthContext(token=None, client=None, auth_required=False)
         if self._is_console_api(endpoint):
-            return self._authenticate_console_or_api(method, endpoint, headers)
+            return self._authenticate_console_or_api(method, endpoint, headers, previous=previous)
         auth_required = self.config.auth_required and (method, endpoint) not in PUBLIC_ENDPOINTS
         return self.auth.authenticate(
             self._header(headers, "Authorization"),
@@ -2492,14 +2544,14 @@ class AletheiaService:
     def _is_console_api(self, endpoint: str) -> bool:
         return any(endpoint.startswith(prefix) for prefix in CONSOLE_API_PREFIXES)
 
-    def _authenticate_console_or_api(self, method: str, endpoint: str, headers: Mapping[str, str]) -> AuthContext:
+    def _authenticate_console_or_api(self, method: str, endpoint: str, headers: Mapping[str, str], *, previous: AuthContext | None = None) -> AuthContext:
         raw_auth = self._header(headers, "Authorization")
         if raw_auth:
             return self.auth.authenticate(raw_auth, auth_required=True)
         raw_session = self._header(headers, "X-Console-Session") or self._cookie(headers, "aletheia_console")
         if not raw_session:
             raise unauthorized("Console authentication required.")
-        session = self._console_session_for_token(raw_session)
+        session = self._console_session_for_token(raw_session, previous=previous)
         token = ApiToken(
             id=session["id"],
             client_id=session["client_id"] or "console",

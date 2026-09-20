@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 from dataclasses import asdict, replace
 from datetime import datetime
 from functools import wraps
@@ -4823,6 +4824,13 @@ class Memory:
         job_type: str | None = None,
         max_jobs: int = 10,
     ) -> list[LocalJob]:
+        completed: list[LocalJob] = []
+        for job in self._pending_jobs(namespace=namespace, job_type=job_type, max_jobs=max_jobs):
+            self._run_single_job(job)
+            completed.append(self.get_job(job.id))
+        return completed
+
+    def _pending_jobs(self, *, namespace=None, job_type=None, max_jobs=10) -> list[LocalJob]:
         params: list[object] = [utc_now_iso()]
         clauses = ["status = 'pending'", "(run_after IS NULL OR run_after <= ?)"]
         if namespace:
@@ -4842,10 +4850,13 @@ class Memory:
             """,
             params,
         ).fetchall()
+        return [LocalJob.from_row(row) for row in rows]
+
+    def _run_claimed_jobs(self, job_ids: list[str]) -> list[LocalJob]:
         completed: list[LocalJob] = []
-        for row in rows:
-            job = LocalJob.from_row(row)
-            self._run_single_job(job)
+        for job_id in job_ids:
+            job = self.get_job(job_id)
+            self._run_single_job(job, already_claimed=True)
             completed.append(self.get_job(job.id))
         return completed
 
@@ -5251,6 +5262,7 @@ class Memory:
             limit=limit,
             project_id=project_id,
             session_id=session_id,
+            _read_access=(lambda kind, value: claim_filter(value)) if claim_filter is not None else None,
         )
         if result_filter is not None:
             results = result_filter(results)
@@ -5355,6 +5367,7 @@ class Memory:
         context_filter: Callable[[ContextPack], ContextPack] | None = None,
         claim_filter: Callable[[str], bool] | None = None,
         query_privacy: str | None = None,
+        read_access: Callable[[str, str], bool] | None = None,
     ) -> TraceRun:
         started = perf_counter()
         pack = self.context_pack(
@@ -5366,6 +5379,7 @@ class Memory:
             token_budget=token_budget,
             include_derivation_metadata=True,
             record_usage=False,
+            _read_access=read_access,
         )
         if context_filter is not None:
             pack = context_filter(pack)
@@ -6497,6 +6511,7 @@ class Memory:
         include_candidates: bool = False,
         recompute_confidence: bool = False,
         record_access: bool = False,
+        _read_access: Callable[[str, str], bool] | None = None,
     ) -> list[RetrievalResult]:
         namespace = namespace or self.namespace
         query = query or ""
@@ -6524,12 +6539,17 @@ class Memory:
         merged_filters["include_disputed"] = include_disputed
         merged_filters["include_archived"] = include_archived
         merged_filters["include_candidates"] = include_candidates
+        merged_filters.setdefault("as_of", utc_now_iso())
+        limit = max(1, int(limit))
         if mode == "lexical":
             results = self.retriever.retrieve(
                 namespace=namespace,
                 query=query,
                 filters=merged_filters,
                 limit=limit,
+                row_filter=lambda rows: self._eligible_claim_rows(
+                    rows, query=query, filters=merged_filters, read_access=_read_access
+                ),
             )
         else:
             results = self._retrieve_semantic_or_hybrid(
@@ -6539,13 +6559,8 @@ class Memory:
                 filters=merged_filters,
                 limit=limit,
                 provider=semantic_provider,
+                read_access=_read_access,
             )
-        results = self._filter_results_by_scope(
-            results,
-            query=query,
-            project_id=project_id,
-            session_id=session_id,
-        )[:limit]
         if record_access:
             now = utc_now_iso()
             with self.store.transaction():
@@ -6593,6 +6608,7 @@ class Memory:
         policy_version_id: str | None = None,
         record_usage: bool = False,
         explain_policy: bool = False,
+        _read_access: Callable[[str, str], bool] | None = None,
     ) -> ContextPack:
         namespace = namespace or self.namespace
         query = query or ""
@@ -6607,6 +6623,7 @@ class Memory:
             project_id=project_id,
             session_id=None,
             recompute_confidence=False,
+            _read_access=_read_access,
         )
         ambient_results = self.retrieve(
             namespace=namespace,
@@ -6618,6 +6635,7 @@ class Memory:
             min_confidence=0.70,
             project_id=project_id,
             recompute_confidence=False,
+            _read_access=_read_access,
         )
         result_by_id = {result.claim_id: result for result in results}
         for result in ambient_results:
@@ -6635,6 +6653,7 @@ class Memory:
                 project_id=project_id,
                 memory_types=["project", "project_state", "session_summary"],
                 recompute_confidence=False,
+                _read_access=_read_access,
             )
             result_by_id = {result.claim_id: result for result in results}
             for result in project_results:
@@ -6648,6 +6667,7 @@ class Memory:
                 namespace=namespace,
                 session_id=session_id,
                 project_id=project_id,
+                read_access=_read_access,
             )
             result_by_id = {result.claim_id: result for result in results}
             for result in session_results:
@@ -6685,14 +6705,25 @@ class Memory:
                 )
             )
 
+        if _read_access is not None:
+            warnings = [
+                warning for warning in warnings
+                if warning.warning_type == "unresolved_conflict" and warning.claim_ids
+                and all(_read_access("claim", value) for value in warning.claim_ids)
+                and all(_read_access("conflict", value) for value in warning.conflict_ids)
+            ]
         used_tokens = self._estimate_warning_tokens(warnings)
         if include_reflections:
             for reflection in self.list_reflections(
                 namespace=namespace,
                 status="active",
                 project_id=project_id,
-                limit=12,
+                limit=2147483647 if _read_access is not None else 12,
             ):
+                if _read_access is not None and not _read_access("reflection", reflection.id):
+                    continue
+                if len(reflection_memory) >= 12:
+                    break
                 item = ContextItem(
                     text=reflection.text,
                     claim_id=reflection.id,
@@ -6725,12 +6756,17 @@ class Memory:
                 used_tokens += item_tokens
 
         if include_inferences:
+            included_inferences = 0
             for inference in self.list_inferences(
                 namespace,
                 status="validated",
                 project_id=project_id,
-                limit=10,
+                limit=2147483647 if _read_access is not None else 10,
             ):
+                if _read_access is not None and not _read_access("inference", inference.id):
+                    continue
+                if included_inferences >= 10:
+                    break
                 item = ContextItem(
                     text=inference.text,
                     claim_id=inference.id,
@@ -6760,6 +6796,7 @@ class Memory:
                     )
                     continue
                 relevant_memory.append(item)
+                included_inferences += 1
                 used_tokens += item_tokens
 
         for result in results:
@@ -11124,30 +11161,15 @@ class Memory:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
-    def _run_single_job(self, job: LocalJob) -> None:
-        if not self._claim_pending_job(job):
+    def _run_single_job(self, job: LocalJob, *, already_claimed: bool = False) -> None:
+        if already_claimed and job.status != "running":
+            raise ValidationError("The claimed job is no longer running.")
+        if not already_claimed and not self._claim_pending_job(job):
             return
         try:
             self._execute_job(job)
         except Exception as exc:  # noqa: BLE001 - job queue records operational failures.
-            updated = self.get_job(job.id)
-            status = "failed" if updated.attempts >= updated.max_attempts else "pending"
-            with self.store.transaction():
-                self.store.connection.execute(
-                    """
-                    UPDATE local_jobs
-                    SET status = ?, last_error = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (status, str(exc), utc_now_iso(), job.id),
-                )
-                self._write_audit(
-                    namespace=job.namespace or "global",
-                    target_type="local_job",
-                    target_id=job.id,
-                    action="job.failed",
-                    details={"error": str(exc), "status": status},
-                )
+            self._fail_running_job(job.id, str(exc))
             return
         with self.store.transaction():
             self.store.connection.execute(
@@ -11164,6 +11186,21 @@ class Memory:
                 target_id=job.id,
                 action="job.completed",
                 details={"job_type": job.job_type},
+            )
+
+    def _fail_running_job(self, job_id: str, error: str) -> None:
+        with self.store.transaction(immediate=True):
+            job = self.get_job(job_id)
+            if job.status != "running":
+                return
+            status = "failed" if job.attempts >= job.max_attempts else "pending"
+            self.store.connection.execute(
+                "UPDATE local_jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?",
+                (status, error, utc_now_iso(), job.id),
+            )
+            self._write_audit(
+                namespace=job.namespace or "global", target_type="local_job", target_id=job.id,
+                action="job.failed", details={"error": error, "status": status},
             )
 
     def _claim_pending_job(self, job: LocalJob) -> bool:
@@ -11872,14 +11909,16 @@ class Memory:
         filters: dict,
         limit: int,
         provider: str | None = None,
+        read_access: Callable[[str, str], bool] | None = None,
     ) -> list[RetrievalResult]:
         limit = max(1, int(limit))
         candidate_limit = max(limit, min(max(limit * 20, 100), 1000))
-        rows = self._governed_claim_rows(
-            namespace=namespace,
-            filters=filters,
-            limit=candidate_limit,
+        rows = self._eligible_claim_rows(
+            self._governed_claim_rows(namespace=namespace, filters=filters),
+            query=query, filters=filters, read_access=read_access,
         )
+        if not rows:
+            return []
         semantic_scores = self._semantic_scores_for_query(
             namespace=namespace,
             query=query,
@@ -11887,25 +11926,33 @@ class Memory:
             provider=provider,
             target_ids=[row["id"] for row in rows],
         )
+        lexical_scores = {
+            row["id"]: lexical_score(query, [row["subject"], row["predicate"], row["object"], row["memory_type"]])
+            for row in rows
+        }
+        # Select by relevance across all eligible memory, then bound the more
+        # expensive provenance/conflict reranking. A recent subset loses old
+        # exact matches and prevents their vectors from ever competing.
+        lexical_rows = sorted(rows, key=lambda row: (
+            -lexical_scores[row["id"]], -float(row["confidence_effective"]), -float(row["importance"]), row["id"]
+        ))[:candidate_limit]
+        semantic_ids = {
+            value for value, _ in sorted(semantic_scores.items(), key=lambda item: (-item[1], item[0]))[:candidate_limit]
+        }
+        selected = semantic_ids
+        if mode != "semantic" or not semantic_scores:
+            selected = semantic_ids | {row["id"] for row in lexical_rows}
+        rows = [row for row in rows if row["id"] in selected]
         claim_ids = [row["id"] for row in rows]
         project_ids_by_claim = self._project_ids_for_claims(claim_ids)
         conflict_ids_by_claim = self._conflict_ids_for_claims(claim_ids)
         evidence_ids_by_claim = self._evidence_ids_for_claims(claim_ids)
         unresolved_conflict_claim_ids = self._claim_ids_with_unresolved_conflicts(claim_ids)
         duplicate_claim_ids = self._claim_ids_with_duplicate_relationships(claim_ids)
-        scope_rows_by_claim = self._scope_rows_by_claim(claim_ids)
         results: list[RetrievalResult] = []
         for row in rows:
             project_ids = project_ids_by_claim.get(row["id"], [])
             project_id = filters.get("project_id")
-            session_id = filters.get("session_id")
-            if not self._scope_rows_match(
-                scope_rows_by_claim.get(row["id"], []),
-                query=query,
-                project_id=project_id,
-                session_id=session_id,
-            ):
-                continue
             lexical = lexical_score(
                 query,
                 [
@@ -12134,6 +12181,7 @@ class Memory:
         namespace: str,
         session_id: str,
         project_id: str | None,
+        read_access: Callable[[str, str], bool] | None = None,
     ) -> list[RetrievalResult]:
         try:
             session = self.get_session(session_id)
@@ -12149,6 +12197,7 @@ class Memory:
             memory_types=["session_summary"],
             project_id=continuity_project_id,
             recompute_confidence=False,
+            _read_access=read_access,
         )
 
     def _estimate_tokens(self, text: str) -> int:
@@ -13075,18 +13124,35 @@ class Memory:
             )
         ]
 
+    def _eligible_claim_rows(
+        self, rows: list[sqlite3.Row], *, query: str, filters: dict,
+        read_access: Callable[[str, str], bool] | None = None,
+    ) -> list[sqlite3.Row]:
+        scopes = self._scope_rows_by_claim([row["id"] for row in rows])
+        return [
+            row for row in rows
+            if self._scope_rows_match(
+                scopes.get(row["id"], []), query=query, project_id=filters.get("project_id"),
+                session_id=filters.get("session_id"), as_of=filters.get("as_of"),
+            )
+            and (read_access is None or read_access("claim", row["id"]))
+        ]
+
     def _scope_rows_by_claim(self, claim_ids: list[str]) -> dict[str, list[ClaimScope]]:
         if not claim_ids:
             return {}
-        rows = self.store.connection.execute(
-            f"""
-            SELECT *
-            FROM claim_scopes
-            WHERE claim_id IN ({','.join('?' for _ in claim_ids)})
-            ORDER BY claim_id, created_at ASC
-            """,
-            claim_ids,
-        ).fetchall()
+        rows = []
+        for offset in range(0, len(claim_ids), 500):
+            chunk = claim_ids[offset:offset + 500]
+            rows.extend(self.store.connection.execute(
+                f"""
+                SELECT *
+                FROM claim_scopes
+                WHERE claim_id IN ({','.join('?' for _ in chunk)})
+                ORDER BY claim_id, created_at ASC
+                """,
+                chunk,
+            ).fetchall())
         scopes_by_claim: dict[str, list[ClaimScope]] = {}
         for row in rows:
             scopes_by_claim.setdefault(row["claim_id"], []).append(ClaimScope.from_row(row))
@@ -13099,14 +13165,21 @@ class Memory:
         query: str,
         project_id: str | None,
         session_id: str | None,
+        as_of: str | None = None,
     ) -> bool:
         if not scopes:
             return True
-        now = utc_now()
+        now = parse_iso(as_of) or utc_now()
         for scope in scopes:
-            if scope.valid_from and (parse_iso(scope.valid_from) or now) > now:
+            try:
+                starts, ends = parse_iso(scope.valid_from), parse_iso(scope.valid_to)
+            except (ValueError, TypeError, AttributeError):
                 continue
-            if scope.valid_to and (parse_iso(scope.valid_to) or now) < now:
+            if (scope.valid_from is not None and starts is None) or (scope.valid_to is not None and ends is None):
+                continue
+            if starts and starts > now:
+                continue
+            if ends and ends <= now:
                 continue
             if scope.scope_type == "project":
                 if scope.applies_when in {None, project_id}:

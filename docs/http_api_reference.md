@@ -51,6 +51,14 @@ authorized `namespace` unless the caller holds the `*` namespace grant.
 See [HTTP access boundaries](service_access_boundaries.md) for all affected
 routes, provider setup, trace compatibility, and Python SDK examples.
 
+Retrieval checks status, validity, scope, and caller visibility before selection
+and limits. Provider construction and inference release the service lock;
+completion rechecks access and rejects changed inputs with
+`409 provider_input_changed`. The Python SDK rejects 3xx redirects with
+`AletheiaClientError(code="redirect_blocked")` and does not retry them. See
+[retrieval and provider execution](retrieval_execution_boundaries.md) for the
+full behavior and compatibility boundaries.
+
 Storage operations follow the same [storage privacy boundaries](storage_privacy_boundaries.md)
 as the embedded API: protected candidate spans omit plaintext copies; JSONL
 cannot promise encryption; physical backups cannot exclude auth metadata;

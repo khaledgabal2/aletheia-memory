@@ -4,6 +4,17 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+- Exclude unreviewed legacy candidate claims from default retrieval/context and
+  enforce claim/scope validity before selection, including normalized timestamps.
+- Rank eligible memories across their full history before bounding reranking;
+  apply HTTP privacy and scope checks before result limits and context budgets.
+- Run governed HTTP provider construction and inference outside the service lock
+  and database transaction, then recheck current access and source inputs before
+  using results. Concurrent idempotent requests retain one provider execution;
+  queued jobs preserve durable ownership and retry accounting during waits.
+- Reject redirects in both Python SDK clients so service credentials and request
+  bodies cannot be forwarded. See
+  [retrieval and provider execution](docs/retrieval_execution_boundaries.md).
 - Omit plaintext span copies of protected evidence across extraction, HTTP,
   plugins, and federation; clear existing span/risk copies when opening a database.
 - Reject unsupported JSONL encryption and physical backup auth exclusion before

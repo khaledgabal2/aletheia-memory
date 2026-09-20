@@ -11,6 +11,14 @@ import urllib.request
 from typing import Any
 from urllib.parse import urlencode, quote
 
+from aletheia.provider_http import NoRedirect
+
+
+def _open_request(request, *, timeout):
+    # A service response cannot redirect credentials or a mutation body to
+    # another URL. Same-origin redirects are rejected as well.
+    return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
+
 
 class AletheiaClientError(Exception):
     def __init__(self, message: str, *, code: str | None = None, status_code: int | None = None, details: dict | None = None):
@@ -480,7 +488,7 @@ class AletheiaClient:
             method=method,
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local SDK.
+            with _open_request(request, timeout=self.timeout) as response:
                 body = response.read().decode("utf-8", errors="replace")
                 try:
                     envelope = json.loads(body)
@@ -497,6 +505,12 @@ class AletheiaClient:
                         status_code=response.status,
                     )
         except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                exc.close()
+                raise AletheiaClientError(
+                    "Aletheia service redirects are not allowed. Configure the final service URL explicitly.",
+                    code="redirect_blocked", status_code=exc.code,
+                ) from None
             body = exc.read().decode("utf-8", errors="replace")
             try:
                 envelope = json.loads(body)

@@ -129,7 +129,8 @@ def test_retrieve_and_context_pack_are_read_only_by_default_with_bounded_queries
         assert memory.read_claim(claim_ids[0]).last_accessed_at == before_accessed
         assert not any(statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for statement in statements)
         assert sum(1 for statement in statements if statement.lstrip().upper().startswith("SELECT")) <= 8
-        assert any(" LIMIT " in statement.upper() for statement in statements if "FROM claims_fts" in statement)
+        # Eligibility now precedes truncation, so matching rows may be scanned
+        # across the namespace; batching must still keep query counts bounded.
 
         hybrid_statements: list[str] = []
         memory.store.connection.set_trace_callback(hybrid_statements.append)
@@ -142,7 +143,6 @@ def test_retrieve_and_context_pack_are_read_only_by_default_with_bounded_queries
         memory.store.connection.set_trace_callback(None)
         assert not any(statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for statement in hybrid_statements)
         assert sum(1 for statement in hybrid_statements if statement.lstrip().upper().startswith("SELECT")) <= 10
-        assert any(" LIMIT " in statement.upper() for statement in hybrid_statements if "FROM claims c" in statement)
 
         pack = memory.context_pack(
             namespace="user/default",

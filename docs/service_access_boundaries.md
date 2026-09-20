@@ -12,9 +12,11 @@ The service resolves referenced objects before session end, feedback, candidate
 and claim review, conflict resolution, explicit reasoning-source operations,
 evaluation-set operations, and policy review/application. Replacement claims,
 feedback evidence, and other explicit source IDs are checked individually.
-Target authorization and the corresponding operation share a database
-transaction so concurrent database writers cannot change the checked scope
-or provenance between those steps.
+Target authorization and the corresponding database changes share a transaction.
+Provider work releases that snapshot and the service lock, then the route
+rechecks current authorization and source inputs before saving or returning
+the result. See [retrieval and provider execution](retrieval_execution_boundaries.md)
+for changed-input errors and concurrency limits.
 
 `POST /v1/sessions/{session_id}/end` requires `memory:write_candidate` and
 access to the stored session's scope. With a nonempty `summary`, the default
@@ -94,7 +96,7 @@ traces.
 
 Embedded `trace_retrieval` accepts optional `result_filter`, `claim_filter`, and
 `query_privacy` arguments. `trace_context_pack` similarly accepts `context_filter`,
-`claim_filter`, and `query_privacy`. The service supplies its current access
+`claim_filter`, `query_privacy`, and `read_access`. The service supplies its current access
 policy through these hooks. Embedded callers are responsible for any policy
 they need when creating traces directly.
 

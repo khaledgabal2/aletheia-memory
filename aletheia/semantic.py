@@ -17,6 +17,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from aletheia.core.provider_work import deferred_factory
+
 
 class EmbeddingProvider(Protocol):
     name: str
@@ -391,8 +393,10 @@ class SQLiteVectorStore:
                 target_ids = list(target_ids)
             if not target_ids:
                 return []
-            clauses.append(f"target_id IN ({','.join('?' for _ in target_ids)})")
-            params.extend(target_ids)
+            if len(target_ids) <= 900:
+                clauses.append(f"target_id IN ({','.join('?' for _ in target_ids)})")
+                params.extend(target_ids)
+            target_ids = set(target_ids)
         rows = self.connection.execute(
             f"""
             SELECT id, target_id, vector_blob, metadata_json
@@ -403,6 +407,8 @@ class SQLiteVectorStore:
         ).fetchall()
         results: list[VectorSearchResult] = []
         for row in rows:
+            if target_ids is not None and row["target_id"] not in target_ids:
+                continue
             vector = decode_vector(row["vector_blob"])
             score = cosine_similarity(query_vector, vector)
             if score <= 0:
@@ -448,6 +454,7 @@ class SQLiteVectorStore:
         return {"name": self.name, "records": [dict(row) for row in rows]}
 
 
+@deferred_factory
 def provider_for_name(name: str | None, *, model: str | None = None, dimension: int | None = None) -> EmbeddingProvider:
     if name in {None, "mock"}:
         return MockEmbeddingProvider()

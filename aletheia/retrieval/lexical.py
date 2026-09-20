@@ -7,6 +7,7 @@ import re
 import sqlite3
 from datetime import UTC, datetime
 
+from aletheia.core.errors import ValidationError
 from aletheia.core.time import parse_iso, utc_now
 from aletheia.models.retrieval import RetrievalResult
 
@@ -109,21 +110,31 @@ def deterministic_score(
 
 def governed_claim_filter(namespace: str, filters: dict | None = None, *, alias: str = "c") -> tuple[list[str], list[object]]:
     filters = filters or {}
-    params: list[object] = [namespace, EXCLUDED_ALWAYS[0]]
-    clauses = [f"{alias}.namespace = ?", f"{alias}.status NOT IN (?)"]
+    params: list[object] = [namespace]
+    clauses = [f"{alias}.namespace = ?"]
     statuses = _as_list(filters.get("statuses") or filters.get("status"))
     if statuses:
-        clauses.append(f"{alias}.status IN ({','.join('?' for _ in statuses)})")
-        params.extend(statuses)
+        statuses = [value for value in statuses if value in STATUS_PRIORITY]
     else:
-        excluded = []
-        if not filters.get("include_archived", False):
-            excluded.extend(["archived", "superseded"])
-        if not filters.get("include_disputed", False):
-            excluded.append("disputed")
-        if excluded:
-            clauses.append(f"{alias}.status NOT IN ({','.join('?' for _ in excluded)})")
-            params.extend(excluded)
+        statuses = ["active", "core"]
+        if filters.get("include_candidates", False):
+            statuses.append("candidate")
+        if filters.get("include_archived", False):
+            statuses.extend(["archived", "superseded"])
+        if filters.get("include_disputed", False):
+            statuses.append("disputed")
+    clauses.append(f"{alias}.status IN ({','.join('?' for _ in statuses)})" if statuses else "0")
+    params.extend(statuses)
+    try:
+        at = parse_iso(filters.get("as_of")) or utc_now()
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValidationError("as_of must be an ISO timestamp.") from exc
+    # julianday normalizes offsets; malformed stored bounds fail closed.
+    clauses.extend([
+        f"({alias}.valid_from IS NULL OR julianday({alias}.valid_from) <= julianday(?))",
+        f"({alias}.valid_to IS NULL OR julianday({alias}.valid_to) > julianday(?))",
+    ])
+    params.extend([at.isoformat(), at.isoformat()])
     memory_types = _as_list(filters.get("memory_types") or filters.get("memory_type"))
     if memory_types:
         clauses.append(f"{alias}.memory_type IN ({','.join('?' for _ in memory_types)})")
@@ -207,6 +218,7 @@ class SQLiteFTSRetriever:
         query: str,
         filters: dict | None = None,
         limit: int = 10,
+        row_filter=None,
     ) -> list[RetrievalResult]:
         filters = filters or {}
         project_id = filters.get("project_id")
@@ -226,21 +238,23 @@ class SQLiteFTSRetriever:
                 JOIN claims c ON c.id = claims_fts.claim_id
                 WHERE {' AND '.join(clauses)}
                 GROUP BY c.id
-                ORDER BY c.created_at DESC, c.id ASC
-                LIMIT ?
             """
         else:
-            # An empty search is a bounded recent-claims listing and does not
-            # scan the FTS virtual table.
+            # Empty searches rank eligible metadata without scanning FTS.
             sql = f"""
                 SELECT c.*
                 FROM claims c
                 WHERE {' AND '.join(clauses)}
-                ORDER BY c.created_at DESC, c.id ASC
-                LIMIT ?
             """
-        params.append(candidate_limit)
         rows = self.connection.execute(sql, params).fetchall()
+        if row_filter is not None:
+            rows = row_filter(rows)
+        # Every eligible match can compete, regardless of creation time. Only
+        # the relevance-selected set needs provenance and conflict reranking.
+        rows.sort(key=lambda row: (
+            -lexical_score(query, [row["subject"], row["predicate"], row["object"], row["memory_type"]]),
+            -float(row["confidence_effective"]), -float(row["importance"]), row["id"]))
+        rows = rows[:candidate_limit]
         claim_ids = [row["id"] for row in rows]
         evidence_by_claim = self._evidence_ids_by_claim(claim_ids)
         conflict_by_claim = self._conflict_ids_by_claim(claim_ids)
