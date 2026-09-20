@@ -761,7 +761,7 @@ def _import_verified_share_bundle(memory, *, input_path: str, trust_policy: str,
     conflicts = 0
     redactions = 0
     warnings: list[str] = []
-    remote_to_local_evidence: dict[str, str] = {}
+    remote_to_local_evidence: dict[str, str | None] = {}
     with memory.store.transaction():
         memory.store.connection.execute(
             """
@@ -782,19 +782,21 @@ def _import_verified_share_bundle(memory, *, input_path: str, trust_policy: str,
                 json.dumps({"input_path": input_path, "manifest": manifest}, sort_keys=True),
             ),
         )
-    for evidence in payload.get("payloads", {}).get("evidence", []):
-        local_event = _import_evidence(memory, evidence, peer=peer, share_id=local_share_id, sync_run_id=run_id, trust_domain_id=policy.trust_domain_id)
-        remote_to_local_evidence[evidence["id"]] = local_event.id
-        applied += 1
-    for claim in payload.get("payloads", {}).get("claims", []):
-        local_evidence_ids = [remote_to_local_evidence[eid] for eid in claim.get("evidence_ids", []) if eid in remote_to_local_evidence]
-        result = _import_claim(memory, claim, peer=peer, share_id=local_share_id, collection_id=local_collection_id, sync_run_id=run_id, policy=policy, evidence_ids=local_evidence_ids)
-        applied += int(result["applied"])
-        conflicts += int(result["conflict"])
     for tombstone in payload.get("payloads", {}).get("tombstones", []):
         if _apply_remote_tombstone(memory, tombstone, peer=peer, share_id=local_share_id, sync_run_id=run_id):
             applied += 1
             redactions += 1
+    for evidence in payload.get("payloads", {}).get("evidence", []):
+        local_event, created = _import_evidence(memory, evidence, peer=peer, share_id=local_share_id, sync_run_id=run_id, trust_domain_id=policy.trust_domain_id)
+        remote_to_local_evidence[evidence["id"]] = local_event.id if local_event else None
+        applied += int(created)
+    for claim in payload.get("payloads", {}).get("claims", []):
+        if any(eid in remote_to_local_evidence and remote_to_local_evidence[eid] is None for eid in claim.get("evidence_ids", [])):
+            continue
+        local_evidence_ids = [remote_to_local_evidence[eid] for eid in claim.get("evidence_ids", []) if eid in remote_to_local_evidence]
+        result = _import_claim(memory, claim, peer=peer, share_id=local_share_id, collection_id=local_collection_id, sync_run_id=run_id, policy=policy, evidence_ids=local_evidence_ids)
+        applied += int(result["applied"])
+        conflicts += int(result["conflict"])
     status = "completed_with_conflicts" if conflicts else "completed"
     with memory.store.transaction():
         memory.store.connection.execute(
@@ -1998,15 +2000,56 @@ def _policy_for_import(memory, peer: PeerDevice | None, *, trust_policy: str, na
     return policy
 
 
+def _previous_remote_object(memory, payload: dict, *, peer: PeerDevice, kind: str):
+    kinds = ("evidence_event", "evidence", "event") if kind == "evidence_event" else (kind,)
+    if memory.store.connection.execute(
+        "SELECT 1 FROM sync_tombstones WHERE origin_instance_id = ? AND object_id = ? AND namespace = ?"
+        + " AND object_type IN (" + ",".join("?" for _ in kinds) + ")",
+        (peer.peer_instance_id, payload["id"], payload["namespace"], *kinds)).fetchone():
+        return None, True
+    rows = memory.store.connection.execute(
+        "SELECT * FROM remote_memory_sources WHERE peer_id = ? AND remote_object_type = ? AND remote_object_id = ?",
+        (peer.id, kind, payload["id"])).fetchall()
+    if len(rows) > 1:
+        raise ValidationError("Remote source has multiple historical local copies; review duplicates before syncing.")
+    if not rows:
+        return None, False
+    source = rows[0]
+    if memory.store.connection.execute("SELECT 1 FROM deletion_tombstones WHERE target_id = ?", (source["local_object_id"],)).fetchone():
+        return None, True
+    reader = {"evidence_event": memory.read_event, "claim": memory.read_claim, "candidate_claim": memory.read_candidate}[source["local_object_type"]]
+    item = reader(source["local_object_id"])
+    if item.namespace != payload["namespace"]:
+        raise ValidationError("Remote source identity changed namespace.")
+    digest = json.loads(source["metadata_json"] or "{}").get("remote_payload_hash")
+    if digest is not None and digest != content_hash(json.dumps(payload, sort_keys=True)):
+        raise ValidationError("Previously imported remote source changed; review a replacement before syncing.")
+    # Older mappings lack a payload hash. Verify the materialized content before
+    # treating them as a repeat; never infer identity from equal text alone.
+    fields = ("content", "privacy_level") if kind == "evidence_event" else ("subject", "predicate", "object", "memory_type")
+    if digest is None and any(getattr(item, field) != payload.get(field) for field in fields):
+        raise ValidationError("Historical remote source differs from this bundle; review it before syncing.")
+    return item, True
+
+
 def _import_evidence(memory, evidence: dict, *, peer: PeerDevice, share_id: str, sync_run_id: str, trust_domain_id: str | None):
-    event = memory.write_event(
-        namespace=evidence["namespace"],
-        source_type="remote_sync:" + evidence.get("source_type", "unknown"),
-        source_uri=evidence.get("source_uri"),
-        content=evidence.get("content", ""),
-        trust_level="remote:" + peer.trust_status,
-        privacy_level=evidence.get("privacy_level", "personal"),
-    )
+    previous, found = _previous_remote_object(memory, evidence, peer=peer, kind="evidence_event")
+    if found:
+        return previous, False
+    from aletheia.core.hardening import PRIVACY_ORDER, protect_content_for_storage
+    privacy = evidence.get("privacy_level")
+    if privacy not in PRIVACY_ORDER:
+        raise ValidationError("Remote evidence requires a valid privacy label.")
+    value = new_id("evt")
+    content = evidence.get("content", "")
+    memory.store.connection.execute(
+        """INSERT INTO evidence_events (id, namespace, session_id, source_type, source_uri,
+           content, content_hash, created_at, observed_at, trust_level, privacy_level, retention_policy)
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (value, evidence["namespace"], "remote_sync:" + evidence.get("source_type", "unknown"), evidence.get("source_uri"),
+         protect_content_for_storage(memory, content, privacy_level=privacy), content_hash(content), utc_now_iso(),
+         evidence.get("observed_at"), "remote:" + peer.trust_status, privacy, evidence.get("retention_policy", "default")))
+    event = memory.read_event(value)
     _write_remote_source(
         memory,
         local_object_id=event.id,
@@ -2018,12 +2061,30 @@ def _import_evidence(memory, evidence: dict, *, peer: PeerDevice, share_id: str,
         share_grant_id=share_id,
         sync_run_id=sync_run_id,
         trust_domain_id=trust_domain_id,
-        metadata={"remote_content_hash": evidence.get("content_hash")},
+        metadata={"remote_content_hash": evidence.get("content_hash"), "remote_payload_hash": content_hash(json.dumps(evidence, sort_keys=True))},
     )
-    return event
+    return event, True
 
 
 def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, collection_id: str, sync_run_id: str, policy: ImportTrustPolicy, evidence_ids: list[str]) -> dict:
+    previous, found = _previous_remote_object(memory, claim, peer=peer, kind="claim")
+    if found:
+        conflict = _local_claim_conflict(memory, claim) if previous else None
+        if conflict:
+            existing = memory.store.connection.execute(
+                "SELECT status FROM sync_conflicts WHERE origin_instance_id = ? AND remote_object_id = ? AND local_object_id = ?",
+                (peer.peer_instance_id, claim["id"], conflict["id"])).fetchone()
+            if existing:
+                return {"applied": 0, "conflict": int(existing[0] == "unresolved")}
+            conflict_id = _create_sync_conflict(memory, namespace=claim["namespace"], collection_id=collection_id,
+                sync_run_id=sync_run_id, conflict_type="claim_value_conflict", local_object_id=conflict["id"],
+                local_object_type="claim", remote_object_id=claim["id"], remote_object_type="claim",
+                origin_instance_id=peer.peer_instance_id,
+                metadata={"local_object": conflict["object"], "remote_object": claim["object"], "remote_claim": claim,
+                          "existing_remote_local_id": previous.id})
+            _create_conflict_review_task(memory, namespace=claim["namespace"], conflict_id=conflict_id)
+            return {"applied": 0, "conflict": 1}
+        return {"applied": 0, "conflict": 0}
     conflict = _local_claim_conflict(memory, claim)
     if conflict:
         conflict_id = _create_sync_conflict(
@@ -2041,7 +2102,7 @@ def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, colle
         )
         _create_conflict_review_task(memory, namespace=claim["namespace"], conflict_id=conflict_id)
         local_id = _store_remote_candidate(memory, claim, evidence_ids=evidence_ids, peer=peer, sync_run_id=sync_run_id)
-        _write_remote_source(memory, local_object_id=local_id, local_object_type="candidate_claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"conflict_id": conflict_id})
+        _write_remote_source(memory, local_object_id=local_id, local_object_type="candidate_claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"conflict_id": conflict_id, "remote_payload_hash": content_hash(json.dumps(claim, sort_keys=True))})
         return {"applied": 1, "conflict": 1}
     if _claim_imports_active(claim, policy, peer):
         status = "active" if claim.get("status") == "core" else claim.get("status", "active")
@@ -2059,10 +2120,10 @@ def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, colle
             half_life_days=claim.get("half_life_days"),
             importance=claim.get("importance", 0.5),
         )
-        _write_remote_source(memory, local_object_id=active.id, local_object_type="claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"import_mode": policy.import_mode})
+        _write_remote_source(memory, local_object_id=active.id, local_object_type="claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"import_mode": policy.import_mode, "remote_payload_hash": content_hash(json.dumps(claim, sort_keys=True))})
     else:
         local_id = _store_remote_candidate(memory, claim, evidence_ids=evidence_ids, peer=peer, sync_run_id=sync_run_id)
-        _write_remote_source(memory, local_object_id=local_id, local_object_type="candidate_claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"import_mode": policy.import_mode})
+        _write_remote_source(memory, local_object_id=local_id, local_object_type="candidate_claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"import_mode": policy.import_mode, "remote_payload_hash": content_hash(json.dumps(claim, sort_keys=True))})
         memory.create_review_task(
             claim["namespace"],
             task_type="candidate_review",
@@ -2117,6 +2178,7 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
         )
         span_links: list[tuple[str, str]] = []
         for evidence_id in evidence_ids:
+            evidence_text = memory.read_event(evidence_id).content
             span_id = new_id("span")
             memory.store.connection.execute("INSERT INTO extraction_run_evidence_links (extraction_run_id, evidence_id) VALUES (?, ?)", (run_id, evidence_id))
             memory.store.connection.execute(
@@ -2127,7 +2189,7 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
                 )
                 VALUES (?, ?, ?, 0, ?, ?, 'supporting', ?)
                 """,
-                (span_id, namespace, evidence_id, len(evidence_text), evidence_text, now),
+                (span_id, namespace, evidence_id, len(evidence_text), memory._stored_evidence_span_text(evidence_id, evidence_text), now),
             )
             span_links.append((evidence_id, span_id))
         memory.store.connection.execute(
@@ -2238,9 +2300,16 @@ def _create_conflict_review_task(memory, *, namespace: str, conflict_id: str) ->
 
 
 def _apply_remote_tombstone(memory, tombstone: dict, *, peer: PeerDevice, share_id: str, sync_run_id: str) -> bool:
+    kind = {"evidence": "evidence_event", "event": "evidence_event"}.get(tombstone["object_type"], tombstone["object_type"])
+    if memory.store.connection.execute(
+        """SELECT 1 FROM sync_tombstones WHERE origin_instance_id = ? AND object_id = ?
+           AND object_type = ? AND namespace = ? AND tombstone_type = ?""",
+        (peer.peer_instance_id, tombstone["object_id"], kind, tombstone["namespace"], tombstone["tombstone_type"])
+    ).fetchone():
+        return False
     local_sources = memory.store.connection.execute(
-        "SELECT * FROM remote_memory_sources WHERE remote_object_id = ? AND peer_id = ?",
-        (tombstone["object_id"], peer.id),
+        "SELECT * FROM remote_memory_sources WHERE remote_object_id = ? AND peer_id = ? AND remote_object_type = ?",
+        (tombstone["object_id"], peer.id, kind),
     ).fetchall()
     now = utc_now_iso()
     with memory.store.transaction():
@@ -2253,40 +2322,30 @@ def _apply_remote_tombstone(memory, tombstone: dict, *, peer: PeerDevice, share_
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "stomb_" + content_hash(f"{peer.peer_instance_id}\0{tombstone['object_id']}\0{tombstone['tombstone_type']}")[:24],
+                "stomb_" + content_hash(f"{peer.peer_instance_id}\0{tombstone['namespace']}\0{kind}\0{tombstone['object_id']}\0{tombstone['tombstone_type']}")[:24],
                 tombstone["namespace"],
                 peer.peer_instance_id,
                 tombstone["object_id"],
-                tombstone["object_type"],
+                kind,
                 tombstone["tombstone_type"],
                 tombstone["reason"],
                 now,
                 json.dumps({"peer_id": peer.id, "sync_run_id": sync_run_id, "share_grant_id": share_id}, sort_keys=True),
             ),
         )
+        from aletheia.core import deletion
         for source in local_sources:
-            if source["local_object_type"] == "evidence_event":
-                memory.store.connection.execute(
-                    "UPDATE evidence_events SET content = '[REDACTED]', content_hash = ? WHERE id = ?",
-                    (content_hash("[REDACTED]"), source["local_object_id"]),
-                )
-            elif source["local_object_type"] == "claim":
-                memory.store.connection.execute("UPDATE claims SET status = 'archived' WHERE id = ?", (source["local_object_id"],))
-                memory.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (source["local_object_id"],))
-            elif source["local_object_type"] == "candidate_claim":
-                memory.store.connection.execute(
-                    "UPDATE candidate_claims SET candidate_status = 'rejected' WHERE id = ?",
-                    (source["local_object_id"],),
-                )
-                linked = memory.store.connection.execute(
-                    "SELECT evidence_id FROM candidate_evidence_links WHERE candidate_id = ?",
-                    (source["local_object_id"],),
-                ).fetchall()
-                for row in linked:
-                    memory.store.connection.execute(
-                        "UPDATE evidence_events SET content = '[REDACTED]', content_hash = ? WHERE id = ?",
-                        (content_hash("[REDACTED]"), row["evidence_id"]),
-                    )
+            kind = "evidence" if source["local_object_type"] == "evidence_event" else source["local_object_type"]
+            local = memory.store.connection.execute(
+                "SELECT namespace FROM " + deletion.TABLES[kind] + " WHERE id = ?", (source["local_object_id"],)
+            ).fetchone()
+            if local is not None and local["namespace"] != tombstone["namespace"]:
+                raise ValidationError("Remote tombstone does not match the imported source namespace.")
+            roots = [(kind, source["local_object_id"])]
+            if kind == "candidate_claim":
+                roots.extend(("evidence", row[0]) for row in memory.store.connection.execute(
+                    "SELECT evidence_id FROM candidate_evidence_links WHERE candidate_id = ?", (source["local_object_id"],)))
+            deletion.apply(memory, roots, reason="remote.redacted", actor="federation", scrub=True)
         _write_federation_audit(memory, event_type="redaction.propagated", namespace=tombstone["namespace"], peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, target_id=tombstone["object_id"], target_type=tombstone["object_type"], reason=tombstone["reason"])
     return True
 

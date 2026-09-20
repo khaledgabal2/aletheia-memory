@@ -6,7 +6,7 @@ Core controls:
 
 - Protected mode encrypts sensitive stored content.
 - Protected content and encrypted backup payloads use AES-256-GCM with PBKDF2-derived local key material; legacy encrypted content remains readable for compatibility.
-- Protected content encryption currently applies to secret-tier evidence content when protected mode is enabled; use `--privacy secret` for evidence that needs this path.
+- Protected content encryption applies to `private`, `sensitive`, and `secret` evidence when protected mode is enabled. It does not encrypt every claim/candidate field or the whole SQLite file.
 - Raw key material is not stored in key records. Protected content key material is resolved from `ALETHEIA_KEY_<key_id>` or `ALETHEIA_PROTECTED_KEY`.
 - Encrypted backups, namespace exports, and support bundles use explicit passphrases or configured backup key material.
 - API tokens use scoped capabilities and namespace grants.
@@ -15,6 +15,13 @@ Core controls:
 - High-risk plugin permissions require a reason.
 - Forget and redact flows preserve auditability through tombstones.
 - External telemetry is off by default and is checked by the v1 gate.
+
+Protected evidence spans omit duplicate text and reconstruct it from the source.
+Archive imports preserve evidence privacy and provenance, reuse known source
+identities, and honor deletion notices. Redaction follows transitive dependencies
+and clears affected content snapshots and indexes. For export restrictions,
+precise forget modes, and historical-import review, see
+[storage privacy boundaries](storage_privacy_boundaries.md).
 
 HTTP object operations authorize the stored target's namespace/project and
 source evidence, including referenced replacement claims and LLM inputs.

@@ -486,6 +486,7 @@ class Memory:
         self.namespace = namespace
         self.config = config or {}
         self.retriever = SQLiteFTSRetriever(store.connection)
+        production.repair_protected_span_copies(self)
 
     @classmethod
     def open(
@@ -8849,12 +8850,15 @@ class Memory:
                 span.evidence_id,
                 span.start_char,
                 span.end_char,
-                span.text,
+                self._stored_evidence_span_text(span.evidence_id, span.text),
                 span.role,
                 utc_now_iso(),
             ),
         )
         return span_id
+
+    def _stored_evidence_span_text(self, evidence_id: str, text: str) -> str:
+        return production.evidence_span_text_for_storage(self, evidence_id, text)
 
     def _candidate_duplicate_risk(
         self,
@@ -9142,7 +9146,8 @@ class Memory:
             """,
             (candidate_id,),
         ).fetchall()
-        return [EvidenceSpan.from_row(row) for row in rows]
+        return [replace(EvidenceSpan.from_row(row), text=self.read_event(row["evidence_id"]).content[row["start_char"]:row["end_char"]])
+                if row["span_text"] == "" else EvidenceSpan.from_row(row) for row in rows]
 
     def _labels_for_target(self, target_id: str, target_type: str) -> list[str]:
         rows = self.store.connection.execute(
@@ -9468,7 +9473,7 @@ class Memory:
                         evidence_id,
                         risk_type,
                         severity,
-                        content[match.start():match.end()],
+                        self._stored_evidence_span_text(evidence_id, content[match.start():match.end()]),
                         match.start(),
                         match.end(),
                         "Imported content treated as untrusted evidence.",

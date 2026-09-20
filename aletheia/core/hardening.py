@@ -72,6 +72,19 @@ SECRET_PRIVACY_LEVELS = {"private", "sensitive", "secret"}
 PRIVACY_ORDER = {"public": 0, "personal": 1, "private": 2, "sensitive": 2, "secret": 3}
 RETENTION_ACTIONS = {"archive", "redact_content", "tombstone", "hard_delete", "queue_review", "lower_salience"}
 FINDING_SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+# Redacted exports retain reviewed structural fields only. New columns are
+# excluded by default, including free text hidden in JSON keys or metadata.
+LOGICAL_METADATA_COLUMNS = {
+    "evidence_events": {"id", "namespace", "privacy_level", "created_at", "observed_at"},
+    "claims": {"id", "namespace", "status", "confidence_base", "confidence_effective", "importance", "created_at", "valid_from", "valid_to"},
+    "claim_evidence_links": {"claim_id", "evidence_id"},
+    "candidate_claims": {"id", "namespace", "extraction_run_id", "candidate_status", "privacy_level", "created_at"},
+    "reflections": {"id", "namespace", "project_id", "status", "abstraction_level", "created_at", "updated_at"},
+    "derivation_edges": {"id", "namespace", "source_id", "source_type", "target_id", "target_type", "created_at"},
+    "audit_log": {"id", "namespace", "target_id", "target_type", "created_at"},
+    "review_tasks": {"id", "namespace", "target_id", "target_type", "status", "created_at", "updated_at"},
+    "deletion_tombstones": {"id", "namespace", "target_id", "target_type", "deletion_mode", "created_at"},
+}
 M8_TABLES = {
     "backup_manifests",
     "backup_items",
@@ -130,6 +143,10 @@ def create_backup(
         raise ValidationError("Unknown backup privacy_mode.")
     if privacy_mode != "full" and backup_type in {"physical", "hybrid"}:
         raise ValidationError("Physical backup snapshots require privacy_mode='full'; use backup_type='logical' for redacted backups.")
+    if backup_type in {"physical", "hybrid"} and not include_auth_metadata:
+        raise ValidationError("Physical backups cannot exclude auth metadata; use a logical backup instead.")
+    if privacy_mode == "namespace_filtered" and not namespace:
+        raise ValidationError("namespace_filtered backups require a namespace.")
     protected = protected_mode_status(memory)
     if protected.backup_encryption_required and not encrypt:
         raise ValidationError("Protected mode requires encrypted backups.")
@@ -171,7 +188,7 @@ def create_backup(
             "checksums": {},
             "privacy_mode": privacy_mode,
             "includes_auth_metadata": effective_include_auth_metadata,
-            "includes_raw_content": privacy_mode == "full",
+            "includes_raw_content": privacy_mode in {"full", "namespace_filtered"},
             "metadata": {
                 "include_indexes": include_indexes,
                 "protected_mode": asdict(protected),
@@ -222,7 +239,7 @@ def create_backup(
                 key_id,
                 privacy_mode,
                 int(effective_include_auth_metadata),
-                int(privacy_mode == "full"),
+                int(privacy_mode in {"full", "namespace_filtered"}),
                 json.dumps(item_counts, sort_keys=True),
                 json.dumps(manifest["checksums"], sort_keys=True),
                 created_by,
@@ -773,6 +790,25 @@ def rotate_key(
     return KeyRotationEvent.from_row(row)
 
 
+def evidence_span_text_for_storage(memory, evidence_id: str, text: str) -> str:
+    row = memory.store.connection.execute("SELECT content FROM evidence_events WHERE id = ?", (evidence_id,)).fetchone()
+    if row is None:
+        raise NotFoundError(f"Evidence event not found: {evidence_id}")
+    # Offsets retain provenance; reconstruct the text from the encrypted source
+    # on an authorized read, without storing a second plaintext copy.
+    return "" if row["content"].startswith(ENCRYPTION_PREFIX) else text
+
+
+def repair_protected_span_copies(memory) -> None:
+    for table in ("evidence_spans", "content_risk_flags"):
+        if not memory.store.connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone():
+            continue
+        predicate = "span_text != '' AND evidence_id IN (SELECT id FROM evidence_events WHERE content LIKE 'enc:%')"
+        if memory.store.connection.execute(f"SELECT 1 FROM {table} WHERE {predicate} LIMIT 1").fetchone():
+            with memory.store.transaction(immediate=True):
+                memory.store.connection.execute(f"UPDATE {table} SET span_text = '' WHERE {predicate}")
+
+
 def protect_content_for_storage(memory, content: str, *, privacy_level: str) -> str:
     status = protected_mode_status(memory)
     if not status.enabled or not status.content_encryption_enabled:
@@ -871,6 +907,7 @@ def should_skip_claim_index(memory, *, namespace: str, claim_id: str | None, evi
     return any(row["privacy_level"] in SECRET_PRIVACY_LEVELS for row in rows)
 
 
+@_atomic_store_write
 def redact(
     memory,
     *,
@@ -888,37 +925,9 @@ def redact(
     now = utc_now_iso()
     with memory.store.transaction():
         if not dry_run:
-            if target_type == "evidence":
-                memory.store.connection.execute(
-                    "UPDATE evidence_events SET content = ?, content_hash = ? WHERE id = ?",
-                    (replacement_text, content_hash(replacement_text), target_id),
-                )
-                for claim_id in affected["claims"]:
-                    claim = memory.read_claim(claim_id)
-                    memory.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (claim_id,))
-                    memory.store.connection.execute(
-                        "UPDATE claims SET status = 'archived' WHERE id = ? AND status IN ('active', 'core')",
-                        (claim_id,),
-                    )
-                    if claim.status in {"active", "core"}:
-                        memory._write_status_history(
-                            namespace=namespace,
-                            claim_id=claim_id,
-                            old_status=claim.status,
-                            new_status="archived",
-                            reason="evidence.redacted",
-                            actor=actor,
-                        )
-                _invalidate_derived(memory, namespace, affected["claims"], reason)
-                _stale_semantic_for_targets(memory, namespace=namespace, target_ids=affected["claims"], reason="evidence.redacted")
-            elif target_type == "claim":
-                memory.store.connection.execute(
-                    "UPDATE claims SET object = ?, status = 'archived' WHERE id = ?",
-                    (replacement_text, target_id),
-                )
-                memory.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (target_id,))
-                _invalidate_derived(memory, namespace, [target_id], reason)
-                _stale_semantic_for_targets(memory, namespace=namespace, target_ids=[target_id], reason="claim.redacted")
+            from aletheia.core import deletion
+            deletion.apply(memory, [(target_type, target_id)], reason=f"{target_type}.redacted", actor=actor,
+                           scrub=True, replacement=replacement_text, tombstone_roots=False)
             _write_tombstone(
                 memory,
                 namespace=namespace,
@@ -963,6 +972,7 @@ def redact(
     return RedactionEvent.from_row(row)
 
 
+@_atomic_store_write
 def forget(
     memory,
     *,
@@ -983,33 +993,30 @@ def forget(
     run_id = new_id("frun")
     with memory.store.transaction():
         if not dry_run:
+            from aletheia.core import deletion
             for target in targets:
-                if target["target_type"] == "evidence":
-                    redact(
-                        memory,
-                        target_id=target["target_id"],
-                        target_type="evidence",
-                        reason=reason,
-                        actor=actor,
-                        dry_run=False,
-                    )
+                kind, value = target["target_type"], target["target_id"]
+                roots = [(kind, value)]
+                effective = "hard_delete" if mode == "namespace_forget" else mode
+                if effective == "redact_content":
+                    redact(memory, target_id=value, target_type=kind, reason=reason, actor=actor, dry_run=False)
+                elif effective == "hard_delete":
+                    if kind == "claim":
+                        _hard_delete_claim(memory, namespace=target["namespace"], claim_id=value, reason=reason, actor=actor)
+                    else:
+                        nodes = deletion.apply(memory, roots, reason=reason, actor=actor, scrub=True, tombstone_roots=False)
+                        for node_kind, row in nodes:
+                            if node_kind == "evidence":
+                                deletion.delete_evidence(memory, row["id"])
+                        if kind == "source_document":
+                            memory.store.connection.execute("DELETE FROM source_documents WHERE id = ?", (value,))
+                        _write_tombstone(memory, namespace=target["namespace"], target_id=value, target_type=kind,
+                            deletion_mode=effective, reason=reason, actor=actor, affected_derived_count=max(0, len(nodes) - 1))
                 else:
-                    memory.store.connection.execute(
-                        "UPDATE claims SET status = 'archived' WHERE id = ?",
-                        (target["target_id"],),
-                    )
-                    memory.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (target["target_id"],))
-                    _stale_semantic_for_targets(memory, namespace=target["namespace"], target_ids=[target["target_id"]], reason="forget.applied")
-                    _write_tombstone(
-                        memory,
-                        namespace=target["namespace"],
-                        target_id=target["target_id"],
-                        target_type=target["target_type"],
-                        deletion_mode=mode,
-                        reason=reason,
-                        actor=actor,
-                        affected_derived_count=0,
-                    )
+                    nodes = deletion.apply(memory, roots, reason=reason, actor=actor, include_roots=effective != "derived_invalidate")
+                    if effective == "tombstone":
+                        _write_tombstone(memory, namespace=target["namespace"], target_id=value, target_type=kind,
+                            deletion_mode=effective, reason=reason, actor=actor, affected_derived_count=max(0, len(nodes) - 1))
         memory._write_audit(
             namespace=namespace,
             target_type="forget_run",
@@ -1566,6 +1573,14 @@ def export_archive(
     privacy_mode: str = "redacted",
     passphrase: str | None = None,
 ) -> ExportManifest:
+    if privacy_mode not in {"full", "redacted", "metadata_only", "namespace_filtered"}:
+        raise ValidationError("Unknown export privacy_mode.")
+    if privacy_mode == "namespace_filtered" and not namespace:
+        raise ValidationError("namespace_filtered exports require a namespace.")
+    if format == "jsonl" and encrypt:
+        raise ValidationError("JSONL does not support encryption; use format='alet'.")
+    if protected_mode_status(memory).backup_encryption_required and not encrypt:
+        raise ValidationError("Protected mode requires encrypted exports; use format='alet'.")
     if format == "alet":
         backup = create_backup(
             memory,
@@ -1629,188 +1644,8 @@ def import_archive(
     dry_run: bool = True,
     passphrase: str | None = None,
 ) -> ImportRun:
-    started_at = utc_now_iso()
-    status, warnings, manifest, payload = verify_backup_file(backup_path=input_path, passphrase=passphrase, deep=True)
-    if status == "failed":
-        raise ValidationError("Import source verification failed: " + "; ".join(warnings))
-    imported = {"evidence": 0, "claims": 0}
-    skipped = {"duplicate_evidence": 0, "duplicate_claims": 0}
-    conflict_count = 0
-    if "database.sqlite" in payload:
-        with tempfile.TemporaryDirectory(prefix="aletheia-import-") as temp:
-            source_db = Path(temp) / "source.sqlite"
-            source_db.write_bytes(payload["database.sqlite"])
-            source = sqlite3.connect(source_db)
-            source.row_factory = sqlite3.Row
-            try:
-                evidence_rows = source.execute("SELECT * FROM evidence_events").fetchall()
-                claim_rows = source.execute("SELECT * FROM claims").fetchall()
-                for row in evidence_rows:
-                    target_ns = namespace or row["namespace"]
-                    duplicate = memory.store.connection.execute(
-                        "SELECT 1 FROM evidence_events WHERE namespace = ? AND content_hash = ?",
-                        (target_ns, row["content_hash"]),
-                    ).fetchone()
-                    if duplicate:
-                        skipped["duplicate_evidence"] += 1
-                        continue
-                    imported["evidence"] += 1
-                    if not dry_run:
-                        memory.store.connection.execute(
-                            """
-                            INSERT OR IGNORE INTO evidence_events (
-                                id, namespace, session_id, source_type, source_uri,
-                                content, content_hash, created_at, observed_at,
-                                trust_level, privacy_level, retention_policy
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                row["id"],
-                                target_ns,
-                                row["session_id"],
-                                row["source_type"],
-                                row["source_uri"],
-                                row["content"],
-                                row["content_hash"],
-                                row["created_at"],
-                                row["observed_at"],
-                                row["trust_level"],
-                                row["privacy_level"],
-                                row["retention_policy"],
-                            ),
-                        )
-                for row in claim_rows:
-                    target_ns = namespace or row["namespace"]
-                    duplicate = memory.store.connection.execute("SELECT 1 FROM claims WHERE id = ?", (row["id"],)).fetchone()
-                    if duplicate:
-                        skipped["duplicate_claims"] += 1
-                        continue
-                    imported["claims"] += 1
-                    if not dry_run:
-                        evidence_ids = [
-                            link["evidence_id"]
-                            for link in source.execute(
-                                "SELECT evidence_id FROM claim_evidence_links WHERE claim_id = ?",
-                                (row["id"],),
-                            ).fetchall()
-                        ]
-                        candidate = memory.remember(
-                            namespace=target_ns,
-                            memory_type=row["memory_type"],
-                            subject=row["subject"],
-                            predicate=row["predicate"],
-                            object=row["object"],
-                            source_type="imported_memory",
-                            confidence=row["confidence_base"],
-                            status="candidate" if row["status"] not in {"rejected", "archived"} else row["status"],
-                        )
-                        memory._write_audit(
-                            namespace=target_ns,
-                            target_type="claim",
-                            target_id=candidate.id,
-                            action="import.claim_as_candidate",
-                            details={"source_claim_id": row["id"], "source_evidence_ids": evidence_ids},
-                        )
-            finally:
-                source.close()
-    elif "logical/evidence_events.jsonl" in payload or "logical/claims.jsonl" in payload:
-        evidence_rows = _jsonl_rows(payload.get("logical/evidence_events.jsonl", b""))
-        claim_rows = _jsonl_rows(payload.get("logical/claims.jsonl", b""))
-        for row in evidence_rows:
-            target_ns = namespace or row.get("namespace") or memory.namespace
-            duplicate = memory.store.connection.execute(
-                "SELECT 1 FROM evidence_events WHERE namespace = ? AND content_hash = ?",
-                (target_ns, row.get("content_hash")),
-            ).fetchone()
-            if duplicate:
-                skipped["duplicate_evidence"] += 1
-                continue
-            imported["evidence"] += 1
-            if not dry_run:
-                memory.store.connection.execute(
-                    """
-                    INSERT OR IGNORE INTO evidence_events (
-                        id, namespace, session_id, source_type, source_uri,
-                        content, content_hash, created_at, observed_at,
-                        trust_level, privacy_level, retention_policy
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        row["id"],
-                        target_ns,
-                        row.get("session_id"),
-                        row.get("source_type", "imported"),
-                        row.get("source_uri"),
-                        row.get("content", ""),
-                        row.get("content_hash") or content_hash(row.get("content", "")),
-                        row.get("created_at") or started_at,
-                        row.get("observed_at"),
-                        row.get("trust_level", "unverified"),
-                        row.get("privacy_level", "personal"),
-                        row.get("retention_policy"),
-                    ),
-                )
-        for row in claim_rows:
-            target_ns = namespace or row.get("namespace") or memory.namespace
-            duplicate = memory.store.connection.execute("SELECT 1 FROM claims WHERE id = ?", (row.get("id"),)).fetchone()
-            if duplicate:
-                skipped["duplicate_claims"] += 1
-                continue
-            imported["claims"] += 1
-            if not dry_run:
-                candidate = memory.remember(
-                    namespace=target_ns,
-                    memory_type=row.get("memory_type", "imported"),
-                    subject=row.get("subject", ""),
-                    predicate=row.get("predicate", ""),
-                    object=row.get("object", ""),
-                    source_type="imported_memory",
-                    confidence=float(row.get("confidence_base", 0.5)),
-                    status="candidate" if row.get("status") not in {"rejected", "archived"} else row.get("status"),
-                )
-                memory._write_audit(
-                    namespace=target_ns,
-                    target_type="claim",
-                    target_id=candidate.id,
-                    action="import.claim_as_candidate",
-                    details={"source_claim_id": row.get("id"), "source": "logical_backup"},
-                )
-    run_id = new_id("imp")
-    with memory.store.transaction():
-        memory.store.connection.execute(
-            """
-            INSERT INTO import_runs (
-                id, source_path, target_namespace, dry_run, imported_counts_json,
-                skipped_counts_json, conflict_count, status, started_at,
-                finished_at, warnings_json, metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)
-            """,
-            (
-                run_id,
-                input_path,
-                namespace,
-                int(dry_run),
-                json.dumps(imported, sort_keys=True),
-                json.dumps(skipped, sort_keys=True),
-                conflict_count,
-                started_at,
-                utc_now_iso(),
-                json.dumps(warnings, sort_keys=True),
-                json.dumps({"manifest_id": manifest.get("id")}, sort_keys=True),
-            ),
-        )
-        memory._write_audit(
-            namespace=namespace or memory.namespace,
-            target_type="import",
-            target_id=run_id,
-            action="import.dry_run" if dry_run else "import.apply",
-            details={"source_path": input_path, "imported": imported, "skipped": skipped},
-        )
-    row = memory.store.connection.execute("SELECT * FROM import_runs WHERE id = ?", (run_id,)).fetchone()
-    return ImportRun.from_row(row)
+    from aletheia.core.archive_import import import_into
+    return import_into(memory, input_path=input_path, namespace=namespace, dry_run=dry_run, passphrase=passphrase)
 
 
 def support_bundle(
@@ -2082,16 +1917,7 @@ def _sqlite_copy(source: sqlite3.Connection, destination: Path) -> None:
 
 def _logical_payload(memory, namespace: str | None, privacy_mode: str) -> dict[str, bytes]:
     payload: dict[str, bytes] = {}
-    for table in [
-        "evidence_events",
-        "claims",
-        "claim_evidence_links",
-        "candidate_claims",
-        "reflections",
-        "derivation_edges",
-        "audit_log",
-        "review_tasks",
-    ]:
+    for table in LOGICAL_METADATA_COLUMNS:
         rows = _table_rows(memory, table, namespace=namespace, privacy_mode=privacy_mode)
         payload[f"logical/{table}.jsonl"] = "\n".join(json.dumps(row, sort_keys=True) for row in rows).encode("utf-8")
     return payload
@@ -2110,29 +1936,14 @@ def _table_rows(memory, table: str, *, namespace: str | None, privacy_mode: str)
     if namespace and "namespace" in cols:
         where = "WHERE namespace = ?"
         params.append(namespace)
+    elif namespace and table == "claim_evidence_links":
+        where = "WHERE claim_id IN (SELECT id FROM claims WHERE namespace = ?) AND evidence_id IN (SELECT id FROM evidence_events WHERE namespace = ?)"
+        params.extend([namespace, namespace])
     rows = [dict(row) for row in memory.store.connection.execute(f"SELECT * FROM {table} {where}", params).fetchall()]
     if privacy_mode in {"redacted", "metadata_only"}:
-        for row in rows:
-            for key in ["content", "object", "source_uri", "span_text", "message", "description"]:
-                if key in row and row[key] is not None:
-                    row[key] = "[REDACTED]"
-            for key in list(row):
-                if (key.endswith("_json") or key == "details") and row[key]:
-                    try:
-                        row[key] = json.dumps(_redact_json_value(json.loads(row[key])), sort_keys=True)
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        row[key] = "{}"
+        allowed = LOGICAL_METADATA_COLUMNS[table]
+        return [{key: value for key, value in row.items() if key in allowed} for row in rows]
     return rows
-
-
-def _redact_json_value(value):
-    if isinstance(value, dict):
-        return {key: _redact_json_value(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_json_value(item) for item in value]
-    if isinstance(value, str):
-        return "[REDACTED]"
-    return value
 
 
 def _item_counts(memory, namespace: str | None = None) -> dict[str, int]:
@@ -2302,41 +2113,18 @@ def _backup_verification_run(memory, run_id: str) -> BackupVerificationRun:
 
 
 def _redaction_impact(memory, target_id: str, target_type: str) -> tuple[str, dict]:
-    if target_type == "evidence":
-        event = memory.read_event(target_id)
-        claim_ids = [row["claim_id"] for row in memory.store.connection.execute("SELECT claim_id FROM claim_evidence_links WHERE evidence_id = ?", (target_id,)).fetchall()]
-        derived_count = _derived_count(memory, claim_ids)
-        return event.namespace, {"evidence": [target_id], "claims": claim_ids, "derived_count": derived_count}
-    if target_type == "claim":
-        claim = memory.read_claim(target_id)
-        return claim.namespace, {"evidence": claim.evidence_ids, "claims": [target_id], "derived_count": _derived_count(memory, [target_id])}
-    raise ValidationError("Unsupported redaction target.")
+    from aletheia.core import deletion
+    return deletion.impact(memory, target_id, target_type)
 
 
 def _derived_count(memory, claim_ids: list[str]) -> int:
-    if not claim_ids:
-        return 0
-    return int(memory.store.connection.execute(
-        f"SELECT count(*) AS count FROM derivation_edges WHERE source_id IN ({','.join('?' for _ in claim_ids)})",
-        claim_ids,
-    ).fetchone()["count"])
+    from aletheia.core import deletion
+    return max(0, len(deletion.closure(memory, [("claim", value) for value in claim_ids])) - len(set(claim_ids)))
 
 
 def _invalidate_derived(memory, namespace: str, claim_ids: list[str], reason: str) -> None:
-    for claim_id in claim_ids:
-        for row in memory.store.connection.execute(
-            "SELECT target_id, target_type FROM derivation_edges WHERE source_id = ? AND source_type = 'claim'",
-            (claim_id,),
-        ).fetchall():
-            if row["target_type"] == "reflection":
-                memory.store.connection.execute("UPDATE reflections SET status = 'stale' WHERE id = ?", (row["target_id"],))
-            memory._write_audit(
-                namespace=namespace,
-                target_type=row["target_type"],
-                target_id=row["target_id"],
-                action="derived.invalidate",
-                details={"source_id": claim_id, "reason": reason},
-            )
+    from aletheia.core import deletion
+    deletion.apply(memory, [("claim", value) for value in claim_ids], reason=reason, include_roots=False)
 
 
 def _stale_semantic_for_targets(memory, *, namespace: str, target_ids: list[str], reason: str) -> None:
@@ -2423,8 +2211,9 @@ def _tombstone_claim(memory, *, namespace: str, claim_id: str, reason: str) -> b
     return True
 
 
-def _hard_delete_claim(memory, *, namespace: str, claim_id: str, reason: str) -> bool:
-    _invalidate_derived(memory, namespace, [claim_id], reason)
+def _hard_delete_claim(memory, *, namespace: str, claim_id: str, reason: str, actor: str = "retention") -> bool:
+    from aletheia.core import deletion
+    deletion.apply(memory, [("claim", claim_id)], reason=reason, actor=actor, scrub=True, tombstone_roots=False)
     _stale_semantic_for_targets(memory, namespace=namespace, target_ids=[claim_id], reason="retention.hard_delete")
     _write_tombstone(
         memory,
@@ -2433,7 +2222,7 @@ def _hard_delete_claim(memory, *, namespace: str, claim_id: str, reason: str) ->
         target_type="claim",
         deletion_mode="hard_delete",
         reason=reason,
-        actor="retention",
+        actor=actor,
         affected_derived_count=_derived_count(memory, [claim_id]),
     )
     memory.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (claim_id,))
@@ -2482,18 +2271,22 @@ def _backup_warning() -> str:
 
 
 def _forget_targets(memory, selector: dict) -> list[dict]:
-    targets: list[dict] = []
-    if selector.get("target_type") == "evidence" and selector.get("target_id"):
-        event = memory.read_event(selector["target_id"])
-        return [{"namespace": event.namespace, "target_type": "evidence", "target_id": event.id}]
-    if selector.get("target_type") == "claim" and selector.get("target_id"):
-        claim = memory.read_claim(selector["target_id"])
-        return [{"namespace": claim.namespace, "target_type": "claim", "target_id": claim.id}]
-    namespace = selector.get("namespace") or memory.namespace
-    for row in memory.store.connection.execute("SELECT id, namespace FROM evidence_events WHERE namespace = ?", (namespace,)).fetchall():
-        targets.append({"namespace": row["namespace"], "target_type": "evidence", "target_id": row["id"]})
-    for row in memory.store.connection.execute("SELECT id, namespace FROM claims WHERE namespace = ?", (namespace,)).fetchall():
-        targets.append({"namespace": row["namespace"], "target_type": "claim", "target_id": row["id"]})
+    from aletheia.core import deletion
+    if selector.get("target_type") or selector.get("target_id"):
+        kind, value = selector.get("target_type"), selector.get("target_id")
+        if kind not in {"evidence", "claim", "source_document"} or not value:
+            raise ValidationError("Forget requires a supported target type and ID.")
+        row = deletion.row_for(memory, kind, value)
+        if selector.get("namespace") and selector["namespace"] != row["namespace"]:
+            raise ValidationError("Forget target belongs to a different namespace.")
+        return [{"namespace": row["namespace"], "target_type": kind, "target_id": value}]
+    namespace = selector.get("namespace")
+    if not isinstance(namespace, str) or not namespace.strip():
+        raise ValidationError("Namespace forget requires an explicit namespace selector.")
+    targets = []
+    for kind, table in (("evidence", "evidence_events"), ("claim", "claims"), ("source_document", "source_documents")):
+        targets.extend({"namespace": row["namespace"], "target_type": kind, "target_id": row["id"]}
+                       for row in memory.store.connection.execute("SELECT id, namespace FROM " + table + " WHERE namespace = ?", (namespace,)))
     return targets
 
 

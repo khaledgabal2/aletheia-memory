@@ -51,6 +51,12 @@ authorized `namespace` unless the caller holds the `*` namespace grant.
 See [HTTP access boundaries](service_access_boundaries.md) for all affected
 routes, provider setup, trace compatibility, and Python SDK examples.
 
+Storage operations follow the same [storage privacy boundaries](storage_privacy_boundaries.md)
+as the embedded API: protected candidate spans omit plaintext copies; JSONL
+cannot promise encryption; physical backups cannot exclude auth metadata;
+archive imports retain source privacy and reject incomplete provenance; and
+forget/redaction modes apply their documented content and dependency changes.
+
 
 ## Federation key recovery
 

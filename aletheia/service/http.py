@@ -897,7 +897,7 @@ class AletheiaService:
                 )
                 VALUES (?, ?, ?, 0, ?, ?, 'supporting', ?)
                 """,
-                (span_id, namespace, evidence_id, len(evidence_text), evidence_text, now),
+                (span_id, namespace, evidence_id, len(evidence_text), self.memory._stored_evidence_span_text(evidence_id, evidence_text), now),
             )
             self.memory.store.connection.execute(
                 """

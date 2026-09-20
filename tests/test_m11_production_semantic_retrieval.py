@@ -208,7 +208,7 @@ def test_external_provider_not_called_for_secret_content_by_default(tmp_path, mo
         memory.close()
 
 
-def test_redaction_marks_semantic_vectors_stale(tmp_path):
+def test_redaction_removes_vectors_and_marks_semantic_index_stale(tmp_path):
     memory = Memory.open(str(tmp_path / "m11.db"), namespace=NAMESPACE)
     try:
         event = memory.write_event(
@@ -226,12 +226,18 @@ def test_redaction_marks_semantic_vectors_stale(tmp_path):
             evidence_ids=[event.id],
         )
         memory.index_semantic(NAMESPACE, provider="local_hash", dimension=32, force=True)
+        assert memory.store.connection.execute(
+            "SELECT 1 FROM embeddings WHERE target_id = ?", (claim.id,)
+        ).fetchone()
 
         applied = memory.redact(target_id=event.id, target_type="evidence", reason="unit", dry_run=False)
         assert applied.dry_run is False
 
+        assert memory.store.connection.execute(
+            "SELECT 1 FROM embeddings WHERE target_id = ?", (claim.id,)
+        ).fetchone() is None
         row = memory.store.connection.execute(
-            "SELECT status, stale_reason FROM embeddings WHERE target_id = ?",
+            "SELECT status, stale_reason FROM semantic_index_records WHERE target_id = ?",
             (claim.id,),
         ).fetchone()
         assert row["status"] == "stale"

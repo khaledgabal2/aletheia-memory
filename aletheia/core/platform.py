@@ -659,7 +659,7 @@ def run_plugin_operation(memory, *, plugin_id: str, operation: str, namespace: s
                 )
                 VALUES (?, ?, ?, 0, ?, ?, 'supporting', ?)
                 """,
-                (span_id, namespace, event.id, len(evidence_text), evidence_text, now),
+                (span_id, namespace, event.id, len(evidence_text), memory._stored_evidence_span_text(event.id, evidence_text), now),
             )
             memory.store.connection.execute(
                 """

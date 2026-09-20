@@ -4,6 +4,17 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+- Omit plaintext span copies of protected evidence across extraction, HTTP,
+  plugins, and federation; clear existing span/risk copies when opening a database.
+- Reject unsupported JSONL encryption and physical backup auth exclusion before
+  writing output. Redacted exports use reviewed structural column allowlists.
+- Preserve archive source evidence, privacy, and identity; make archive/federation
+  reimports reuse mapped objects and honor deletion notices. Legacy or changed
+  sources require review rather than another copy or an implicit overwrite.
+- Apply the requested forget mode and follow transitive redaction dependencies,
+  including source documents and promoted candidates/inferences; scrub retained
+  derivatives and purge content snapshots/indexes atomically. See
+  [storage privacy boundaries](docs/storage_privacy_boundaries.md).
 - Enforce stored object scope and source privacy across HTTP session, feedback,
   review, reasoning, evaluation, and policy operations. Session summaries now
   default to reviewable candidates; active summaries require explicit active

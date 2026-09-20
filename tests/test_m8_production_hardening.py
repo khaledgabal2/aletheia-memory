@@ -889,6 +889,7 @@ def test_export_import_support_benchmark_release_readiness_and_compaction(tmp_pa
         export = source.export_archive(
             output_path=str(export_path),
             namespace=NAMESPACE,
+            privacy_mode="full",
             encrypt=True,
             passphrase=PASSPHRASE,
         )
