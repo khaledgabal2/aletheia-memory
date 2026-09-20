@@ -24,6 +24,38 @@ Deployment limits:
 - Full physical backups can include raw SQLite and auth metadata; use encrypted backups for protected deployments and logical redacted backups for support or sharing.
 - Federation sync bundles carrying non-public data must be encrypted and signed.
 
+Federation sharing boundaries:
+
+- Bundles contain only the public identity schema, including inside encrypted
+  payloads. Private signing/encryption key records and local identity metadata
+  are never included in new exports.
+- Import checks the signing and encryption keys and fingerprint against the
+  exact stored peer instance ID. A valid signature from a different key does
+  not inherit that peer's trust. Changed keys require separately authorized
+  recovery; importing a bundle cannot update the pinned key.
+- Revoked or blocked peers cannot import, including through candidate-only or
+  dry-run paths. Import also checks signed grant expiry/status and locally
+  retained share, collection, and recipient revocation. Failed imports roll
+  back their content and federation records together.
+- `candidate_only` (the default), `manual_review`, and `remote_claim_only`
+  cannot create active claims even for trusted peers. Active imports require
+  an explicitly selected active policy and compatible local trust; HTTP
+  callers also need `memory:remote_active_write`. Remote core claims never
+  become local core claims, and project-state policies remain limited to
+  project, decision, and procedure memory.
+- `read` is an alias for `read_claims` only. Exporting source evidence requires
+  both `read_evidence` and `include_evidence=True`. A feedback-only grant
+  exports no memory content. Redaction notices require `read_claims` and
+  `receive_redactions`; write permissions do not imply read access.
+
+Upgrade considerations: existing shares that intentionally include source
+evidence must explicitly grant `read_evidence`. Dry-run imports now enforce
+the same trust and revocation rules as real imports, while leaving the
+database unchanged. If older bundles were distributed, assess the sender's
+signing and encryption keys as potentially exposed, coordinate key recovery
+with recipients, and retire affected bundles. This code change does not
+rotate existing identities or recall already distributed packages.
+
 Run diagnostics:
 
 ```bash

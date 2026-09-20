@@ -345,7 +345,9 @@ def test_import_share_bundle_dry_run_does_not_mutate_peer_or_sync_state(tmp_path
 
         assert right.list_peers() == []
         assert right.list_sync_runs() == []
-        run = right.import_share_bundle(input_path=str(bundle), trust_policy="trusted_device", dry_run=True)
+        with pytest.raises(ValidationError, match="previously added and trusted peer"):
+            right.import_share_bundle(input_path=str(bundle), trust_policy="trusted_device", dry_run=True)
+        run = right.import_share_bundle(input_path=str(bundle), trust_policy="candidate_only", dry_run=True)
         assert run.status == "planned"
         assert run.warnings == ["dry_run_no_mutation"]
         assert right.list_peers() == []
@@ -406,7 +408,7 @@ def test_import_is_candidate_first_conflicts_and_tombstones_are_governed(tmp_pat
             name="sync-share",
             namespace=NAMESPACE,
             recipient_peer_ids=[left_meta["peer"].id],
-            permissions=["read", "sync_pull", "receive_redactions"],
+            permissions=["read", "read_evidence", "sync_pull", "receive_redactions"],
             privacy_ceiling="personal",
             memory_types=["project"],
             statuses=["active"],

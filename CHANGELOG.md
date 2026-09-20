@@ -2,6 +2,16 @@
 
 All notable public changes to Aletheia are tracked here.
 
+## Unreleased
+
+- Repair federation bundle identity serialization, pinned-key verification,
+  import revocation checks, candidate-only policy enforcement, and share read
+  permissions. Invalid imports leave content and federation state unchanged.
+- Require explicit `read_evidence` permission to export source evidence; `read`
+  grants claim access only. Dry-run imports enforce normal trust checks.
+  See the [security guide](docs/security_privacy_guide.md) for compatibility
+  and recovery considerations for previously distributed bundles.
+
 ## 1.5.0
 
 - Automatically advertise participating local POSIX daemons with owner-only,

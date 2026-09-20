@@ -6,7 +6,7 @@ import base64
 import json
 import os
 import zipfile
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -440,9 +440,9 @@ def create_share_grant(
     if not recipient_peer_ids:
         raise ValidationError("At least one recipient peer is required.")
     peers = [get_peer(memory, peer_id) for peer_id in recipient_peer_ids]
-    revoked = [peer.id for peer in peers if peer.trust_status == "revoked"]
+    revoked = [peer.id for peer in peers if peer.trust_status in {"revoked", "blocked"} or peer.revoked_at]
     if revoked:
-        raise ValidationError("Cannot create share for revoked peers: " + ", ".join(revoked))
+        raise ValidationError("Cannot create share for revoked or blocked peers: " + ", ".join(revoked))
     now = utc_now_iso()
     share_id = new_id("share")
     collection_id = "sync_" + content_hash(share_id)[:24]
@@ -594,7 +594,7 @@ def _revoke_share_grant(memory, share_id: str, *, reason: str, actor: str, peer_
 
 
 def _require_active_share(memory, share: ShareGrant, *, action: str) -> None:
-    if share.status != "active":
+    if share.status != "active" or share.revoked_at:
         raise ValidationError(f"Cannot {action} revoked or inactive share grant.")
     expires_at = parse_iso(share.expires_at) if share.expires_at else None
     if expires_at and expires_at <= utc_now():
@@ -647,9 +647,18 @@ def export_share_bundle(
     if not encrypt and share.privacy_ceiling != "public" and not redacted:
         raise ValidationError("Unencrypted sync exports require public or redacted mode.")
     collection = get_sync_collection(memory, share.id)
-    recipients = list_share_recipients(memory, share.id)
+    if collection.status != "active":
+        raise ValidationError("Cannot export revoked or inactive collection.")
+    recipients = []
+    for recipient in list_share_recipients(memory, share.id):
+        peer = get_peer(memory, recipient.peer_id)
+        if recipient.status != "active" or recipient.revoked_at or peer.trust_status in {"revoked", "blocked"} or peer.revoked_at:
+            continue
+        if recipient.recipient_public_key != peer.public_key:
+            raise ValidationError("Share recipient key does not match pinned peer identity.")
+        recipients.append(recipient)
     if not recipients:
-        raise ValidationError("Share has no recipients.")
+        raise ValidationError("Share has no active recipients.")
     identity = active_federation_identity(memory)
     payload = _build_share_payload(memory, identity=identity, share=share, collection=collection, redacted=redacted)
     changeset, items = _record_changeset(memory, identity=identity, collection=collection, target_peer_id=recipients[0].peer_id, encrypted=encrypt, payload=payload)
@@ -696,33 +705,53 @@ def export_share_bundle(
 
 
 def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candidate_only", actor: str = "user", dry_run: bool = False) -> SyncRun:
+    if trust_policy not in IMPORT_MODES | {"trusted_device"}:
+        raise ValidationError(f"Unknown import trust policy: {trust_policy}")
+    if trust_policy == "reject_by_default":
+        raise ValidationError("Import trust policy rejects remote bundles.")
     manifest, payload = _read_bundle(memory, input_path)
     if manifest.get("format") != "aletsync":
         raise ValidationError("Not an Aletheia sync bundle.")
     origin_identity = payload["peer_identity"]
     share_payload = payload["share_grant"]
     collection_payload = payload["collection"]
+    local_collection_id = collection_payload["id"]
+    # Check local trust and revocation under the same transaction as the import
+    # so another connection cannot revoke a grant between validation and use.
+    with memory.store.transaction(immediate=True):
+        _validate_import_grant(memory, share_payload, collection_payload, origin_identity)
+        peer = _peer_for_import(memory, origin_identity, trust_policy=trust_policy)
+        policy = _policy_for_import(memory, peer, trust_policy=trust_policy, namespace=share_payload["namespace"])
+        if dry_run:
+            return SyncRun(
+                id=new_id("sync"),
+                collection_id=local_collection_id,
+                peer_id="peer_" + content_hash(origin_identity["instance_id"])[:24],
+                direction="pull",
+                transport="file_bundle",
+                status="planned",
+                started_at=utc_now_iso(),
+                finished_at=None,
+                sent_count=0,
+                received_count=sum(payload.get("item_counts", {}).values()),
+                applied_count=0,
+                conflict_count=0,
+                redaction_count=payload.get("item_counts", {}).get("tombstones", 0),
+                warnings=["dry_run_no_mutation"],
+                metadata={"input_path": input_path, "dry_run": True},
+            )
+        if peer is None:
+            peer = add_peer(memory, peer_identity=origin_identity, trust_status="unknown", reason=f"Imported bundle {Path(input_path).name}")
+        return _import_verified_share_bundle(memory, input_path=input_path, trust_policy=trust_policy,
+                                             actor=actor, manifest=manifest, payload=payload, peer=peer, policy=policy)
+
+
+def _import_verified_share_bundle(memory, *, input_path: str, trust_policy: str, actor: str,
+                                  manifest: dict, payload: dict, peer: PeerDevice, policy: ImportTrustPolicy) -> SyncRun:
+    share_payload = payload["share_grant"]
+    collection_payload = payload["collection"]
     local_share_id = share_payload["id"]
     local_collection_id = collection_payload["id"]
-    if dry_run:
-        return SyncRun(
-            id=new_id("sync"),
-            collection_id=local_collection_id,
-            peer_id="peer_" + content_hash(origin_identity["instance_id"])[:24],
-            direction="pull",
-            transport="file_bundle",
-            status="planned",
-            started_at=utc_now_iso(),
-            finished_at=None,
-            sent_count=0,
-            received_count=sum(payload.get("item_counts", {}).values()),
-            applied_count=0,
-            conflict_count=0,
-            redaction_count=payload.get("item_counts", {}).get("tombstones", 0),
-            warnings=["dry_run_no_mutation"],
-            metadata={"input_path": input_path, "dry_run": True},
-        )
-    peer = _peer_for_import(memory, origin_identity, trust_policy=trust_policy, reason=f"Imported bundle {Path(input_path).name}")
     _ensure_imported_share_and_collection(memory, share_payload, collection_payload, peer)
     run_id = new_id("sync")
     started_at = utc_now_iso()
@@ -751,7 +780,6 @@ def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candida
                 json.dumps({"input_path": input_path, "manifest": manifest}, sort_keys=True),
             ),
         )
-    policy = _policy_for_import(memory, peer, trust_policy=trust_policy, namespace=share_payload["namespace"])
     for evidence in payload.get("payloads", {}).get("evidence", []):
         local_event = _import_evidence(memory, evidence, peer=peer, share_id=local_share_id, sync_run_id=run_id, trust_domain_id=policy.trust_domain_id)
         remote_to_local_evidence[evidence["id"]] = local_event.id
@@ -1443,11 +1471,15 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
     claims = []
     evidence_by_id: dict[str, dict] = {}
     warnings: list[str] = []
-    for row in _eligible_claim_rows(memory, share):
+    permissions = set(_normalize_permissions(share.permissions)) if share.grant_type != "feedback_only" else set()
+    read_claims = "read_claims" in permissions
+    read_evidence = "read_evidence" in permissions and share.include_evidence
+    rows = _eligible_claim_rows(memory, share) if read_claims or read_evidence else []
+    for row in rows:
         claim = memory.read_claim(row["id"])
-        evidence_ids = list(claim.evidence_ids) if share.include_evidence else []
-        claims.append(
-            {
+        evidence_ids = list(claim.evidence_ids) if read_evidence else []
+        if read_claims:
+            claims.append({
                 "id": claim.id,
                 "namespace": claim.namespace,
                 "subject": claim.subject,
@@ -1460,8 +1492,7 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
                 "half_life_days": claim.half_life_days,
                 "evidence_ids": evidence_ids,
                 "created_at": claim.created_at,
-            }
-        )
+            })
         for evidence_id in evidence_ids:
             event = memory.read_event(evidence_id)
             if PRIVACY_ORDER.get(event.privacy_level, 1) > PRIVACY_ORDER[share.privacy_ceiling]:
@@ -1479,12 +1510,12 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
                 "trust_level": event.trust_level,
                 "privacy_level": event.privacy_level,
             }
-    tombstones = _exportable_tombstones(memory, share)
+    tombstones = _exportable_tombstones(memory, share) if read_claims and "receive_redactions" in permissions else []
     payloads = {"claims": claims, "evidence": list(evidence_by_id.values()), "tombstones": tombstones}
     return {
         "schema_version": SCHEMA_VERSION,
         "peer_identity": _public_identity_payload(identity),
-        "origin_identity": asdict(identity),
+        "origin_identity": _public_identity_payload(identity),
         "share_grant": asdict(share),
         "collection": asdict(collection),
         "payloads": payloads,
@@ -1651,6 +1682,7 @@ def _read_bundle(memory, input_path: str) -> tuple[dict, dict]:
         if manifest.get("crypto_version") != BUNDLE_CRYPTO_VERSION:
             raise ValidationError("Legacy unsigned sync bundles are not accepted.")
         origin_identity = json.loads(archive.read("origin_identity.json").decode("utf-8"))
+        _validate_peer_identity_payload(origin_identity)
         _verify_bundle_checksums(archive)
         _verify_bundle_signature(archive, manifest=manifest, origin_identity=origin_identity)
         if manifest.get("encrypted"):
@@ -1658,10 +1690,12 @@ def _read_bundle(memory, input_path: str) -> tuple[dict, dict]:
             payload = json.loads(_decrypt_payload(memory, archive.read("encrypted_payload.bin"), manifest, metadata).decode("utf-8"))
         else:
             payload = json.loads(archive.read("payloads/payload.json").decode("utf-8"))
-    if payload.get("peer_identity", {}).get("instance_id") != origin_identity.get("instance_id"):
+    peer_identity = payload.get("peer_identity", {})
+    _validate_peer_identity_payload(peer_identity)
+    if any(peer_identity.get(field) != origin_identity.get(field) for field in ("instance_id", "public_key", "key_fingerprint")):
         raise ValidationError("Sync bundle origin identity does not match signed identity.")
-    if payload.get("peer_identity", {}).get("key_fingerprint") != origin_identity.get("key_fingerprint"):
-        raise ValidationError("Sync bundle origin key does not match signed identity.")
+    if manifest.get("origin_instance_id") != origin_identity["instance_id"]:
+        raise ValidationError("Sync bundle manifest origin identity does not match signed identity.")
     return manifest, payload
 
 
@@ -1789,16 +1823,53 @@ def _verify_bundle_signature(archive: zipfile.ZipFile, *, manifest: dict, origin
         raise ValidationError("Sync bundle signature verification failed.") from exc
 
 
-def _peer_for_import(memory, identity_payload: dict, *, trust_policy: str, reason: str) -> PeerDevice:
-    try:
-        peer = get_peer(memory, identity_payload["instance_id"])
-    except NotFoundError:
+def _peer_for_import(memory, identity_payload: dict, *, trust_policy: str) -> PeerDevice | None:
+    _validate_peer_identity_payload(identity_payload)
+    # A display name is not an identity. Use the exact instance ID, then pin
+    # both the complete signing/encryption key document and its fingerprint.
+    row = memory.store.connection.execute(
+        "SELECT * FROM peer_devices WHERE peer_instance_id = ?", (identity_payload["instance_id"],)
+    ).fetchone()
+    if not row:
         if trust_policy == "trusted_device":
             raise ValidationError("Trusted-device imports require a previously added and trusted peer.")
-        peer = add_peer(memory, peer_identity=identity_payload, trust_status="unknown", reason=reason)
+        return None
+    peer = PeerDevice.from_row(row)
+    if peer.public_key != identity_payload["public_key"] or peer.key_fingerprint != identity_payload["key_fingerprint"]:
+        raise ValidationError("Peer identity key does not match pinned key; an authorized key rotation is required.")
+    if peer.trust_status in {"revoked", "blocked"} or peer.revoked_at:
+        raise ValidationError("Cannot import from a revoked or blocked peer.")
     if trust_policy == "trusted_device" and peer.trust_status != "trusted_device":
         raise ValidationError("Trusted-device imports require a previously trusted peer.")
     return peer
+
+
+def _validate_import_grant(memory, share: dict, collection: dict, identity: dict) -> None:
+    def require_active(value: dict, kind: str) -> None:
+        if value.get("status") != "active" or value.get("revoked_at"):
+            raise ValidationError(f"Cannot import revoked or inactive {kind}.")
+        expires_at = parse_iso(value["expires_at"]) if value.get("expires_at") else None
+        if expires_at and expires_at <= utc_now():
+            raise ValidationError(f"Cannot import expired {kind}.")
+
+    require_active(share, "share grant")
+    require_active(collection, "collection")
+    if collection.get("share_grant_id") != share["id"] or collection.get("namespace") != share["namespace"]:
+        raise ValidationError("Sync collection does not match share grant.")
+    # Do not let replay of an old, validly signed grant reset local revocation.
+    row = memory.store.connection.execute("SELECT * FROM share_grants WHERE id = ?", (share["id"],)).fetchone()
+    if row:
+        require_active(dict(row), "share grant")
+    row = memory.store.connection.execute("SELECT * FROM sync_collections WHERE id = ?", (collection["id"],)).fetchone()
+    if row:
+        require_active(dict(row), "collection")
+    recipient = memory.store.connection.execute(
+        """SELECT sr.* FROM share_recipients sr JOIN peer_devices pd ON pd.id = sr.peer_id
+           WHERE sr.share_grant_id = ? AND pd.peer_instance_id = ?""",
+        (share["id"], identity["instance_id"]),
+    ).fetchone()
+    if recipient:
+        require_active(dict(recipient), "share recipient")
 
 
 def _ensure_imported_share_and_collection(memory, share_payload: dict, collection_payload: dict, peer: PeerDevice) -> None:
@@ -1881,8 +1952,13 @@ def _ensure_imported_share_and_collection(memory, share_payload: dict, collectio
         )
 
 
-def _policy_for_import(memory, peer: PeerDevice, *, trust_policy: str, namespace: str) -> ImportTrustPolicy:
-    if trust_policy == "trusted_device":
+def _policy_for_import(memory, peer: PeerDevice | None, *, trust_policy: str, namespace: str) -> ImportTrustPolicy:
+    candidate_only = trust_policy in {"candidate_only", "manual_review", "remote_claim_only"}
+    if candidate_only or peer is None:
+        policy_id = "itp_candidate_only"
+    elif trust_policy == "trusted_device" and peer.trust_domain_id is None:
+        # add_peer(trust_status="trusted_device") is also an explicit local
+        # trust decision, even before a domain is assigned by trust_peer().
         policy_id = "itp_trusted_device"
     elif peer.trust_domain_id == "trust_personal_trusted_devices":
         policy_id = "itp_trusted_device"
@@ -1893,7 +1969,13 @@ def _policy_for_import(memory, peer: PeerDevice, *, trust_policy: str, namespace
     row = memory.store.connection.execute("SELECT * FROM import_trust_policies WHERE id = ?", (policy_id,)).fetchone()
     if not row:
         raise NotFoundError(f"Import trust policy not found: {policy_id}")
-    return ImportTrustPolicy.from_row(row)
+    policy = ImportTrustPolicy.from_row(row)
+    if candidate_only:
+        # Caller intent is a ceiling even if a stored policy later changes.
+        return replace(policy, import_mode=trust_policy, allow_active_claims=False)
+    if trust_policy in {"trusted_device", "active_for_project_state"} and policy.import_mode == "active_if_trusted":
+        return replace(policy, import_mode="active_for_project_state")
+    return policy
 
 
 def _import_evidence(memory, evidence: dict, *, peer: PeerDevice, share_id: str, sync_run_id: str, trust_domain_id: str | None):
@@ -1980,8 +2062,6 @@ def _claim_imports_active(claim: dict, policy: ImportTrustPolicy, peer: PeerDevi
         return False
     if peer.trust_status not in {"trusted_device", "trusted_user", "trusted_team"}:
         return False
-    if claim.get("status") == "core":
-        return policy.import_mode in {"active_if_trusted", "active_for_project_state"}
     if policy.import_mode == "active_for_project_state":
         return claim.get("memory_type") in {"project", "decision", "procedure"}
     return policy.import_mode == "active_if_trusted"
