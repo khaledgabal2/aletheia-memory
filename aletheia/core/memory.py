@@ -755,6 +755,18 @@ class Memory:
     def rotate_federation_key(self, **kwargs):
         return federation.rotate_federation_key(self, **kwargs)
 
+    def public_federation_identity(self):
+        return federation.public_federation_identity(self)
+
+    def replace_peer_key(self, peer_id: str, **kwargs):
+        return federation.replace_peer_key(self, peer_id, **kwargs)
+
+    def recover_share_bundle_for_review(self, **kwargs):
+        return federation.recover_share_bundle_for_review(self, **kwargs)
+
+    def read_federation_recovery_review(self, **kwargs):
+        return federation.read_federation_recovery_review(self, **kwargs)
+
     def federation_status(self):
         return federation.federation_status(self)
 

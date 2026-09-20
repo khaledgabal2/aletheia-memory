@@ -211,8 +211,8 @@ debugging.
 
 | Command | Purpose |
 | --- | --- |
-| `federation init/status/export-identity/rotate-key` | Manage local federation identity. |
-| `peers add/list/show/trust/revoke/trust-domains` | Manage peer trust. |
+| `federation init/status/export-identity/rotate-key/recover-bundle` | Manage local identity and encrypted recovery for historical bundles. |
+| `peers add/list/show/trust/revoke/replace-key/trust-domains` | Manage peer trust and explicitly approve replacement keys. |
 | `shares create/list/show/recipients/export/import/revoke` | Manage scoped share grants and bundles. |
 | `sync run/export/import/runs/collections/conflicts/resolve/cursors/remote-sources/trust-policies` | Run file-bundle sync and inspect sync state. |
 | `workspaces create/list/show/members/add-member/remove-member/create-agent-group/agent-groups/add-agent/agent-members` | Manage workspaces and agent groups. |
@@ -221,3 +221,9 @@ debugging.
 | `federation-conformance run` | Run federation conformance checks. |
 
 Federation is local-first and explicit. It is not automatic cloud sync.
+
+`rotate-key` requires `--expected-fingerprint`, `--recovery-output`, and a
+configured `ALETHEIA_FEDERATION_RECOVERY_KEY`. `peers replace-key` requires
+`--identity`, `--expected-fingerprint`, and `--confirmed-fingerprint`; it resets
+trust and revokes old grants. See the [recovery procedure](federation_key_recovery.md)
+for the full operator workflow and encrypted historical-bundle review.

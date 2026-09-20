@@ -4,6 +4,13 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+- Add explicit federation recovery: verified encrypted decryption-key archives,
+  fingerprint-confirmed peer replacement, trust reset and grant revocation,
+  and encrypted recovery of historical bundles for review without importing.
+  Rotation now requires an expected fingerprint and a fresh recovery path;
+  HTTP rotation/replacement require admin capability. Identity responses and
+  CLI output contain public data only. See the
+  [operator procedure](docs/federation_key_recovery.md).
 - Repair federation bundle identity serialization, pinned-key verification,
   import revocation checks, candidate-only policy enforcement, and share read
   permissions. Invalid imports leave content and federation state unchanged.

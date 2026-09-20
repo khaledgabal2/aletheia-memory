@@ -192,61 +192,49 @@ def export_federation_identity(memory, *, output_path: str | None = None) -> dic
     return payload
 
 
-def rotate_federation_key(memory, *, reason: str, actor: str = "user") -> FederationIdentity:
-    _require_reason(reason)
-    identity = active_federation_identity(memory)
-    public_key, private_ref, fingerprint = _new_key_material(
-        identity.display_name,
-        identity.key_algorithm,
-        protected=bool(identity.metadata.get("protected_private_key", True)),
-    )
-    metadata = dict(identity.metadata)
-    old_keys = list(metadata.get("old_public_keys") or [])
-    old_keys.append(
-        {
-            "public_key": identity.public_key,
-            "key_fingerprint": identity.key_fingerprint,
-            "rotated_at": utc_now_iso(),
-            "reason": reason,
-        }
-    )
-    metadata.update(
-        {
-            "old_public_keys": old_keys,
-            "private_key_ref": private_ref,
-            "private_key_exported": False,
-            "last_rotation_reason": reason,
-        }
-    )
-    now = utc_now_iso()
-    with memory.store.transaction():
-        memory.store.connection.execute(
-            """
-            UPDATE federation_identities
-            SET public_key = ?, key_fingerprint = ?, rotated_at = ?, metadata_json = ?
-            WHERE id = ?
-            """,
-            (public_key, fingerprint, now, json.dumps(metadata, sort_keys=True), identity.id),
-        )
-        _write_revocation_record(
-            memory,
-            revocation_type="key_revocation",
-            target_id=identity.id,
-            target_type="federation_identity",
-            peer_id=None,
-            reason=reason,
-            actor=actor,
-            metadata={"old_fingerprint": identity.key_fingerprint, "new_fingerprint": fingerprint},
-        )
-        _write_federation_audit(memory, event_type="identity.key_rotated", target_id=identity.id, target_type="federation_identity", actor=actor, reason=reason)
-    return get_federation_identity(memory, identity.id)
+def rotate_federation_key(memory, **kwargs) -> FederationIdentity:
+    from aletheia.core.federation_recovery import rotate_federation_key as rotate
+
+    return rotate(memory, **kwargs)
+
+
+def replace_peer_key(memory, peer_id: str, **kwargs) -> PeerDevice:
+    from aletheia.core.federation_recovery import replace_peer_key as replace_key
+
+    return replace_key(memory, peer_id, **kwargs)
+
+
+def recover_share_bundle_for_review(memory, **kwargs) -> dict:
+    from aletheia.core.federation_recovery import recover_share_bundle_for_review as recover
+
+    return recover(memory, **kwargs)
+
+
+def read_federation_recovery_review(memory, **kwargs) -> dict:
+    from aletheia.core.federation_recovery import read_federation_recovery_review as read_review
+
+    return read_review(**kwargs)
+
+
+def _public_identity_record(identity: FederationIdentity) -> dict:
+    result = {field: getattr(identity, field) for field in (
+        "id", "instance_id", "display_name", "public_key", "key_fingerprint", "key_algorithm", "status", "created_at", "rotated_at"
+    )}
+    result["metadata"] = {"private_key_exported": False, "key_material_version": 2,
+                          "protected_private_key": bool(identity.metadata.get("protected_private_key"))}
+    return result
+
+
+def public_federation_identity(memory) -> dict | None:
+    identity = active_federation_identity(memory, none_if_missing=True)
+    return _public_identity_record(identity) if identity else None
 
 
 def federation_status(memory) -> dict:
     identity = active_federation_identity(memory, none_if_missing=True)
     return {
         "schema_version": SCHEMA_VERSION,
-        "identity": asdict(identity) if identity else None,
+        "identity": _public_identity_record(identity) if identity else None,
         "peer_count": len(list_peers(memory, include_revoked=True)),
         "trusted_peer_count": len([peer for peer in list_peers(memory) if peer.trust_status in {"trusted_device", "trusted_user", "trusted_team"}]),
         "active_share_count": len(list_share_grants(memory, status="active")),
@@ -285,7 +273,7 @@ def add_peer(
             existing = PeerDevice.from_row(existing_row)
             if existing.public_key != public_key or existing.key_fingerprint != fingerprint:
                 raise ValidationError(
-                    "Peer identity key changed; revoke and re-add the peer or use a signed key rotation flow."
+                    "Peer identity key changed; use replace_peer_key with independently confirmed fingerprints."
                 )
         memory.store.connection.execute(
             """
@@ -339,7 +327,7 @@ def trust_peer(memory, peer_id: str, *, trust_status: str, trust_domain_id: str 
         raise ValidationError(f"Unsupported trust status: {trust_status}")
     peer = get_peer(memory, peer_id)
     if peer.trust_status == "revoked":
-        raise ValidationError("Revoked peers cannot be trusted again; add the peer identity again.")
+        raise ValidationError("Revoked peers require a new key and explicit replace_peer_key approval before trust can be restored.")
     if trust_domain_id:
         get_trust_domain(memory, trust_domain_id)
     elif trust_status == "trusted_device":
@@ -350,10 +338,15 @@ def trust_peer(memory, peer_id: str, *, trust_status: str, trust_domain_id: str 
         trust_domain_id = "trust_untrusted_imports"
     now = utc_now_iso()
     with memory.store.transaction():
-        memory.store.connection.execute(
-            "UPDATE peer_devices SET trust_status = ?, trust_domain_id = ?, trusted_at = ? WHERE id = ?",
-            (trust_status, trust_domain_id, now if trust_status.startswith("trusted_") else None, peer.id),
+        updated = memory.store.connection.execute(
+            """UPDATE peer_devices SET trust_status = ?, trust_domain_id = ?, trusted_at = ?
+               WHERE id = ? AND public_key = ? AND key_fingerprint = ?
+               AND trust_status != 'revoked' AND revoked_at IS NULL""",
+            (trust_status, trust_domain_id, now if trust_status.startswith("trusted_") else None,
+             peer.id, peer.public_key, peer.key_fingerprint),
         )
+        if updated.rowcount != 1:
+            raise ValidationError("Peer key changed or was revoked during approval; inspect the peer before approving again.")
         _write_federation_audit(memory, event_type="peer.trusted", peer_id=peer.id, target_id=peer.id, target_type="peer_device", actor=actor, reason=reason, metadata={"trust_status": trust_status, "trust_domain_id": trust_domain_id})
     if trust_status in {"trusted_team"}:
         memory.create_review_task(
@@ -1377,9 +1370,13 @@ def _validated_private_key_doc(doc: dict) -> dict:
 
 def _validate_peer_identity_payload(payload: dict) -> None:
     required = {"instance_id", "display_name", "public_key", "key_fingerprint", "key_algorithm"}
+    if not isinstance(payload, dict):
+        raise ValidationError("Peer identity must be a public identity object.")
     missing = sorted(required - set(payload))
     if missing:
         raise ValidationError("Peer identity missing fields: " + ", ".join(missing))
+    if any(not isinstance(payload[field], str) or not payload[field].strip() for field in required):
+        raise ValidationError("Peer identity fields must be nonempty strings.")
     expected = sha256_hex(payload["public_key"])[:32]
     if payload["key_fingerprint"] != expected:
         raise ValidationError("Peer identity fingerprint does not match public key.")
@@ -1676,7 +1673,7 @@ def _write_bundle(
         archive.writestr("signature.json", json.dumps(signature_doc, indent=2, sort_keys=True) + "\n")
 
 
-def _read_bundle(memory, input_path: str) -> tuple[dict, dict]:
+def _read_bundle(memory, input_path: str, *, recovery_key: tuple[str, x25519.X25519PrivateKey] | None = None) -> tuple[dict, dict]:
     with zipfile.ZipFile(input_path, "r") as archive:
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         if manifest.get("crypto_version") != BUNDLE_CRYPTO_VERSION:
@@ -1687,7 +1684,8 @@ def _read_bundle(memory, input_path: str) -> tuple[dict, dict]:
         _verify_bundle_signature(archive, manifest=manifest, origin_identity=origin_identity)
         if manifest.get("encrypted"):
             metadata = json.loads(archive.read("encryption_metadata.json").decode("utf-8"))
-            payload = json.loads(_decrypt_payload(memory, archive.read("encrypted_payload.bin"), manifest, metadata).decode("utf-8"))
+            payload = json.loads(_decrypt_payload(memory, archive.read("encrypted_payload.bin"), manifest, metadata,
+                                                  recovery_key=recovery_key).decode("utf-8"))
         else:
             payload = json.loads(archive.read("payloads/payload.json").decode("utf-8"))
     peer_identity = payload.get("peer_identity", {})
@@ -1735,16 +1733,20 @@ def _encrypt_payload(payload: bytes, manifest: dict, recipients: list[ShareRecip
     }
 
 
-def _decrypt_payload(memory, cipher: bytes, manifest: dict, metadata: dict) -> bytes:
+def _decrypt_payload(memory, cipher: bytes, manifest: dict, metadata: dict,
+                     *, recovery_key: tuple[str, x25519.X25519PrivateKey] | None = None) -> bytes:
     if metadata.get("algorithm") != ENCRYPTION_ALGORITHM:
         raise ValidationError("Unsupported sync bundle encryption algorithm.")
-    identity = active_federation_identity(memory)
-    identity_private = _encryption_private_key(identity)
+    if recovery_key is None:
+        identity = active_federation_identity(memory)
+        fingerprint, identity_private = identity.key_fingerprint, _encryption_private_key(identity)
+    else:
+        fingerprint, identity_private = recovery_key
     ephemeral_public = x25519.X25519PublicKey.from_public_bytes(_unb64(metadata["ephemeral_public_key"]))
     shared = identity_private.exchange(ephemeral_public)
     aad = _bundle_encryption_aad(manifest)
     for recipient in metadata.get("recipients", []):
-        if recipient.get("key_fingerprint") != identity.key_fingerprint:
+        if recipient.get("key_fingerprint") != fingerprint:
             continue
         wrap_key = _derive_recipient_wrap_key(shared, _unb64(recipient["salt"]))
         try:

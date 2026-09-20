@@ -56,6 +56,13 @@ signing and encryption keys as potentially exposed, coordinate key recovery
 with recipients, and retire affected bundles. This code change does not
 rotate existing identities or recall already distributed packages.
 
+For operator-approved replacement, use the [federation key recovery procedure](federation_key_recovery.md).
+Rotation requires an encrypted decryption-only recovery file and the expected
+current fingerprint. Peer replacement requires independently confirmed old and
+new fingerprints, resets trust, and revokes existing grants. Both HTTP operations
+require `memory:admin`. Historical bundle recovery produces an encrypted review
+file and never imports content or restores signing authority.
+
 Run diagnostics:
 
 ```bash

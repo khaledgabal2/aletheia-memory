@@ -313,8 +313,13 @@ class AletheiaClient:
             "protected": protected,
         })
 
-    def rotate_federation_key(self, *, reason: str, actor: str = "sdk") -> dict:
-        return self._request("POST", "/v1/federation/identity/rotate", {"reason": reason, "actor": actor})
+    def rotate_federation_key(self, *, reason: str, expected_fingerprint: str, recovery_path: str, actor: str = "sdk") -> dict:
+        return self._request("POST", "/v1/federation/identity/rotate", {
+            "reason": reason, "actor": actor, "expected_fingerprint": expected_fingerprint, "recovery_path": recovery_path,
+        })
+
+    def replace_peer_key(self, peer_id: str, **payload) -> dict:
+        return self._request("POST", f"/v1/peers/{peer_id}/replace-key", payload)
 
     def list_peers(self, *, include_revoked: bool = False) -> list[dict]:
         suffix = "?" + urlencode({"include_revoked": str(include_revoked).lower()})
@@ -669,6 +674,9 @@ class AsyncAletheiaClient:
 
     async def rotate_federation_key(self, **payload) -> dict:
         return await asyncio.to_thread(self._sync.rotate_federation_key, **payload)
+
+    async def replace_peer_key(self, peer_id: str, **payload) -> dict:
+        return await asyncio.to_thread(self._sync.replace_peer_key, peer_id, **payload)
 
     async def list_peers(self, **payload) -> list[dict]:
         return await asyncio.to_thread(self._sync.list_peers, **payload)

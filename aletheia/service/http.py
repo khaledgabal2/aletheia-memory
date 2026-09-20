@@ -1417,16 +1417,22 @@ class AletheiaService:
             if method == "GET" and endpoint == "/v1/federation/status":
                 return self.memory.federation_status()
             if method == "GET" and endpoint == "/v1/federation/identity":
-                identity = self.memory.active_federation_identity(none_if_missing=True)
-                return asdict(identity) if identity else {"identity": None}
+                return self.memory.public_federation_identity() or {"identity": None}
             if method == "POST" and endpoint == "/v1/federation/identity":
-                return asdict(self.memory.create_federation_identity(
+                self.memory.create_federation_identity(
                     display_name=self._required(payload, "display_name"),
                     key_algorithm=payload.get("key_algorithm", "default"),
                     protected=bool(payload.get("protected", True)),
-                ))
+                )
+                return self.memory.public_federation_identity()
             if method == "POST" and endpoint == "/v1/federation/identity/rotate":
-                return asdict(self.memory.rotate_federation_key(reason=self._required(payload, "reason"), actor=payload.get("actor", "api")))
+                self.auth.require_capability(auth_context, "memory:admin")
+                self.memory.rotate_federation_key(
+                    reason=self._required(payload, "reason"), actor=payload.get("actor", "api"),
+                    expected_fingerprint=self._required(payload, "expected_fingerprint"),
+                    recovery_path=self._required_safe_admin_path(payload, "recovery_path"),
+                )
+                return self.memory.public_federation_identity()
             if method == "POST" and endpoint == "/v1/federation/conformance":
                 return self.memory.federation_conformance()
 
@@ -1452,6 +1458,14 @@ class AletheiaService:
                 peer_id = parts[3]
                 if method == "GET" and len(parts) == 4:
                     return asdict(self.memory.get_peer(peer_id))
+                if method == "POST" and len(parts) == 5 and parts[4] == "replace-key":
+                    self.auth.require_capability(auth_context, "memory:admin")
+                    return asdict(self.memory.replace_peer_key(
+                        peer_id, peer_identity=self._required(payload, "peer_identity"),
+                        expected_fingerprint=self._required(payload, "expected_fingerprint"),
+                        confirmed_fingerprint=self._required(payload, "confirmed_fingerprint"),
+                        reason=self._required(payload, "reason"), actor=payload.get("actor", "api"),
+                    ))
                 if method == "POST" and len(parts) == 5 and parts[4] == "trust":
                     return asdict(self.memory.trust_peer(
                         peer_id,
@@ -3652,7 +3666,7 @@ def openapi_schema() -> dict:
         ("GET", "/v1/v1-gate/runs/{run_id}", "memory:read"),
         ("GET", "/v1/federation/identity", "memory:federation"),
         ("POST", "/v1/federation/identity", "memory:federation"),
-        ("POST", "/v1/federation/identity/rotate", "memory:federation"),
+        ("POST", "/v1/federation/identity/rotate", "memory:admin"),
         ("GET", "/v1/federation/status", "memory:federation"),
         ("POST", "/v1/federation/conformance", "memory:federation"),
         ("GET", "/v1/peers", "memory:peers"),
@@ -3660,6 +3674,7 @@ def openapi_schema() -> dict:
         ("GET", "/v1/peers/trust-domains", "memory:peers"),
         ("GET", "/v1/peers/{peer_id}", "memory:peers"),
         ("POST", "/v1/peers/{peer_id}/trust", "memory:peers"),
+        ("POST", "/v1/peers/{peer_id}/replace-key", "memory:admin"),
         ("POST", "/v1/peers/{peer_id}/revoke", "memory:revoke_peer"),
         ("GET", "/v1/shares", "memory:share"),
         ("POST", "/v1/shares", "memory:share"),

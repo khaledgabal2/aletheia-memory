@@ -23,6 +23,7 @@ NAMESPACE = "user/m10"
 @pytest.fixture(autouse=True)
 def _configured_federation_key(monkeypatch):
     monkeypatch.setenv("ALETHEIA_FEDERATION_KEY", "m10-test-federation-key")
+    monkeypatch.setenv("ALETHEIA_FEDERATION_RECOVERY_KEY", "m10-test-recovery-key")
 
 
 def _json(payload: dict) -> bytes:
@@ -121,7 +122,9 @@ def test_federation_identity_private_key_ref_is_encrypted_and_requires_key(monke
         private_ref = identity.metadata["private_key_ref"]
         assert private_ref.startswith("local_enc_v2_")
         assert "private_key" not in private_ref
-        protected.rotate_federation_key(reason="prove encrypted key material can be used", actor="pytest")
+        protected.rotate_federation_key(reason="prove encrypted key material can be used", actor="pytest",
+                                        expected_fingerprint=identity.key_fingerprint,
+                                        recovery_path=str(tmp_path / "protected.recovery"))
         rotated = protected.active_federation_identity()
         assert rotated.metadata["private_key_ref"].startswith("local_enc_v2_")
     finally:
@@ -136,7 +139,8 @@ def test_identity_peer_share_and_encrypted_bundle_export(tmp_path):
         assert "private_key_ref" not in json.dumps(exported_identity)
         assert exported_identity["public_key"].startswith("fedpub_v2_")
 
-        rotated = left.rotate_federation_key(reason="unit key rotation")
+        rotated = left.rotate_federation_key(reason="unit key rotation", expected_fingerprint=exported_identity["key_fingerprint"],
+                                            recovery_path=str(tmp_path / "left.recovery"))
         assert rotated.key_fingerprint != exported_identity["key_fingerprint"]
         assert any(record.revocation_type == "key_revocation" for record in left.list_revocations())
 
