@@ -4,6 +4,18 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+- Enforce stored object scope and source privacy across HTTP session, feedback,
+  review, reasoning, evaluation, and policy operations. Session summaries now
+  default to reviewable candidates; active summaries require explicit active
+  mode and active-write capability, with atomic session/summary changes.
+- Filter HTTP trace content before storage and recheck current access on reads.
+  Authorize LLM sources before provider construction, including conflict and
+  duplicate-merge sources. HTTP Python providers must be enabled `llm_provider`
+  installations with approved permissions, selected by installation ID or name.
+- Require an explicit namespace for scoped operational lists and filter federation
+  history before pagination. Signed federation imports authorize the grant's
+  actual scope and reject content outside that namespace. See
+  [HTTP access boundaries](docs/service_access_boundaries.md) for migration details.
 - Add explicit federation recovery: verified encrypted decryption-key archives,
   fingerprint-confirmed peer replacement, trust reset and grant revocation,
   and encrypted recovery of historical bundles for review without importing.

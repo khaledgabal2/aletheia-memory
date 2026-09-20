@@ -196,6 +196,36 @@ class ReadAccess:
                     "omitted_item_ids": [item.claim_id for item in dropped]}
         return replace(pack, **fields, warnings=warnings, omitted=dropped, metadata=metadata), omitted
 
+    def filter_retrieval(self, results):
+        return [replace(item,
+                        project_ids=[project for project in item.project_ids if self.namespace(item.namespace, [project])],
+                        conflict_ids=[value for value in item.conflict_ids if self.allowed("conflict", value)])
+                for item in results if self.allowed("claim", item.claim_id)]
+
+    def trace_summary(self, trace):
+        self.auth.require_namespace(self.context, namespace=trace.namespace, project_id=trace.project_id)
+        # Old traces contain unclassified warning text and linked private IDs.
+        query_privacy = trace.metadata.get("query_privacy")
+        query_visible = query_privacy in PRIVACY_ORDER and self.auth.privacy_allows(self.context, query_privacy)
+        return {**asdict(trace), "query": trace.query if query_visible else None,
+                "metadata": {key: trace.metadata[key] for key in
+                ("limit", "context_pack_id", "token_budget", "ranking_policy_version_id") if key in trace.metadata}}
+
+    def trace_items(self, trace_id):
+        visible = []
+        for item in self.memory.list_trace_items(trace_id):
+            metadata = item.metadata
+            kind = "reflection" if metadata.get("reflection_id") else "inference" if metadata.get("inference_id") else item.target_type
+            target = metadata.get("reflection_id") or metadata.get("inference_id") or item.target_id
+            if not self.allowed(kind, target) or (metadata.get("evidence_ids") and not self.evidence_set(metadata["evidence_ids"])):
+                continue
+            # Retain the authorized object's snapshot, not arbitrary nested
+            # derivation graphs, conflict descriptions, or provider metadata.
+            fields = ("claim_id", "reflection_id", "inference_id", "namespace", "subject", "predicate", "object", "text",
+                      "memory_type", "status", "score", "lexical_score", "semantic_score", "confidence_effective", "importance")
+            visible.append({**asdict(item), "metadata": {key: metadata[key] for key in fields if key in metadata}})
+        return visible
+
     def overview(self, namespace, project_id=None):
         claims = [self.memory.read_claim(row[0]) for row in self.db.execute(
             "SELECT id FROM claims WHERE namespace = ? ORDER BY created_at DESC, id", (namespace,))]

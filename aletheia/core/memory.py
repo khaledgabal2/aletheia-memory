@@ -11,7 +11,7 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 import aletheia.core.federation as federation
 import aletheia.core.hardening as production
@@ -1556,8 +1556,12 @@ class Memory:
         candidate = self.read_candidate(candidate_id)
         if candidate.namespace != namespace:
             raise ValidationError("LLM duplicate merge suggestion candidate belongs to a different namespace.")
-        evidence = self._llm_allowed_evidence(namespace=namespace, evidence_ids=candidate.evidence_ids, provider=provider, model=model)
         merge_candidates = self._llm_merge_candidates(candidate)
+        evidence_ids = list(candidate.evidence_ids)
+        for target in merge_candidates:
+            source = self.read_claim(target["id"]) if target["target_type"] == "claim" else self.read_candidate(target["id"])
+            evidence_ids.extend(source.evidence_ids)
+        evidence = self._llm_allowed_evidence(namespace=namespace, evidence_ids=sorted(set(evidence_ids)), provider=provider, model=model)
         output = self._llm_source_task(
             namespace=namespace,
             task_type="suggest_duplicate_merge",
@@ -5234,6 +5238,9 @@ class Memory:
         project_id: str | None = None,
         session_id: str | None = None,
         limit: int = 10,
+        result_filter: Callable[[list], list] | None = None,
+        claim_filter: Callable[[str], bool] | None = None,
+        query_privacy: str | None = None,
     ) -> TraceRun:
         started = perf_counter()
         results = self.retrieve(
@@ -5244,6 +5251,8 @@ class Memory:
             project_id=project_id,
             session_id=session_id,
         )
+        if result_filter is not None:
+            results = result_filter(results)
         trace_id = new_id("trc")
         now = utc_now_iso()
         included_ids = {result.claim_id for result in results}
@@ -5268,7 +5277,7 @@ class Memory:
                     policy_version_id,
                     int((perf_counter() - started) * 1000),
                     now,
-                    json.dumps({"limit": limit}, sort_keys=True),
+                    json.dumps({"limit": limit, "query_privacy": query_privacy}, sort_keys=True),
                 ),
             )
             self._write_trace_event(trace_id, "retrieval.started", "Retrieval trace captured.", {"query": query})
@@ -5297,6 +5306,8 @@ class Memory:
                     ),
                 )
             for row in self._trace_candidate_claim_rows(namespace=namespace, project_id=project_id, limit=max(limit * 4, 20)):
+                if claim_filter is not None and not claim_filter(row["id"]):
+                    continue
                 if row["id"] in included_ids:
                     continue
                 reason = self._omission_reason_for_claim_row(row, project_id=project_id)
@@ -5340,6 +5351,9 @@ class Memory:
         session_id: str | None = None,
         retrieval_mode: str = "hybrid",
         token_budget: int = 2000,
+        context_filter: Callable[[ContextPack], ContextPack] | None = None,
+        claim_filter: Callable[[str], bool] | None = None,
+        query_privacy: str | None = None,
     ) -> TraceRun:
         started = perf_counter()
         pack = self.context_pack(
@@ -5350,7 +5364,10 @@ class Memory:
             retrieval_mode=retrieval_mode,
             token_budget=token_budget,
             include_derivation_metadata=True,
+            record_usage=False,
         )
+        if context_filter is not None:
+            pack = context_filter(pack)
         trace_id = new_id("trc")
         now = utc_now_iso()
         included_claim_ids = {item.claim_id for item in pack.items()}
@@ -5378,6 +5395,7 @@ class Memory:
                         {
                             "context_pack_id": pack.id,
                             "token_budget": token_budget,
+                            "query_privacy": query_privacy,
                             "ranking_policy_version_id": pack.ranking_policy_version_id,
                             "warnings": [asdict(warning) for warning in pack.warnings],
                         },
@@ -5436,6 +5454,8 @@ class Memory:
                     ),
                 )
             for row in self._trace_candidate_claim_rows(namespace=namespace, project_id=project_id, limit=50):
+                if claim_filter is not None and not claim_filter(row["id"]):
+                    continue
                 if row["id"] in included_claim_ids:
                     continue
                 if any(omitted.claim_id == row["id"] for omitted in pack.omitted):

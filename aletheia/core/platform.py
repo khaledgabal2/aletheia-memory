@@ -51,6 +51,7 @@ from aletheia.version import discovery_metadata, software_version
 
 PLUGIN_TYPES = {
     "extractor",
+    "llm_provider",
     "embedding_provider",
     "vector_index",
     "importer",

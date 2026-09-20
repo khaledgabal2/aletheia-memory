@@ -34,6 +34,23 @@ M12 governed LLM routes:
 
 These routes produce suggestions, drafts, provenance records, or query expansions only. They do not promote claims, resolve conflicts, mutate scope, or merge duplicates.
 
+HTTP `provider` values accept built-in IDs or `plugin:<installation ID>` (also
+accepting the registered plugin name). An enabled `llm_provider` installation
+and approved permissions are required; raw Python entrypoints are rejected
+before import. Every referenced source must meet the caller's current scope
+and privacy policy before a provider is constructed.
+
+`POST /v1/sessions/{session_id}/end` defaults to `write_mode: "candidate"`
+when saving a summary. `write_mode: "active"` additionally requires
+`memory:write_active`. Both require `memory:write_candidate` and access to the
+stored session's namespace/project. `remember_summary: false` ends the session
+without saving the supplied summary.
+
+Operational lists, including `/v1/llm/runs` and `/v1/traces`, require an explicit
+authorized `namespace` unless the caller holds the `*` namespace grant.
+See [HTTP access boundaries](service_access_boundaries.md) for all affected
+routes, provider setup, trace compatibility, and Python SDK examples.
+
 
 ## Federation key recovery
 

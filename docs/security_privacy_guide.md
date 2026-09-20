@@ -16,6 +16,15 @@ Core controls:
 - Forget and redact flows preserve auditability through tombstones.
 - External telemetry is off by default and is checked by the v1 gate.
 
+HTTP object operations authorize the stored target's namespace/project and
+source evidence, including referenced replacement claims and LLM inputs.
+Session summaries default to candidate writes. Trace creation filters content
+before persistence, and trace reads recheck current access rather than trusting
+an old snapshot's visibility. Operational list requests require a namespace
+unless the caller has a wildcard namespace grant; admin capability alone does
+not grant global namespace access on these routes. For route details and
+upgrade behavior, see [HTTP access boundaries](service_access_boundaries.md).
+
 Deployment limits:
 
 - The v1.3.0 production baseline on `main` is Aletheia-generic. Product-specific integrations, including sample adapter compatibility code, must stay on a branch or fork.

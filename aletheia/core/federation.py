@@ -8,7 +8,7 @@ import os
 import zipfile
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aletheia.core.crypto import (
     aes_gcm_decrypt,
@@ -614,12 +614,15 @@ def get_sync_collection(memory, collection_id_or_share: str) -> SyncCollection:
     return SyncCollection.from_row(row)
 
 
-def list_sync_collections(memory, *, status: str | None = None) -> list[SyncCollection]:
-    params: list[Any] = []
-    where = ""
+def list_sync_collections(memory, *, status: str | None = None, namespace: str | None = None) -> list[SyncCollection]:
+    clauses, params = [], []
     if status:
-        where = "WHERE status = ?"
+        clauses.append("status = ?")
         params.append(status)
+    if namespace:
+        clauses.append("namespace = ?")
+        params.append(namespace)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
     rows = memory.store.connection.execute(f"SELECT * FROM sync_collections {where} ORDER BY created_at DESC", params).fetchall()
     return [SyncCollection.from_row(row) for row in rows]
 
@@ -697,7 +700,8 @@ def export_share_bundle(
     return run
 
 
-def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candidate_only", actor: str = "user", dry_run: bool = False) -> SyncRun:
+def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candidate_only", actor: str = "user", dry_run: bool = False,
+                        authorize_scope: Callable[[str, str | None], None] | None = None) -> SyncRun:
     if trust_policy not in IMPORT_MODES | {"trusted_device"}:
         raise ValidationError(f"Unknown import trust policy: {trust_policy}")
     if trust_policy == "reject_by_default":
@@ -713,6 +717,11 @@ def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candida
     # so another connection cannot revoke a grant between validation and use.
     with memory.store.transaction(immediate=True):
         _validate_import_grant(memory, share_payload, collection_payload, origin_identity)
+        for items in payload.get("payloads", {}).values():
+            if any(item.get("namespace") != share_payload["namespace"] for item in items):
+                raise ValidationError("Bundle content must belong to the share grant namespace.")
+        if authorize_scope is not None:
+            authorize_scope(share_payload["namespace"], share_payload.get("project_id"))
         peer = _peer_for_import(memory, origin_identity, trust_policy=trust_policy)
         policy = _policy_for_import(memory, peer, trust_policy=trust_policy, namespace=share_payload["namespace"])
         if dry_run:
@@ -812,6 +821,7 @@ def sync(
     input_path: str | None = None,
     output_path: str | None = None,
     dry_run: bool = False,
+    authorize_scope: Callable[[str, str | None], None] | None = None,
 ) -> SyncRun:
     collection = get_sync_collection(memory, collection_id)
     share = get_share_grant(memory, collection.share_grant_id)
@@ -841,7 +851,7 @@ def sync(
     if output_path:
         return export_share_bundle(memory, share_id=share.id, output_path=output_path, encrypt=True)
     if input_path:
-        return import_share_bundle(memory, input_path=input_path)
+        return import_share_bundle(memory, input_path=input_path, authorize_scope=authorize_scope)
     return _insert_sync_run(
         memory,
         collection_id=collection.id,
@@ -866,22 +876,28 @@ def get_sync_run(memory, sync_run_id: str) -> SyncRun:
     return SyncRun.from_row(row)
 
 
-def list_sync_runs(memory, *, limit: int = 50) -> list[SyncRun]:
-    rows = memory.store.connection.execute("SELECT * FROM sync_runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
+def list_sync_runs(memory, *, limit: int = 50, namespace: str | None = None) -> list[SyncRun]:
+    where = "WHERE collection_id IN (SELECT id FROM sync_collections WHERE namespace = ?)" if namespace else ""
+    params = [namespace, limit] if namespace else [limit]
+    rows = memory.store.connection.execute(f"SELECT * FROM sync_runs {where} ORDER BY started_at DESC LIMIT ?", params).fetchall()
     return [SyncRun.from_row(row) for row in rows]
 
 
-def list_replication_cursors(memory) -> list[ReplicationCursor]:
-    rows = memory.store.connection.execute("SELECT * FROM replication_cursors ORDER BY last_synced_at DESC").fetchall()
+def list_replication_cursors(memory, *, namespace: str | None = None) -> list[ReplicationCursor]:
+    where = "WHERE collection_id IN (SELECT id FROM sync_collections WHERE namespace = ?)" if namespace else ""
+    rows = memory.store.connection.execute(f"SELECT * FROM replication_cursors {where} ORDER BY last_synced_at DESC", [namespace] if namespace else []).fetchall()
     return [ReplicationCursor.from_row(row) for row in rows]
 
 
-def list_remote_sources(memory, *, local_object_id: str | None = None) -> list[RemoteMemorySource]:
-    params: list[Any] = []
-    where = ""
+def list_remote_sources(memory, *, local_object_id: str | None = None, namespace: str | None = None) -> list[RemoteMemorySource]:
+    clauses, params = [], []
     if local_object_id:
-        where = "WHERE local_object_id = ?"
+        clauses.append("local_object_id = ?")
         params.append(local_object_id)
+    if namespace:
+        clauses.append("share_grant_id IN (SELECT id FROM share_grants WHERE namespace = ?)")
+        params.append(namespace)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
     rows = memory.store.connection.execute(f"SELECT * FROM remote_memory_sources {where} ORDER BY imported_at DESC", params).fetchall()
     return [RemoteMemorySource.from_row(row) for row in rows]
 
@@ -949,8 +965,9 @@ def list_sync_conflict_resolutions(memory, conflict_id: str | None = None) -> li
     return [SyncConflictResolution.from_row(row) for row in rows]
 
 
-def list_revocations(memory) -> list[RevocationRecord]:
-    rows = memory.store.connection.execute("SELECT * FROM revocation_records ORDER BY created_at DESC").fetchall()
+def list_revocations(memory, *, namespace: str | None = None) -> list[RevocationRecord]:
+    where = "WHERE target_type = 'share_grant' AND target_id IN (SELECT id FROM share_grants WHERE namespace = ?)" if namespace else ""
+    rows = memory.store.connection.execute(f"SELECT * FROM revocation_records {where} ORDER BY created_at DESC", [namespace] if namespace else []).fetchall()
     return [RevocationRecord.from_row(row) for row in rows]
 
 
@@ -966,8 +983,9 @@ def propagate_revocations(memory, *, peer_id: str | None = None) -> dict:
     return {"status": "completed", "propagated_at": now, "peer_id": peer_id}
 
 
-def list_consent_records(memory) -> list[ConsentRecord]:
-    rows = memory.store.connection.execute("SELECT * FROM consent_records ORDER BY created_at DESC").fetchall()
+def list_consent_records(memory, *, namespace: str | None = None) -> list[ConsentRecord]:
+    where = "WHERE namespace = ?" if namespace else ""
+    rows = memory.store.connection.execute(f"SELECT * FROM consent_records {where} ORDER BY created_at DESC", [namespace] if namespace else []).fetchall()
     return [ConsentRecord.from_row(row) for row in rows]
 
 
