@@ -92,12 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
     context.add_argument("--query", required=True)
     context.add_argument("--project")
     context.add_argument("--session")
-    context.add_argument("--budget", type=int, default=1500)
+    context.add_argument("--budget", type=int, help="Override the active context policy token budget.")
     context.add_argument("--mode", choices=["lexical", "semantic", "hybrid"], default="lexical")
     context.add_argument("--include-candidate-warnings", action="store_true")
     context.add_argument("--no-reflections", action="store_true")
-    context.add_argument("--include-inferences", action="store_true")
-    context.add_argument("--include-derivation", action="store_true")
+    context.add_argument("--include-inferences", action="store_true", default=None)
+    context.add_argument("--include-derivation", action="store_true", default=None)
     context.add_argument("--policy-version")
     context.add_argument("--record-usage", action="store_true")
     context.add_argument("--explain-policy", action="store_true")
@@ -108,14 +108,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_db_namespace(context_pack)
     context_pack.add_argument("query")
-    context_pack.add_argument("--token-budget", type=int, default=1500)
+    context_pack.add_argument("--token-budget", type=int, help="Override the active context policy token budget.")
     context_pack.add_argument("--project")
     context_pack.add_argument("--session")
     context_pack.add_argument("--mode", choices=["lexical", "semantic", "hybrid"], default="lexical")
     context_pack.add_argument("--include-candidate-warnings", action="store_true")
     context_pack.add_argument("--no-reflections", action="store_true")
-    context_pack.add_argument("--include-inferences", action="store_true")
-    context_pack.add_argument("--include-derivation", action="store_true")
+    context_pack.add_argument("--include-inferences", action="store_true", default=None)
+    context_pack.add_argument("--include-derivation", action="store_true", default=None)
     context_pack.add_argument("--policy-version")
     context_pack.add_argument("--record-usage", action="store_true")
     context_pack.add_argument("--explain-policy", action="store_true")
@@ -1860,7 +1860,7 @@ def _run(args: argparse.Namespace) -> int:
                 token_budget=args.budget,
                 retrieval_mode=args.mode,
                 include_candidate_warnings=args.include_candidate_warnings,
-                include_reflections=not args.no_reflections,
+                include_reflections=False if args.no_reflections else None,
                 include_inferences=args.include_inferences,
                 include_derivation_metadata=args.include_derivation,
                 policy_version_id=args.policy_version,
@@ -1881,7 +1881,7 @@ def _run(args: argparse.Namespace) -> int:
                 token_budget=args.token_budget,
                 retrieval_mode=args.mode,
                 include_candidate_warnings=args.include_candidate_warnings,
-                include_reflections=not args.no_reflections,
+                include_reflections=False if args.no_reflections else None,
                 include_inferences=args.include_inferences,
                 include_derivation_metadata=args.include_derivation,
                 policy_version_id=args.policy_version,

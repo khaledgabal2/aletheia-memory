@@ -16,3 +16,9 @@ aletheia adapters certify ./examples/demo-adapter --db ./aletheia.db
 ```
 
 The scaffold includes an `agent_loop.py` that uses `AletheiaClient.context_pack` and `AletheiaClient.remember_candidate`.
+
+Certification executes isolated behavioral probes only for the bundled SDK loop
+contract. Invalid Python fails; other custom code receives structural evidence
+and remains uncertified. A certificate identifies the tested source hash and
+does not cover later edits or network/MCP transport. See
+[behavior verification](behavior_verification.md) for the exact checks and limits.

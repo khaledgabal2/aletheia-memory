@@ -52,7 +52,7 @@ support. This additive negotiation validates known input types and these limits:
 | --- | --- |
 | `namespace` | Required, nonempty; explicit for overview as well |
 | Retrieval `limit` | Integer 1–200, default 10 |
-| Context `token_budget` | Integer 1–12,000, default 1,500 |
+| Context `token_budget` | Integer 1–12,000; defaults to the selected context policy (initially 1,500) |
 | `mode` / `retrieval_mode` | `lexical`, `semantic`, or `hybrid`; legacy default `hybrid` retained |
 | Flags | JSON booleans, not strings or numeric coercions |
 | Optional project/session/policy IDs | String or null |

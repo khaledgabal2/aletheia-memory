@@ -548,7 +548,7 @@ class AletheiaService:
         read = is_read_path(endpoint) and (method == "GET" or endpoint in READ_POST_PATHS)
         consistent = read or endpoint.startswith(("/v1/llm/", "/v1/traces", "/v1/sessions", "/v1/claims/", "/v1/candidates/",
                                 "/v1/conflicts", "/v1/infer", "/v1/reflections", "/v1/derivation/", "/v1/eval/",
-                                "/v1/policies/", "/v1/jobs")) or endpoint in {"/v1/feedback", "/v1/outcomes", "/v1/retrieval-judgments", "/v1/extract"}
+                                "/v1/policies/", "/v1/jobs", "/v1/sync/conflicts/")) or endpoint in {"/v1/feedback", "/v1/outcomes", "/v1/retrieval-judgments", "/v1/extract"}
         while True:
             try:
                 with self.lock:
@@ -743,11 +743,12 @@ class AletheiaService:
             project_id=project_id,
             session_id=payload.get("session_id"),
             retrieval_mode=payload.get("retrieval_mode", "hybrid"),
-            token_budget=self._integer(payload.get("token_budget", 1500), "token_budget"),
-            include_reflections=bool(payload.get("include_reflections", True)),
-            include_inferences=bool(payload.get("include_inferences", False)),
-            include_derivation_metadata=bool(payload.get("include_derivation_metadata", False)),
+            token_budget=self._integer(payload["token_budget"], "token_budget") if "token_budget" in payload else None,
+            include_reflections=bool(payload["include_reflections"]) if "include_reflections" in payload else None,
+            include_inferences=bool(payload["include_inferences"]) if "include_inferences" in payload else None,
+            include_derivation_metadata=bool(payload["include_derivation_metadata"]) if "include_derivation_metadata" in payload else None,
             policy_version_id=payload.get("policy_version_id"),
+            context_policy_version_id=payload.get("context_policy_version_id"),
             record_usage=False,
             _read_access=access.allowed,
         )
@@ -801,6 +802,7 @@ class AletheiaService:
             memory_types=payload.get("memory_types"),
             include_disputed=bool(payload.get("include_disputed", False)),
             include_archived=bool(payload.get("include_archived", False)),
+            policy_version_id=payload.get("policy_version_id"),
             _read_access=access.allowed,
         )
         return [asdict(result) for result in access.filter_retrieval(results)]
@@ -1169,7 +1171,8 @@ class AletheiaService:
         if method == "POST" and endpoint.startswith("/v1/eval/sets/") and endpoint.endswith("/run"):
             self.auth.require_capability(auth_context, "memory:evaluate")
             target = access.target("evaluation_set", endpoint.split("/")[4], namespace=payload.get("namespace"))
-            return asdict(self.memory.run_evaluation(target.namespace, eval_set_id=target.id))
+            return asdict(self.memory.run_evaluation(target.namespace, eval_set_id=target.id,
+                policy_version_id=payload.get("policy_version_id"), context_policy_version_id=payload.get("context_policy_version_id")))
         if method == "POST" and endpoint == "/v1/optimize/retrieval":
             self._require(auth_context, "memory:policy", payload)
             if payload.get("eval_set_id"):
@@ -1191,6 +1194,12 @@ class AletheiaService:
             if endpoint.endswith("/review"):
                 return asdict(self.memory.review_policy_proposal(proposal_id, **self._review_policy_args(payload)))
             if endpoint.endswith("/apply"):
+                proposal = self.memory.get_policy_proposal(proposal_id)
+                table, default = ("ranking_policies", "rpol_default") if proposal.policy_type == "ranking" else ("context_pack_policies", "cpol_default")
+                policy = self.memory.store.connection.execute(f"SELECT namespace FROM {table} WHERE id = ?",
+                    (proposal.target_policy_id or default,)).fetchone()
+                if policy and policy["namespace"] is None and "*" not in auth_context.namespace_grants:
+                    raise forbidden("Applying a global policy requires access to all namespaces.")
                 return asdict(self.memory.apply_policy_proposal(proposal_id, **self._apply_policy_args(payload)))
         if method == "POST" and endpoint == "/v1/jobs":
             self._require(auth_context, "memory:jobs", payload)
@@ -1678,11 +1687,21 @@ class AletheiaService:
                 conflict_id = endpoint.split("/")[4]
                 conflict = self.memory.get_sync_conflict(conflict_id)
                 self.auth.require_namespace(auth_context, namespace=conflict.namespace)
+                self.auth.require_capability(auth_context, "memory:review")
+                strategy = self._required(payload, "strategy")
+                if strategy == "accept_remote_active":
+                    self.auth.require_capability(auth_context, "memory:write_active")
+                    self.auth.require_capability(auth_context, "memory:remote_active_write")
+                def authorize_resolution_target(kind, value):
+                    item = OperationAccess(self, auth_context).target(kind, value, namespace=conflict.namespace)
+                    if kind == "claim" and (value != conflict.local_object_id or item.status == "disputed") and strategy != "defer":
+                        self.auth.require_capability(auth_context, "memory:write_active")
                 return asdict(self.memory.resolve_sync_conflict(
                     conflict_id,
-                    strategy=self._required(payload, "strategy"),
+                    strategy=strategy,
                     reason=self._required(payload, "reason"),
                     actor=payload.get("actor", "api"),
+                    authorize_target=authorize_resolution_target,
                 ))
             if method == "GET" and endpoint == "/v1/sync/cursors":
                 namespace = OperationAccess(self, auth_context).scope("memory:sync", self._query_value(query, "namespace", none_if_missing=True))

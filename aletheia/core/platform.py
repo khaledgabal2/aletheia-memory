@@ -16,7 +16,7 @@ import tomllib
 import urllib.error
 import urllib.request
 import zipfile
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -753,15 +753,27 @@ def run_conformance(
     run_id = new_id("conf")
     started_at = utc_now_iso()
     results: list[dict] = []
+    evidence = {"assurance": "structural", "contract": None}
+    adapter_results = None
+    if conformance_suite.name == "agent-adapter" and target:
+        from aletheia.core.adapter_contract import check_adapter
+        adapter_results, evidence = check_adapter(target, _adapter_loop_source("python-sdk"),
+            expected_type=(metadata or {}).get("expected_adapter_type"))
     for case in cases:
-        case_status, message = _evaluate_conformance_case(memory, conformance_suite, case, target=target, metadata=metadata or {})
+        if adapter_results is not None:
+            case_status, message = adapter_results.get(case.name, ("skipped", "No implemented probe for this case."))
+        else:
+            case_status, message = _evaluate_conformance_case(memory, conformance_suite, case, target=target, metadata=metadata or {})
         results.append({"case": case, "status": case_status, "message": message})
         if fail_fast and case_status in {"failed", "error"}:
             break
     passed = sum(1 for result in results if result["status"] == "passed")
     failed = sum(1 for result in results if result["status"] in {"failed", "error"})
     skipped = sum(1 for result in results if result["status"] == "skipped")
-    status = "failed" if failed else "passed"
+    structural = sum(1 for result in results if result["status"] == "structural_passed")
+    status = ("failed" if failed else "incomplete" if not results or skipped or len(results) != len(cases)
+              else "passed" if passed == len(cases) and evidence["assurance"] == "behavioral"
+              else "structural_passed" if structural == len(cases) else "incomplete")
     with memory.store.transaction():
         memory.store.connection.execute(
             """
@@ -784,7 +796,7 @@ def run_conformance(
                 skipped,
                 started_at,
                 utc_now_iso(),
-                json.dumps(metadata or {}, sort_keys=True),
+                json.dumps({"caller": metadata or {}, **evidence, "structural_count": structural}, sort_keys=True),
             ),
         )
         for result in results:
@@ -804,7 +816,7 @@ def run_conformance(
                     result["message"],
                     0,
                     utc_now_iso(),
-                    json.dumps({}, sort_keys=True),
+                    json.dumps({"assurance": "behavioral" if result["status"] == "passed" else "structural"}, sort_keys=True),
                 ),
             )
         memory._write_audit(
@@ -913,7 +925,7 @@ def scaffold_adapter(memory, *, adapter_type: str, name: str, output_path: str) 
         "README.md": f"# {name}\n\nAletheia {adapter_type} adapter scaffold.\n\nRun conformance with:\n\n```bash\naletheia conformance run --suite agent-adapter --target .\n```\n",
         "aletheia-adapter.json": json.dumps({"name": name, "type": adapter_type, "candidate_writes_by_default": True}, indent=2) + "\n",
         "agent_loop.py": _adapter_loop_source(adapter_type),
-        "conformance.py": "def test_candidate_write_default():\n    assert True\n",
+        "conformance.py": "from contextlib import closing\nfrom pathlib import Path\nfrom aletheia import Memory\n\ndef test_bundled_adapter_contract(tmp_path):\n    with closing(Memory.open(str(tmp_path / 'contract.db'))) as memory:\n        run = memory.run_conformance(suite='agent-adapter', target=str(Path(__file__).parent))\n        assert run.status == 'passed', memory.get_conformance_run(run.id)\n",
     }
     out = write_new_project(output_path, files)
     example_id = "ex_" + content_hash(f"{adapter_type}\0{safe_name}\0{out}")[:24]
@@ -1320,15 +1332,20 @@ def v1_gate_run(
         elif not passed:
             warnings.append(f"{name}: {message}")
 
-    check("unit_tests_passed", bool(metadata.get("unit_tests_passed", True)), message="Unit tests not marked passed.")
-    check("integration_tests_passed", bool(metadata.get("integration_tests_passed", True)), message="Integration tests not marked passed.")
-    check("migration_tests_passed", memory.health()["schema_version"] == SCHEMA_VERSION, message="Schema mismatch.")
-    check("backup_restore_tests_passed", bool(memory.list_backups(limit=1)) or bool(metadata.get("allow_missing_backup", False)), critical=False, message="No backup recorded.")
+    check("unit_tests_passed", metadata.get("unit_tests_passed") is True, message="Unit tests not marked passed.")
+    check("integration_tests_passed", metadata.get("integration_tests_passed") is True, message="Integration tests not marked passed.")
+    check("schema_current", memory.health()["schema_version"] == SCHEMA_VERSION, message="Schema mismatch.")
+    check("backup_record_present", bool(memory.list_backups(limit=1)) or bool(metadata.get("allow_missing_backup", False)), critical=False, message="No backup recorded.")
     protected = memory.protected_mode_status()
-    check("protected_mode_tests_passed", protected is not None, message="Protected mode config missing.")
+    check("protected_mode_configuration_present", protected is not None, message="Protected mode config missing.")
     required_suites = [suite for suite in list_conformance_suites(memory) if suite.required_for_v1]
-    latest_runs = list_conformance_runs(memory, limit=200)
-    passed_suite_ids = {run.suite_id for run in latest_runs if run.status == "passed"}
+    # Only the latest built-in run for each suite is relevant. Historical passes,
+    # target-specific adapter checks and structural inventory cannot certify it.
+    passed_suite_ids = set()
+    for suite in required_suites:
+        row = memory.store.connection.execute("SELECT * FROM conformance_runs WHERE suite_id = ? AND target_id IS NULL ORDER BY started_at DESC, rowid DESC LIMIT 1", (suite.id,)).fetchone()
+        if row and row["status"] == "passed" and json.loads(row["metadata_json"]).get("assurance") == "behavioral":
+            passed_suite_ids.add(suite.id)
     missing_suites = [suite.name for suite in required_suites if suite.id not in passed_suite_ids]
     check("conformance_passed", not missing_suites, message="Missing passing suites: " + ", ".join(missing_suites))
     docs = list_documentation_builds(memory, limit=1)
@@ -1396,9 +1413,10 @@ def get_v1_gate_run(memory, run_id: str) -> V1ReleaseGateRun:
 
 def certify_adapter(memory, *, path: str, adapter_type: str = "generic-http") -> AdapterCertification:
     target = Path(path)
-    run = run_conformance(memory, suite="agent-adapter", target=str(target), target_type="agent_adapter")
+    run = run_conformance(memory, suite="agent-adapter", target=str(target), target_type="agent_adapter",
+                          metadata={"expected_adapter_type": adapter_type})
     cert_id = new_id("cert")
-    status = "certified" if run.status == "passed" else "failed"
+    status = "certified" if run.status == "passed" and run.metadata.get("assurance") == "behavioral" else "failed" if run.status == "failed" else "not_certified"
     with memory.store.transaction():
         memory.store.connection.execute(
             """
@@ -1415,7 +1433,7 @@ def certify_adapter(memory, *, path: str, adapter_type: str = "generic-http") ->
                 run.id,
                 status,
                 utc_now_iso() if status == "certified" else None,
-                json.dumps({"path": str(target)}, sort_keys=True),
+                json.dumps({"path": str(target), **run.metadata}, sort_keys=True),
             ),
         )
     row = memory.store.connection.execute("SELECT * FROM adapter_certifications WHERE id = ?", (cert_id,)).fetchone()
@@ -1424,7 +1442,15 @@ def certify_adapter(memory, *, path: str, adapter_type: str = "generic-http") ->
 
 def list_adapter_certifications(memory) -> list[AdapterCertification]:
     rows = memory.store.connection.execute("SELECT * FROM adapter_certifications ORDER BY certified_at DESC").fetchall()
-    return [AdapterCertification.from_row(row) for row in rows]
+    certificates = []
+    for row in rows:
+        certificate = AdapterCertification.from_row(row)
+        if certificate.status == "certified" and (certificate.metadata.get("assurance") != "behavioral"
+                                                 or not certificate.metadata.get("source_sha256")):
+            certificate = replace(certificate, status="not_certified", certified_at=None,
+                metadata={**certificate.metadata, "assurance": "unverified", "reason": "Legacy certificate requires behavioral recertification."})
+        certificates.append(certificate)
+    return certificates
 
 
 def _manifest_payload(manifest_path: Path) -> dict:
@@ -1552,6 +1578,17 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 
 def _evaluate_conformance_case(memory, suite: ConformanceSuite, case: ConformanceCase, *, target: str | None, metadata: dict) -> tuple[str, str]:
+    if suite.name == "agent-adapter":
+        return ("skipped", "A concrete adapter target is required for behavioral probes.")
+    if case.name not in {"contract_registered", "governance_preserved", "privacy_enforced", "error_envelope"}:
+        return ("skipped", "No implemented probe for this case.")
+    if case.name == "error_envelope":
+        return ("skipped", "No behavioral error-envelope probe is implemented for this suite.")
+    status, message = _evaluate_structural_case(memory, suite, case, target=target, metadata=metadata)
+    return ("structural_passed" if status == "passed" else status, "Structural check only: " + message)
+
+
+def _evaluate_structural_case(memory, suite: ConformanceSuite, case: ConformanceCase, *, target: str | None, metadata: dict) -> tuple[str, str]:
     if suite.name == "plugin":
         if target:
             try:
@@ -1574,20 +1611,6 @@ def _evaluate_conformance_case(memory, suite: ConformanceSuite, case: Conformanc
             ok = bool(memory.store.connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'plugin_capability_grants'").fetchone())
             return ("passed" if ok else "failed", "Plugin capability grants table present." if ok else "Plugin grants table missing.")
         return ("passed", "Plugin errors are captured in metadata-only execution logs.")
-    if suite.name == "agent-adapter":
-        if target:
-            target_path = Path(target)
-            has_readme = (target_path / "README.md").exists()
-            has_loop = (target_path / "agent_loop.py").exists()
-            if case.name == "contract_registered":
-                return ("passed" if has_readme else "failed", "Adapter README present." if has_readme else "Adapter README missing.")
-            if case.name == "governance_preserved":
-                return ("passed" if has_loop else "failed", "Adapter loop defaults to candidate writes." if has_loop else "Adapter loop missing.")
-        if case.name == "contract_registered":
-            return ("passed", "Adapter scaffold contract is registered.")
-        if case.name == "governance_preserved":
-            return ("passed", "Adapter scaffold defaults to candidate writes.")
-        return ("passed", "Adapter conformance reports target errors without executing active writes.")
     if suite.name == "backup-archive" and target:
         try:
             with zipfile.ZipFile(target, "r") as archive:
@@ -1596,13 +1619,9 @@ def _evaluate_conformance_case(memory, suite: ConformanceSuite, case: Conformanc
         except zipfile.BadZipFile:
             return ("failed", "Archive is not a readable zip.")
     if suite.name == "context-pack-schema":
-        try:
-            pack = memory.context_pack(memory.namespace, "conformance", token_budget=600)
-            payload = pack.to_dict()
-            ok = bool(pack.id and isinstance(pack.items(), list) and "sources" in payload)
-            return ("passed" if ok else "failed", "Context pack has id, item API, and sources.")
-        except Exception as exc:  # noqa: BLE001 - conformance records error.
-            return ("failed", str(exc))
+        from aletheia.models import ContextPack
+        ok = "id" in ContextPack.__dataclass_fields__ and hasattr(ContextPack, "sources") and callable(getattr(ContextPack, "items", None))
+        return ("passed" if ok else "failed", "Context pack dataclass and item API inspected.")
     if suite.name == "protected-mode":
         status = memory.protected_mode_status()
         return ("passed", f"Protected mode known: enabled={status.enabled}.")
@@ -1635,9 +1654,9 @@ def _evaluate_conformance_case(memory, suite: ConformanceSuite, case: Conformanc
             ok = not status["missing_tables"] and bool(status["trust_domains"])
             return ("passed" if ok else "failed", "Federation governance tables and trust domains present.")
         if case.name == "privacy_enforced":
-            ok = status["status"] == "passed"
+            ok = status["status"] == "structural_passed"
             return ("passed" if ok else "failed", "Federation privacy and revocation primitives are available.")
-        return (status["status"], json.dumps(status, sort_keys=True))
+        return ("passed" if status["status"] == "structural_passed" else status["status"], json.dumps(status, sort_keys=True))
     if suite.name == "semantic-retrieval":
         if case.name == "contract_registered":
             names = {contract.name for contract in list_public_contracts(memory)}
@@ -1666,7 +1685,7 @@ def _evaluate_conformance_case(memory, suite: ConformanceSuite, case: Conformanc
             ok = {"risk_type", "severity", "note"}.issubset(columns)
             return ("passed" if ok else "failed", "LLM safety flag schema present.")
         return ("passed", "LLM governance conformance passed.")
-    return ("passed", f"{suite.name}:{case.name} passed by built-in conformance.")
+    return ("skipped", "No implemented structural check for this suite/case.")
 
 
 def _adapter_loop_source(adapter_type: str) -> str:

@@ -930,17 +930,128 @@ def get_sync_conflict(memory, conflict_id: str) -> SyncConflict:
     return SyncConflict.from_row(row)
 
 
-def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: str, actor: str = "user") -> SyncConflictResolution:
+def _sync_resolution_targets(memory, conflict, authorize_target):
+    """Resolve current local identities, never materialize the old bundle snapshot."""
+    if conflict.conflict_type != "claim_value_conflict" or conflict.local_object_type != "claim" or conflict.remote_object_type != "claim":
+        raise ValidationError("This sync conflict type is not supported for resolution.")
+    sources = memory.store.connection.execute(
+        "SELECT * FROM remote_memory_sources WHERE origin_instance_id = ? AND remote_object_type = 'claim' AND remote_object_id = ?",
+        (conflict.origin_instance_id, conflict.remote_object_id)).fetchall()
+    if len(sources) != 1:
+        raise ValidationError("Resolution requires one current remote source mapping.")
+    source = sources[0]
+    kind = source["local_object_type"]
+    if kind not in {"claim", "candidate_claim"}:
+        raise ValidationError("Remote source is not a resolvable claim.")
+    local = memory.read_claim(conflict.local_object_id)
+    remote = (memory.read_claim if kind == "claim" else memory.read_candidate)(source["local_object_id"])
+    snapshot = conflict.metadata.get("remote_claim") or {}
+    if (local.namespace != conflict.namespace or remote.namespace != conflict.namespace
+        or local.id == remote.id or local.status not in {"active", "core", "disputed"}
+        or local.object != conflict.metadata.get("local_object")
+        or any(getattr(local, field) != snapshot.get(field) for field in ("subject", "predicate"))
+        or any(getattr(remote, field) != snapshot.get(field) for field in ("subject", "predicate", "object", "memory_type"))):
+        raise ValidationError("Conflict sources changed since detection; review a fresh conflict.")
+    if (kind == "claim" and remote.status not in {"active", "core", "disputed"}) or (kind == "candidate_claim" and remote.candidate_status not in {"pending_review", "validated", "needs_conflict_resolution"}):
+        raise ValidationError("Remote source has already been reviewed or is unavailable.")
+    if memory.store.connection.execute(
+        "SELECT 1 FROM sync_tombstones WHERE origin_instance_id = ? AND object_id = ?",
+        (conflict.origin_instance_id, conflict.remote_object_id)).fetchone():
+        raise ValidationError("Remote source has been deleted or redacted.")
+    for target_kind, item in (("claim", local), (kind, remote)):
+        if not item.evidence_ids:
+            raise ValidationError("Conflict sources require current evidence.")
+        for value in [item.id, *item.evidence_ids]:
+            if memory.store.connection.execute("SELECT 1 FROM deletion_tombstones WHERE target_id = ?", (value,)).fetchone():
+                raise ValidationError("Conflict source has been deleted or redacted.")
+        for value in item.evidence_ids:
+            if memory.read_event(value).namespace != conflict.namespace:
+                raise ValidationError("Conflict evidence belongs to another namespace.")
+        if authorize_target:
+            authorize_target(target_kind, item.id)
+    return local, remote, source
+
+
+def _resolve_sync_claim_families(memory, local_id, remote_id, *, winner, reason):
+    """Resolve only the reviewed pair; broader families require their own review."""
+    ids = set(memory._conflict_ids_for_claim(local_id) + memory._conflict_ids_for_claim(remote_id))
+    for value in ids:
+        family = memory.read_conflict_family(value)
+        if family.status != "unresolved":
+            continue
+        if set(family.claim_ids) != {local_id, remote_id}:
+            raise ValidationError("Conflict family includes additional claims; review the family before sync resolution.")
+        memory.resolve_conflict(value, strategy="manual", active_claim_id=winner,
+            superseded_claim_ids=[remote_id if winner == local_id else local_id], note=reason)
+
+
+def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: str, actor: str = "user",
+                          authorize_target: Callable | None = None) -> SyncConflictResolution:
     _require_reason(reason)
     if strategy not in CONFLICT_RESOLUTION_STRATEGIES:
         raise ValidationError(f"Unknown sync conflict resolution strategy: {strategy}")
-    conflict = get_sync_conflict(memory, conflict_id)
+    if strategy in {"merge_as_conflict_family", "scope_both", "time_scope", "manual_merge"}:
+        raise ValidationError(f"Sync resolution strategy is not supported without explicit merge or scope inputs: {strategy}")
     resolution_id = new_id("sres")
     now = utc_now_iso()
-    with memory.store.transaction():
+    with memory.store.transaction(immediate=True):
+        conflict = get_sync_conflict(memory, conflict_id)
+        if conflict.status not in {"unresolved", "deferred"}:
+            raise ValidationError("Sync conflict is already resolved.")
+        local, remote, source = _sync_resolution_targets(memory, conflict, authorize_target)
+        kind, remote_id = source["local_object_type"], remote.id
+        if kind == "claim" and strategy not in {"defer", "accept_remote_active"}:
+            _resolve_sync_claim_families(memory, local.id, remote.id, winner=local.id, reason=reason)
+        if strategy in {"keep_local", "reject_remote"}:
+            if kind == "candidate_claim":
+                memory.reject_candidate(remote.id, reason=reason, reviewer=actor)
+            else:
+                memory._set_claim_status(claim_id=remote.id, status="rejected", action="sync.reject_remote",
+                                         details={"reason": reason, "conflict_id": conflict.id})
+        elif strategy == "accept_remote_active":
+            if kind == "candidate_claim":
+                remote_id = memory.promote_candidate(remote.id, reason=reason, reviewer=actor).id
+                kind = "claim"
+            _resolve_sync_claim_families(memory, local.id, remote_id, winner=remote_id, reason=reason)
+            memory.supersede_claim(local.id, remote_id, reason=reason)
+        elif strategy == "accept_remote_as_candidate":
+            if kind == "claim":
+                remote_id = _store_remote_candidate(memory, conflict.metadata["remote_claim"], evidence_ids=remote.evidence_ids,
+                    peer=get_peer(memory, source["peer_id"]), sync_run_id=conflict.sync_run_id)
+                memory._set_claim_status(claim_id=remote.id, status="archived", action="sync.demote_remote",
+                                         details={"reason": reason, "candidate_id": remote_id, "conflict_id": conflict.id})
+                kind = "candidate_claim"
+            memory.review_candidate(remote_id, decision="defer", reason=reason, reviewer=actor)
+            if not memory.store.connection.execute("SELECT 1 FROM review_tasks WHERE target_id = ? AND status IN ('open', 'in_progress')", (remote_id,)).fetchone():
+                memory.create_review_task(conflict.namespace, task_type="candidate_review", title="Review remote conflict candidate",
+                    description="The local claim remains active while this remote candidate awaits review.",
+                    target_id=remote_id, target_type="candidate_claim", metadata={"sync_conflict_id": conflict.id})
+
+        if kind != source["local_object_type"] or remote_id != source["local_object_id"]:
+            memory.store.connection.execute("UPDATE remote_memory_sources SET local_object_type = ?, local_object_id = ? WHERE id = ?",
+                                            (kind, remote_id, source["id"]))
+        current_local = memory.read_claim(local.id)
+        current_remote = (memory.read_claim if kind == "claim" else memory.read_candidate)(remote_id)
+        remote_status = current_remote.status if kind == "claim" else current_remote.candidate_status
+        if strategy in {"keep_local", "reject_remote"}:
+            verified = current_local.status in {"active", "core"} and remote_status == "rejected"
+        elif strategy == "accept_remote_active":
+            verified = (current_local.status == "superseded" and remote_status in {"active", "core"}
+                        and set(current_remote.evidence_ids) == set(remote.evidence_ids))
+        elif strategy == "accept_remote_as_candidate":
+            verified = (current_local.status in {"active", "core"} and kind == "candidate_claim"
+                        and remote_status in {"pending_review", "validated", "needs_conflict_resolution"}
+                        and set(current_remote.evidence_ids) == set(remote.evidence_ids))
+        else:
+            verified = current_local.status == local.status
+        if not verified:
+            raise ValidationError("Sync resolution postconditions failed; all effects were rolled back.")
+        details = {"remote_object_id": conflict.remote_object_id, "remote_local_id": remote_id, "remote_local_type": kind,
+                   "local_claim_id": local.id, "local_status": current_local.status, "remote_status": remote_status,
+                   "postconditions_verified": True}
         memory.store.connection.execute(
             "UPDATE sync_conflicts SET status = ?, resolved_at = ? WHERE id = ?",
-            ("deferred" if strategy == "defer" else "resolved", now, conflict.id),
+            ("deferred" if strategy == "defer" else "resolved", None if strategy == "defer" else now, conflict.id),
         )
         memory.store.connection.execute(
             """
@@ -950,9 +1061,13 @@ def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: st
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (resolution_id, conflict.id, strategy, reason, actor, now, json.dumps({"remote_object_id": conflict.remote_object_id}, sort_keys=True)),
+            (resolution_id, conflict.id, strategy, reason, actor, now, json.dumps(details, sort_keys=True)),
         )
-        _write_federation_audit(memory, event_type="conflict.resolved", namespace=conflict.namespace, sync_run_id=conflict.sync_run_id, target_id=conflict.id, target_type="sync_conflict", actor=actor, reason=reason, metadata={"strategy": strategy})
+        decision_status = "deferred" if strategy == "defer" else "resolved"
+        for task in memory.store.connection.execute("SELECT id FROM review_tasks WHERE target_type = 'sync_conflict' AND target_id = ? AND status NOT IN ('resolved', 'dismissed')", (conflict.id,)).fetchall():
+            memory._transition_review_task(task["id"], status=decision_status, event_type=decision_status,
+                note=reason, actor=actor, metadata={"resolution_id": resolution_id, "strategy": strategy})
+        _write_federation_audit(memory, event_type="conflict." + decision_status, namespace=conflict.namespace, sync_run_id=conflict.sync_run_id, target_id=conflict.id, target_type="sync_conflict", actor=actor, reason=reason, metadata={"strategy": strategy, **details})
     row = memory.store.connection.execute("SELECT * FROM sync_conflict_resolutions WHERE id = ?", (resolution_id,)).fetchone()
     return SyncConflictResolution.from_row(row)
 
@@ -1200,7 +1315,8 @@ def federation_conformance(memory) -> dict:
     contract_ok = "Federation protocol v1" in contracts and "Aletheia sync bundle format" in contracts
     no_auto_identity = not list_federation_identities(memory)
     return {
-        "status": "passed" if not missing and contract_ok else "failed",
+        "status": "structural_passed" if not missing and contract_ok else "failed",
+        "assurance": "structural",
         "missing_tables": missing,
         "contract_registered": contract_ok,
         "no_auto_identity": no_auto_identity,
@@ -2075,7 +2191,7 @@ def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, colle
                 "SELECT status FROM sync_conflicts WHERE origin_instance_id = ? AND remote_object_id = ? AND local_object_id = ?",
                 (peer.peer_instance_id, claim["id"], conflict["id"])).fetchone()
             if existing:
-                return {"applied": 0, "conflict": int(existing[0] == "unresolved")}
+                return {"applied": 0, "conflict": int(existing[0] in {"unresolved", "deferred"})}
             conflict_id = _create_sync_conflict(memory, namespace=claim["namespace"], collection_id=collection_id,
                 sync_run_id=sync_run_id, conflict_type="claim_value_conflict", local_object_id=conflict["id"],
                 local_object_type="claim", remote_object_id=claim["id"], remote_object_type="claim",

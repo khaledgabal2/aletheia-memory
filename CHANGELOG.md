@@ -4,6 +4,13 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+- Execute applied ranking/context policy versions in reads and evaluations;
+  validate configuration and make activation, gates, and rollback atomic.
+- Apply supported sync conflict decisions to stored memories and provenance,
+  enforce effect permissions, and reject unsupported strategies without receipts.
+- Require behavioral adapter evidence for certification. Structural conformance
+  and missing probes no longer produce behavioral passes or satisfy the v1 gate.
+  See [behavior verification](docs/behavior_verification.md) for upgrade details.
 - Exclude unreviewed legacy candidate claims from default retrieval/context and
   enforce claim/scope validity before selection, including normalized timestamps.
 - Rank eligible memories across their full history before bounding reranking;

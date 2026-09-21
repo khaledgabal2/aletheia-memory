@@ -85,7 +85,7 @@ def test_m10_migration_backfills_federation_contracts_without_implicit_identity(
         contracts = {contract.name for contract in memory.list_public_contracts()}
         assert {"Federation protocol v1", "Aletheia sync bundle format", "Python SDK federation methods"} <= contracts
         assert {policy.id for policy in memory.list_import_trust_policies()} >= {"itp_candidate_only", "itp_trusted_device"}
-        assert memory.federation_conformance()["status"] == "passed"
+        assert memory.federation_conformance()["status"] == "structural_passed"
     finally:
         memory.close()
 
@@ -547,4 +547,4 @@ def test_m10_http_cli_openapi_and_sdk_surfaces(tmp_path, capsys):
     assert main(["federation", "init", "--db", str(cli_db), "--display-name", "CLI M10"]) == 0
     assert "CLI M10" in capsys.readouterr().out
     assert main(["federation-conformance", "run", "--db", str(cli_db)]) == 0
-    assert '"status": "passed"' in capsys.readouterr().out
+    assert '"status": "structural_passed"' in capsys.readouterr().out
