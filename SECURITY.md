@@ -3,6 +3,12 @@
 Aletheia is local-first software that can store sensitive user, project, and
 agent memory. Please report vulnerabilities responsibly.
 
+All releases through 1.6.0 are beta, intended for development and evaluation.
+Use disposable or synthetic data where practical. Beta status does not establish
+that an older installation or previously shared data was unaffected by a bug.
+The [1.6.0 upgrade guide](docs/v1_6_0_upgrade.md) describes fresh-start and
+data-preserving options.
+
 ## Reporting A Vulnerability
 
 Do not open public issues with exploit details, private data, credentials, or
@@ -38,9 +44,9 @@ Please include:
 See [docs/security_privacy_guide.md](docs/security_privacy_guide.md) for the
 full security and privacy model.
 
-## Unreleased Local Pairing
+## Local Pairing (Since 1.5.0)
 
-The local pairing development contract requires a user-transferred certificate
+The local pairing contract requires a user-transferred certificate
 fingerprint before credentials, TLS-only paired authorization, owner-only identity
 and invitation files, explicit limited grants, expiry, and self-revocation.
 Discovery announcements remain untrusted. See [the protocol](docs/local_pairing_v1.md)

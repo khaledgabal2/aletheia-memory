@@ -19,8 +19,13 @@ permissions:
   contents: read
 
 jobs:
+  verify:
+    name: Verify release commit
+    uses: ./.github/workflows/release-gates.yml
+
   build:
     name: Build distribution
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -29,11 +34,24 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.x"
+          python-version: "3.13"
+      - name: Check release tag matches package version
+        if: github.event_name == 'release'
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          if os.environ["GITHUB_REF_NAME"] != f"v{version}":
+              raise SystemExit("Release tag does not match the package version")
+          PY
       - name: Install build frontend
-        run: python -m pip install --upgrade build
+        run: python -m pip install --upgrade build twine
       - name: Build wheel and source distribution
         run: python -m build
+      - name: Check distribution metadata
+        run: python -m twine check --strict dist/*
       - name: Upload distributions
         uses: actions/upload-artifact@v5
         with:

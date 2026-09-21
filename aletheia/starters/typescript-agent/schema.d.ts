@@ -529,11 +529,12 @@ export interface components {
             text: string;
         };
         ContextRequest: {
-            /** @default false */
+            context_policy_version_id?: string | null;
+            /** @description Defaults to the selected context policy. */
             include_derivation_metadata?: boolean;
-            /** @default false */
+            /** @description Defaults to the selected context policy. */
             include_inferences?: boolean;
-            /** @default true */
+            /** @description Defaults to the selected context policy. */
             include_reflections?: boolean;
             namespace: string;
             policy_version_id?: string | null;
@@ -548,7 +549,7 @@ export interface components {
              */
             retrieval_mode?: "lexical" | "semantic" | "hybrid";
             session_id?: string | null;
-            /** @default 1500 */
+            /** @description Defaults to the selected context policy's budget (initially 1500). */
             token_budget?: number;
         } & {
             [key: string]: unknown;
@@ -1000,6 +1001,7 @@ export interface components {
              */
             mode?: "lexical" | "semantic" | "hybrid";
             namespace: string;
+            policy_version_id?: string | null;
             project_id?: string | null;
             /** @default  */
             query?: string;

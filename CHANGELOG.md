@@ -4,6 +4,31 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+## 1.6.0
+
+Beta audit-remediation release. Includes all 29 original audit repairs and the
+nine residual defects found by independent behavioral review. Python remains
+3.11+, the API remains v1, and the storage schema remains 1.3.1. See the
+[beta upgrade guide](docs/v1_6_0_upgrade.md) before reusing existing data.
+
+- Recheck current authority and sources for conflict resolution and cached
+  mutation replies. Rejected replay does not repeat the original mutation;
+  deletion removes cached content while retaining operation keys.
+- Scope operational reports and metrics before aggregation; exclude legacy
+  snapshots without verified scope metadata.
+- Preserve claims-only federation privacy, scrub retained conflict snapshots,
+  and restrict deletion notices to objects actually disclosed to recipients.
+- Release the daemon lock during provider work, preserve durable job ownership,
+  and reject stale results after inputs or permissions change.
+- Apply project relevance and conflict/duplicate penalties before retrieval
+  truncation; honor the active context budget in Python, HTTP, and CLI traces.
+  See [follow-up verification](docs/audit_followup_verification.md).
+- Require cryptography 50.0.1 or newer and update the development OpenAPI
+  toolchain to resolve js-yaml 4.3.2 through @redocly/openapi-core 1.34.20.
+- Refresh the packaged TypeScript schema for policy selection and context
+  defaults. Publication now runs the existing release gates at the publishing
+  commit, including installed upgrade/recovery checks from published 1.5.0.
+
 - Execute applied ranking/context policy versions in reads and evaluations;
   validate configuration and make activation, gates, and rollback atomic.
 - Apply supported sync conflict decisions to stored memories and provenance,

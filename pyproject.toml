@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aletheia-memory"
-version = "1.5.0"
+version = "1.6.0"
 description = "Local, auditable memory for AI agents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,7 +34,7 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "cryptography>=49.0.0",
+    "cryptography>=50.0.1",
 ]
 
 [project.urls]

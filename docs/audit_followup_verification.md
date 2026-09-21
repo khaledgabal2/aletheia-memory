@@ -23,7 +23,8 @@ behavioral checks and adds boundary and compatibility cases.
 Older full-evidence federation bundles can recover claim privacy from their
 labeled sources. Older claims-only bundles lacking a privacy label must be
 exported again; importing them fails without partial changes. Existing imported
-production data is not retroactively relabeled by these code repairs.
+data is not retroactively relabeled by these code repairs. For the beta release,
+see the [1.6.0 fresh-start and upgrade options](v1_6_0_upgrade.md).
 
 Tombstones for never-disclosed objects are no longer exported. Existing export
 history supplies the disclosure record; no recipient content scan is required.
