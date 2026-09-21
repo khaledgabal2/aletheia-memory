@@ -30,7 +30,7 @@ clear audit trail.
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
-- Distribution: published on PyPI; source installs and release wheels are also supported.
+- Distribution: [PyPI 1.6.0](https://pypi.org/project/aletheia-memory/1.6.0/); source installs and release wheels are also supported.
 
 1.6.0 includes the audit repairs and stricter access, privacy, and execution
 checks. See the [1.6.0 beta upgrade guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_6_0_upgrade.md)

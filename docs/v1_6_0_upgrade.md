@@ -30,8 +30,8 @@ For data you want to retain:
 1. Stop writers. Keep the previous environment and a verified encrypted backup
    before opening the database with the new version. Retain the protected
    content keys and pairing/federation identity material needed for recovery.
-2. Install the reviewed 1.6.0 wheel in a separate environment, or, after it is
-   published, use `python -m pip install 'aletheia-memory==1.6.0'` there. A new
+2. Install the reviewed 1.6.0 wheel in a separate environment, or use
+   `python -m pip install 'aletheia-memory==1.6.0'` there. A new
    environment also installs the patched cryptography dependency.
 3. Run `aletheia doctor --read-only --db /path/to/existing.db`, then start the
    new service on the same database path. Upgrading from 1.5.0 requires no

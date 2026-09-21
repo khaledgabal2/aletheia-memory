@@ -4,7 +4,7 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
-## 1.6.0
+## 1.6.0 — 2026-09-21
 
 Beta audit-remediation release. Includes all 29 original audit repairs and the
 nine residual defects found by independent behavioral review. Python remains
@@ -28,7 +28,6 @@ nine residual defects found by independent behavioral review. Python remains
 - Refresh the packaged TypeScript schema for policy selection and context
   defaults. Publication now runs the existing release gates at the publishing
   commit, including installed upgrade/recovery checks from published 1.5.0.
-
 - Execute applied ranking/context policy versions in reads and evaluations;
   validate configuration and make activation, gates, and rollback atomic.
 - Apply supported sync conflict decisions to stored memories and provenance,

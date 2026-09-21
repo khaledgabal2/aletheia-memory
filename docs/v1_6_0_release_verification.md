@@ -1,7 +1,7 @@
 # Memory 1.6.0 beta release verification
 
-1.6.0 prepares the original 29 audit repairs and all nine independent follow-up
-corrections for release. The reviewed audit baseline is commit `6a589c5`.
+1.6.0 contains the original 29 audit repairs and all nine independent follow-up
+corrections. The reviewed audit baseline is commit `6a589c5`.
 See [the follow-up findings](audit_followup_verification.md) and
 [the beta upgrade guide](v1_6_0_upgrade.md) for behavior and compatibility.
 The release remains beta: API v1, storage 1.3.1, Python 3.11+.
@@ -58,14 +58,34 @@ The workers run outside the checkout and assert imports come from site-packages.
 Dependency audit results describe the advisory databases at validation time,
 not a guarantee about undiscovered defects.
 
+## Linux CI and existing-client upgrade
+
+All seven [Release Gates jobs for PR #8](https://github.com/khaledgabal2/aletheia-memory/actions/runs/35553204403)
+passed for implementation/release-preparation commit `a322d30`:
+768 tests on each of Python 3.11, 3.12 and 3.13, the repository boundary,
+installed wheel/source onboarding and recovery, generated contracts, and
+packaged TypeScript starters. The tests run from the built source archive.
+The [PR checks](https://github.com/khaledgabal2/aletheia-memory/pull/8/checks)
+also track verification after final documentation updates.
+
+An additional local check issued a read credential with the actual published
+1.5.0 CLI, then started 1.6.0 on the same database and identity directory. The
+certificate and credential remained valid, an existing reviewed memory was
+retrievable over pinned TLS, and plaintext use and an ungranted namespace were
+rejected.
+
 ## Publication and follow-up
 
-Release preparation does not publish packages. The release PR must pass the
-Linux Python 3.11–3.13 matrix and all installed/contract jobs before integration.
-After an approved merge, publish the `v1.6.0` GitHub release as a beta/prerelease
-at the verified commit. The PyPI workflow runs the release gates again before
-uploading. Verify the public wheel/sdist, hashes, installed version and a fresh
-onboarding run after publication.
+Release notes and publication verification belong to the
+[v1.6.0 beta release](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.0);
+the wheel and source distribution are available through
+[PyPI 1.6.0](https://pypi.org/project/aletheia-memory/1.6.0/).
+The GitHub release uses the verified merge commit and is marked as a prerelease;
+the Python distribution retains version `1.6.0` and its Beta maturity classifier.
+The [publishing workflow](https://github.com/khaledgabal2/aletheia-memory/actions/workflows/publish-pypi.yml)
+runs the release gates at that commit before uploading. Publication verification
+compares the public wheel/sdist hashes with the workflow's artifacts and checks
+fresh installations, version metadata, packaged documentation and onboarding.
 
 Existing beta installations can start with disposable data or follow the
 data-preserving upgrade guide. Historical key exposure or recipient copies

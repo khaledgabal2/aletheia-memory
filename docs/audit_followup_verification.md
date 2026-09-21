@@ -49,9 +49,11 @@ context contents, persisted deletion effects, and competing SQLite connections.
 Providers and all data are synthetic. This validates application behavior and
 access boundaries; it does not measure real-model quality or production load.
 
-The unchanged audit regressions and the complete repository suite are also run
-before local closure. Platform/Python matrices, real-model workloads, historical
-key exposure, live-data recovery, integration, and release remain separate work.
+The unchanged audit regressions and the complete repository suite were also run
+before local closure. The subsequent Python/platform matrix and package checks
+are recorded in [1.6.0 release verification](v1_6_0_release_verification.md).
+Real-model workloads, historical key exposure, and live-data recovery are not
+established by these synthetic checks.
 
 Final local verification passed all 768 tests, including 53 follow-up cases,
 on Python 3.13.13/macOS arm64. The generic-main repository gate, compilation,
