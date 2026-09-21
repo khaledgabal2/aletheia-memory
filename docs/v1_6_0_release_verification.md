@@ -80,8 +80,10 @@ Release notes and publication verification belong to the
 [v1.6.0 beta release](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.0);
 the wheel and source distribution are available through
 [PyPI 1.6.0](https://pypi.org/project/aletheia-memory/1.6.0/).
-The GitHub release uses the verified merge commit and is marked as a prerelease;
-the Python distribution retains version `1.6.0` and its Beta maturity classifier.
+The GitHub release uses the verified merge commit and is listed as Latest.
+The GitHub prerelease flag is disabled so the latest-release link resolves to
+1.6.0; the release title and notes retain the product's beta status. The Python
+distribution retains version `1.6.0` and its Beta maturity classifier.
 The [publishing workflow](https://github.com/khaledgabal2/aletheia-memory/actions/workflows/publish-pypi.yml)
 runs the release gates at that commit before uploading. Publication verification
 compares the public wheel/sdist hashes with the workflow's artifacts and checks
