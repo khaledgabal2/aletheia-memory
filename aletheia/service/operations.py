@@ -4,6 +4,7 @@ from __future__ import annotations
 from aletheia.core.errors import NotFoundError
 from aletheia.service.errors import forbidden, not_found, validation_error
 from aletheia.service.reads import ReadAccess
+from aletheia.service.replay import record_target, record_provider
 
 
 class OperationAccess(ReadAccess):
@@ -45,6 +46,7 @@ class OperationAccess(ReadAccess):
                 raise forbidden("Target is unavailable under the current access policy.")
         else:
             self.auth.require_namespace(self.context, namespace=item.namespace, project_id=getattr(item, "project_id", None))
+            record_target(kind, item)
         return item
 
     def evidence_sources(self, namespace, evidence_ids):
@@ -54,6 +56,7 @@ class OperationAccess(ReadAccess):
             self.target("evidence", evidence_id, namespace=namespace)
 
     def provider(self, requested, *, source_task=False, privacy_level="personal"):
+        record_provider(requested, source_task, privacy_level)
         # HTTP accepts built-in IDs and installed provider IDs, never Python
         # entrypoints or an ambient plugin-entrypoint environment fallback.
         builtins = {"mock", "mock_llm", "llm", "local_http", "ollama_style", "openai_compatible"}

@@ -30,6 +30,7 @@ from aletheia.service.auth import AuthContext, AuthService, PRIVACY_ORDER
 from aletheia.service.contracts import DISCOVERY_PATHS, apply_discovery_contracts
 from aletheia.service.reads import READ_POST_PATHS, ReadAccess, is_read_path
 from aletheia.service.operations import OperationAccess
+from aletheia.service.replay import ReceiptAccess, validate as validate_receipt
 from aletheia.service.read_contracts import apply_read_contracts, validate_read_input
 from aletheia.service.errors import (
     ServiceError,
@@ -311,6 +312,7 @@ class AletheiaService:
         self.service_identity = new_id("service")
         self.local_pairing: LocalPairing | None = None
         self._closed = False
+        self._owned_jobs: set[str] = set()
         from aletheia.service.reviews import ReviewProtocol
         self.review_protocol = ReviewProtocol(self)
 
@@ -330,6 +332,9 @@ class AletheiaService:
     def close(self) -> None:
         with self.lock:
             if not self._closed:
+                for job_id in self._owned_jobs:
+                    self.memory._fail_running_job(job_id, "Service closed before job completion.")
+                self._owned_jobs.clear()
                 self.memory.close()
                 self._closed = True
 
@@ -442,15 +447,17 @@ class AletheiaService:
                     idempotency_record_id = self._idempotency_record_id(
                         method, endpoint, headers, idempotency_scope
                     )
-                    data, warnings, pagination = self._route_consistent(
-                        method=method,
-                        endpoint=endpoint,
-                        query=query,
-                        payload=payload,
-                        auth_context=auth_context,
-                        request_id=request_id,
-                        headers=headers,
-                    )
+                    receipt_access = ReceiptAccess(auth_context)
+                    with receipt_access.capture():
+                        data, warnings, pagination = self._route_consistent(
+                            method=method,
+                            endpoint=endpoint,
+                            query=query,
+                            payload=payload,
+                            auth_context=auth_context,
+                            request_id=request_id,
+                            headers=headers,
+                        )
                     response = self._success(data=data, request_id=request_id, warnings=warnings, pagination=pagination)
                     with self.lock:
                         self._idempotency_store(
@@ -463,6 +470,7 @@ class AletheiaService:
                             client_id=idempotency_scope,
                             status_code=status,
                             response=response,
+                            receipt_access=receipt_access.payload(),
                         )
                     idempotency_record_id = None
         except ServiceError as exc:
@@ -533,6 +541,7 @@ class AletheiaService:
                 OperationAccess(self, context).scope("memory:jobs", kwargs["payload"].get("namespace"))
                 jobs = self.memory._pending_jobs(**self._run_jobs_args(kwargs["payload"]))
                 work.claimed_jobs = [job.id for job in jobs if self.memory._claim_pending_job(job)]
+                self._owned_jobs.update(work.claimed_jobs)
         try:
             return self._route_with_provider_work(work, **kwargs)
         except BaseException:
@@ -542,13 +551,46 @@ class AletheiaService:
                         for job_id in work.claimed_jobs:
                             self.memory._fail_running_job(job_id, "Service request ended before job completion.")
             raise
+        finally:
+            with self.lock:
+                self._owned_jobs.difference_update(work.claimed_jobs or [])
+
+    def run_background_jobs(self, *, max_jobs):
+        """Own jobs durably; keep provider I/O outside the shared DB snapshot."""
+        work = ProviderWork()
+        with self.lock:
+            if self._closed:
+                return []
+            with self.memory.store.transaction(immediate=True):
+                jobs = self.memory._pending_jobs(max_jobs=max_jobs)
+                work.claimed_jobs = [job.id for job in jobs if self.memory._claim_pending_job(job)]
+            self._owned_jobs.update(work.claimed_jobs)
+        try:
+            while True:
+                try:
+                    with self.lock:
+                        if self._closed:
+                            return []
+                        with self.memory.store.transaction(immediate=True), work.snapshot():
+                            return self.memory._run_claimed_jobs(work.claimed_jobs)
+                except ProviderWorkNeeded as needed:
+                    work.perform(needed)
+        except BaseException:
+            with self.lock:
+                if not self._closed:
+                    for job_id in work.claimed_jobs:
+                        self.memory._fail_running_job(job_id, "Background worker ended before job completion.")
+            raise
+        finally:
+            with self.lock:
+                self._owned_jobs.difference_update(work.claimed_jobs)
 
     def _route_with_provider_work(self, work, **kwargs):
         endpoint, method = kwargs["endpoint"], kwargs["method"]
         read = is_read_path(endpoint) and (method == "GET" or endpoint in READ_POST_PATHS)
         consistent = read or endpoint.startswith(("/v1/llm/", "/v1/traces", "/v1/sessions", "/v1/claims/", "/v1/candidates/",
                                 "/v1/conflicts", "/v1/infer", "/v1/reflections", "/v1/derivation/", "/v1/eval/",
-                                "/v1/policies/", "/v1/jobs", "/v1/sync/conflicts/")) or endpoint in {"/v1/feedback", "/v1/outcomes", "/v1/retrieval-judgments", "/v1/extract"}
+                                "/v1/policies/", "/v1/jobs", "/v1/sync/conflicts", "/v1/console/actions/")) or endpoint in {"/v1/feedback", "/v1/outcomes", "/v1/retrieval-judgments", "/v1/extract"}
         while True:
             try:
                 with self.lock:
@@ -1075,6 +1117,19 @@ class AletheiaService:
             return asdict(self.memory.get_project(namespace=namespace, project_id=endpoint.split("/")[3]))
         raise not_found(endpoint)
 
+    def _authorize_conflict_resolution(self, auth_context, conflict_id, payload):
+        self.auth.require_capability(auth_context, "memory:review")
+        access = OperationAccess(self, auth_context)
+        family = access.target("conflict_family", conflict_id)
+        targets = ([payload["active_claim_id"]] if payload.get("active_claim_id") else [])
+        targets += (payload.get("superseded_claim_ids") or []) + (payload.get("rejected_claim_ids") or [])
+        targets += [item.get("claim_id") for item in payload.get("scoped_claims") or []]
+        for target in targets:
+            access.target("claim", target, namespace=family.namespace)
+            if target not in family.claim_ids:
+                raise validation_error("Resolution targets must belong to the conflict.")
+        return family
+
     def _governance_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
         access = OperationAccess(self, auth_context)
         if method == "GET" and endpoint == "/v1/conflicts":
@@ -1087,15 +1142,7 @@ class AletheiaService:
                 access.target("claim", payload["claim_id"], namespace=payload.get("namespace") or self.memory.namespace)
             return [asdict(item) for item in self.memory.detect_conflicts(**self._detect_conflicts_args(payload))]
         if method == "POST" and endpoint.startswith("/v1/conflicts/") and endpoint.endswith("/resolve"):
-            self.auth.require_capability(auth_context, "memory:review")
-            family = access.target("conflict_family", endpoint.split("/")[3])
-            targets = ([payload["active_claim_id"]] if payload.get("active_claim_id") else [])
-            targets += (payload.get("superseded_claim_ids") or []) + (payload.get("rejected_claim_ids") or [])
-            targets += [item.get("claim_id") for item in payload.get("scoped_claims") or []]
-            for target in targets:
-                access.target("claim", target, namespace=family.namespace)
-                if target not in family.claim_ids:
-                    raise validation_error("Resolution targets must belong to the conflict.")
+            self._authorize_conflict_resolution(auth_context, endpoint.split("/")[3], payload)
             return asdict(self.memory.resolve_conflict(endpoint.split("/")[3], **self._resolve_conflict_args(payload)))
         if method == "GET" and endpoint.startswith("/v1/confidence/"):
             self.auth.require_capability(auth_context, "memory:read")
@@ -1284,8 +1331,7 @@ class AletheiaService:
         if method == "POST" and endpoint.startswith("/v1/console/actions/conflicts/") and endpoint.endswith("/resolve"):
             self.auth.require_capability(auth_context, "memory:review")
             conflict_id = endpoint.split("/")[5]
-            family = self.memory.read_conflict_family(conflict_id)
-            self.auth.require_namespace(auth_context, namespace=family.namespace)
+            family = self._authorize_conflict_resolution(auth_context, conflict_id, payload)
             reason = self._required(payload, "reason")
             confirmation = self._required(payload, "confirmation")
             if confirmation != "resolve conflict":
@@ -1403,7 +1449,7 @@ class AletheiaService:
                 project_id=payload.get("project_id"),
                 session_id=payload.get("session_id"),
                 retrieval_mode=payload.get("retrieval_mode", "hybrid"),
-                token_budget=self._integer(payload.get("token_budget", 2000), "token_budget"),
+                token_budget=self._integer(payload["token_budget"], "token_budget") if payload.get("token_budget") is not None else None,
                 context_filter=lambda pack: access.filter_context(pack)[0],
                 read_access=access.allowed,
                 claim_filter=lambda value: access.allowed("claim", value),
@@ -1430,7 +1476,9 @@ class AletheiaService:
 
     def _metrics_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
         if method == "POST" and endpoint == "/v1/metrics/snapshot":
-            OperationAccess(self, auth_context).scope("memory:admin", payload.get("namespace"), payload.get("project_id"))
+            # Operational aggregates include namespace-wide jobs and requests;
+            # a project annotation cannot grant access to that wider scope.
+            OperationAccess(self, auth_context).scope("memory:admin", payload.get("namespace"))
             return asdict(self.memory.metrics_snapshot(namespace=payload.get("namespace"), project_id=payload.get("project_id"), source=payload.get("source", "api")))
         if method == "GET" and endpoint == "/v1/metrics/snapshots":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
@@ -1682,7 +1730,8 @@ class AletheiaService:
                     self.auth.require_namespace(auth_context, namespace=namespace)
                 elif "*" not in auth_context.namespace_grants:
                     raise validation_error("An explicit authorized namespace is required.")
-                return [asdict(conflict) for conflict in self.memory.list_sync_conflicts(namespace=namespace, status=self._query_value(query, "status", none_if_missing=True))]
+                access = ReadAccess(self, auth_context)
+                return [access.sync_conflict(conflict) for conflict in self.memory.list_sync_conflicts(namespace=namespace, status=self._query_value(query, "status", none_if_missing=True))]
             if method == "POST" and endpoint.startswith("/v1/sync/conflicts/") and endpoint.endswith("/resolve"):
                 conflict_id = endpoint.split("/")[4]
                 conflict = self.memory.get_sync_conflict(conflict_id)
@@ -2667,11 +2716,17 @@ class AletheiaService:
             if row:
                 if row["request_hash"] != request_hash:
                     raise idempotency_conflict()
+                if row["status"] == "redacted":
+                    raise forbidden("Cached result was removed; the operation was not repeated.")
                 if row["status"] != "completed" or not row["response_json"]:
                     raise idempotency_conflict(
                         "An operation with this idempotency key is still in progress; inspect state before retrying."
                     )
-                return json.loads(row["response_json"])
+                response = json.loads(row["response_json"])
+                receipt = response.pop("_authorization", None)
+                if endpoint != "/v1/remember":
+                    validate_receipt(self, self._authenticate(method, endpoint, headers), receipt)
+                return response
             self.memory.store.connection.execute(
                 """
                 INSERT INTO idempotency_records (
@@ -2696,6 +2751,7 @@ class AletheiaService:
         client_id: str | None,
         status_code: int,
         response: dict,
+        receipt_access: dict | None = None,
     ) -> None:
         if method not in STATE_CHANGING_METHODS or endpoint in READ_POST_PATHS or status_code >= 400:
             return
@@ -2706,16 +2762,25 @@ class AletheiaService:
 
         stored = dict(response)
         stored["_status_code"] = status_code
+        if receipt_access is not None:
+            stored["_authorization"] = receipt_access
+        denied = None
         with self.memory.store.transaction(immediate=True):
+            if receipt_access is not None:
+                try:
+                    validate_receipt(self, self._authenticate(method, endpoint, headers), receipt_access)
+                except (ServiceError, NotFoundError) as exc:
+                    denied = exc
             updated = self.memory.store.connection.execute(
                 """
                 UPDATE idempotency_records
-                SET response_json=?, status='completed', expires_at=?
+                SET response_json=?, status=?, expires_at=?
                 WHERE id=? AND request_hash=? AND status='in_progress'
                 """,
                 (
-                    json.dumps(stored, sort_keys=True),
-                    (utc_now() + timedelta(hours=24)).isoformat(),
+                    None if denied else json.dumps(stored, sort_keys=True),
+                    "redacted" if denied else "completed",
+                    None if denied else (utc_now() + timedelta(hours=24)).isoformat(),
                     record_id,
                     request_hash,
                 ),
@@ -2724,6 +2789,9 @@ class AletheiaService:
                 raise idempotency_conflict(
                     "The idempotency reservation changed before its result was stored; inspect state before retrying."
                 )
+        # The first response was authorized in the committing route snapshot.
+        # A later access change removes its stored content, without turning a
+        # successfully committed mutation into an apparent failure to retry.
 
     def _idempotency_record_id(
         self,
@@ -3464,15 +3532,16 @@ class AletheiaDaemon:
         def run() -> None:
             while not self._worker_stop.is_set():
                 try:
-                    with self.service.lock:
-                        self.service.memory.run_jobs(max_jobs=self.config.max_jobs_per_tick)
+                    self.service.run_background_jobs(max_jobs=self.config.max_jobs_per_tick)
                 except Exception as exc:  # noqa: BLE001 - daemon worker keeps serving.
-                    self.service.log_service_instance(
-                        instance_id=self.instance_id,
-                        status="worker_error",
-                        port=self.config.port,
-                        metadata={"error": str(exc)},
-                    )
+                    with self.service.lock:
+                        if not self.service._closed:
+                            self.service.log_service_instance(
+                                instance_id=self.instance_id,
+                                status="worker_error",
+                                port=self.config.port,
+                                metadata={"error": str(exc)},
+                            )
                 self._worker_stop.wait(1.0)
 
         self._worker_thread = threading.Thread(target=run, name="aletheia-worker", daemon=True)

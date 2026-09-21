@@ -107,6 +107,7 @@ from aletheia.retrieval.lexical import (
     governed_claim_filter,
     lexical_score,
     recency_score,
+    ranking_features,
     staleness_penalty,
 )
 from aletheia.semantic import (
@@ -5408,7 +5409,7 @@ class Memory:
         project_id: str | None = None,
         session_id: str | None = None,
         retrieval_mode: str = "hybrid",
-        token_budget: int = 2000,
+        token_budget: int | None = None,
         context_filter: Callable[[ContextPack], ContextPack] | None = None,
         claim_filter: Callable[[str], bool] | None = None,
         query_privacy: str | None = None,
@@ -5454,7 +5455,7 @@ class Memory:
                     json.dumps(
                         {
                             "context_pack_id": pack.id,
-                            "token_budget": token_budget,
+                            "token_budget": pack.token_budget,
                             "query_privacy": query_privacy,
                             "ranking_policy_version_id": pack.ranking_policy_version_id,
                             "warnings": [asdict(warning) for warning in pack.warnings],
@@ -5629,7 +5630,7 @@ class Memory:
                     json.dumps(metrics, sort_keys=True),
                     source,
                     now,
-                    json.dumps({}, sort_keys=True),
+                    json.dumps({"scope_version": 1}, sort_keys=True),
                 ),
             )
         return self.get_metric_snapshot(snapshot_id)
@@ -5646,7 +5647,7 @@ class Memory:
         namespace: str | None = None,
         project_id: str | None = None,
     ) -> MetricSnapshot | None:
-        clauses: list[str] = []
+        clauses: list[str] = ["json_extract(metadata_json, '$.scope_version') = 1"]
         params: list[object] = []
         if namespace is None:
             clauses.append("namespace IS NULL")
@@ -5678,7 +5679,7 @@ class Memory:
         limit: int = 50,
     ) -> list[MetricSnapshot]:
         params: list[object] = []
-        clauses: list[str] = []
+        clauses: list[str] = ["json_extract(metadata_json, '$.scope_version') = 1"]
         if namespace:
             clauses.append("namespace = ?")
             params.append(namespace)
@@ -7800,6 +7801,9 @@ class Memory:
         superseded_claim_ids = list(superseded_claim_ids or [])
         rejected_claim_ids = list(rejected_claim_ids or [])
         scoped_claims = list(scoped_claims or [])
+        targets = superseded_claim_ids + rejected_claim_ids + [item.get("claim_id") for item in scoped_claims]
+        if any(target not in claim_ids for target in targets):
+            raise ValidationError("Resolution targets must belong to the conflict.")
         if selected_active and not superseded_claim_ids and strategy not in {
             "context_scope",
             "time_scope",
@@ -11109,14 +11113,14 @@ class Memory:
             [namespace, namespace],
         )
         recent_context_pack_count = scalar(
-            "SELECT count(*) FROM service_request_log WHERE path IN ('/v1/context-pack', '/v1/context')",
+            f"SELECT count(*) FROM service_request_log WHERE {ns_clause} AND path IN ('/v1/context-pack', '/v1/context')", ns_params,
         )
-        recent_service_request_count = scalar("SELECT count(*) FROM service_request_log")
+        recent_service_request_count = scalar(f"SELECT count(*) FROM service_request_log WHERE {ns_clause}", ns_params)
         avg_retrieval_latency = scalar(
-            "SELECT avg(duration_ms) FROM service_request_log WHERE path IN ('/v1/retrieve', '/v1/search')"
+            f"SELECT avg(duration_ms) FROM service_request_log WHERE {ns_clause} AND path IN ('/v1/retrieve', '/v1/search')", ns_params
         )
         avg_context_latency = scalar(
-            "SELECT avg(duration_ms) FROM service_request_log WHERE path IN ('/v1/context-pack', '/v1/context')"
+            f"SELECT avg(duration_ms) FROM service_request_log WHERE {ns_clause} AND path IN ('/v1/context-pack', '/v1/context')", ns_params
         )
         policy_proposals_pending = scalar(f"SELECT count(*) FROM policy_proposals WHERE {ns_clause} AND status = 'pending_review'", ns_params)
         warning_count = 0
@@ -11134,11 +11138,12 @@ class Memory:
             warning_count = len(json.loads(latest_health["warnings_json"] or "[]"))
         eval_rows = self.store.connection.execute(
             """
-            SELECT metric_name, metric_value, passed
-            FROM evaluation_metrics
-            ORDER BY created_at DESC
+            SELECT em.metric_name, em.metric_value, em.passed
+            FROM evaluation_metrics em JOIN evaluation_runs er ON er.id = em.evaluation_run_id
+            WHERE (? IS NULL OR er.namespace = ?)
+            ORDER BY em.created_at DESC
             LIMIT 100
-            """
+            """, (namespace, namespace)
         ).fetchall()
         eval_pass_rate = 1.0
         if eval_rows:
@@ -11162,7 +11167,7 @@ class Memory:
             "average_retrieval_latency": avg_retrieval_latency,
             "average_context_pack_latency": avg_context_latency,
             "context_packs_generated": recent_context_pack_count,
-            "service_requests_by_endpoint": self._service_requests_by_endpoint(),
+            "service_requests_by_endpoint": self._service_requests_by_endpoint(namespace=namespace),
             "failed_jobs": failed_job_count,
             "pending_jobs": pending_job_count,
             "evaluation_pass_rate": eval_pass_rate,
@@ -11171,14 +11176,15 @@ class Memory:
             "project_id": project_id,
         }
 
-    def _service_requests_by_endpoint(self) -> dict[str, int]:
+    def _service_requests_by_endpoint(self, *, namespace=None) -> dict[str, int]:
         rows = self.store.connection.execute(
             """
             SELECT path, count(*) AS count
             FROM service_request_log
+            WHERE (? IS NULL OR namespace = ?)
             GROUP BY path
             ORDER BY count DESC, path ASC
-            """
+            """, (namespace, namespace)
         ).fetchall()
         return {row["path"]: row["count"] for row in rows}
 
@@ -11203,7 +11209,8 @@ class Memory:
             payload["policy_proposals"] = [asdict(item) for item in self.list_policy_proposals(namespace=namespace, limit=100)]
         elif report_type == "service_activity":
             rows = self.store.connection.execute(
-                "SELECT * FROM service_request_log ORDER BY created_at DESC LIMIT 100"
+                "SELECT * FROM service_request_log WHERE (? IS NULL OR namespace = ?) ORDER BY created_at DESC LIMIT 100",
+                (namespace, namespace)
             ).fetchall()
             payload["service_requests"] = [dict(row) for row in rows]
         elif report_type == "audit_summary":
@@ -12014,55 +12021,33 @@ class Memory:
             target_ids=[row["id"] for row in rows],
         )
         lexical_scores = {
-            row["id"]: lexical_score(query, [row["subject"], row["predicate"], row["object"], row["memory_type"]])
+            row["id"]: lexical_score(query, [row["subject"], row["predicate"], row["object"], row["memory_type"],
+                claim_text(row["subject"], row["predicate"], row["object"])])
             for row in rows
         }
         if mode == "semantic" and semantic_scores:
             rows = [row for row in rows if semantic_scores.get(row["id"], 0.0) > 0.0]
-        # Select by relevance across all eligible memory, then bound the more
-        # expensive provenance/conflict reranking. A recent subset loses old
-        # exact matches and prevents their vectors from ever competing.
+        features = ranking_features(self.store.connection, [row["id"] for row in rows], filters.get("project_id"))
         def preliminary_score(row):
+            flags = features[row["id"]]
             return self._hybrid_score_for_row(row=row,
                 lexical=0.0 if mode == "semantic" and semantic_scores else lexical_scores[row["id"]],
-                semantic=semantic_scores.get(row["id"], 0.0), project_relevance=float(bool(filters.get("project_id"))),
-                conflict_ids=[], has_unresolved_conflict=False, has_duplicate_relationship=False, weights=weights)
-        rows = sorted(rows, key=lambda row: (-preliminary_score(row), row["id"]))[:candidate_limit]
+                semantic=semantic_scores.get(row["id"], 0.0), project_relevance=float(flags["project"]),
+                conflict_ids=[True] if flags["conflict"] else [], has_unresolved_conflict=bool(flags["unresolved"]),
+                has_duplicate_relationship=bool(flags["duplicate"]), weights=weights)
+        scores = {row["id"]: preliminary_score(row) for row in rows}
+        rows = sorted(rows, key=lambda row: (-scores[row["id"]], -semantic_scores.get(row["id"], 0.0),
+                      -lexical_scores[row["id"]], -row["confidence_effective"], row["id"]))[:candidate_limit]
         claim_ids = [row["id"] for row in rows]
         project_ids_by_claim = self._project_ids_for_claims(claim_ids)
         conflict_ids_by_claim = self._conflict_ids_for_claims(claim_ids)
         evidence_ids_by_claim = self._evidence_ids_for_claims(claim_ids)
-        unresolved_conflict_claim_ids = self._claim_ids_with_unresolved_conflicts(claim_ids)
-        duplicate_claim_ids = self._claim_ids_with_duplicate_relationships(claim_ids)
         results: list[RetrievalResult] = []
         for row in rows:
             project_ids = project_ids_by_claim.get(row["id"], [])
-            project_id = filters.get("project_id")
-            lexical = lexical_score(
-                query,
-                [
-                    row["subject"],
-                    row["predicate"],
-                    row["object"],
-                    row["memory_type"],
-                    claim_text(row["subject"], row["predicate"], row["object"]),
-                ],
-            )
-            if not query.strip():
-                lexical = 0.0
+            lexical = lexical_scores[row["id"]]
             semantic = semantic_scores.get(row["id"], 0.0)
-            if mode == "semantic" and semantic_scores and semantic <= 0.0:
-                continue
-            score = self._hybrid_score_for_row(
-                row=row,
-                lexical=0.0 if mode == "semantic" and semantic_scores else lexical,
-                semantic=semantic,
-                project_relevance=1.0 if project_id and project_id in project_ids else 0.0,
-                conflict_ids=conflict_ids_by_claim.get(row["id"], []),
-                has_unresolved_conflict=row["id"] in unresolved_conflict_claim_ids,
-                has_duplicate_relationship=row["id"] in duplicate_claim_ids,
-                weights=weights,
-            )
+            score = scores[row["id"]]
             results.append(
                 RetrievalResult(
                     claim_id=row["id"],

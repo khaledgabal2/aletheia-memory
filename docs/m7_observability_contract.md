@@ -1709,7 +1709,7 @@ def trace_context_pack(
     project_id: str | None = None,
     session_id: str | None = None,
     retrieval_mode: str = "hybrid",
-    token_budget: int = 2000,
+    token_budget: int | None = None,  # Omitted: use the active context policy.
 ) -> ContextPackTrace:
     ...
 

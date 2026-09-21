@@ -298,9 +298,10 @@ def test_redaction_notices_require_read_and_redaction_permissions(pair, tmp_path
     left, right, recipient, _ = pair
     claim = left.remember(namespace=NAMESPACE, memory_type="project", subject="retired", predicate="state",
                           object="retired value", privacy_level="public")
+    share, path = export(left, recipient, tmp_path, permissions=permissions)
     left.forget(selector={"target_type": "claim", "target_id": claim.id}, mode="tombstone",
                 reason="synthetic-redaction-reason", dry_run=False)
-    _, path = export(left, recipient, tmp_path, permissions=permissions)
+    left.export_share_bundle(share_id=share.id, output_path=str(path), encrypt=False)
     _, payload = federation._read_bundle(right, str(path))
     assert len(payload["payloads"]["tombstones"]) == expected_count
     assert ("synthetic-redaction-reason" in json.dumps(payload)) == bool(expected_count)

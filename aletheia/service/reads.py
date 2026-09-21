@@ -12,6 +12,7 @@ from aletheia.core.ids import new_id
 from aletheia.core.time import utc_now_iso
 from aletheia.service.errors import ServiceError, forbidden, not_found
 from aletheia.service.auth import PRIVACY_ORDER
+from aletheia.service.replay import record_source
 
 
 READ_POST_PATHS = {"/v1/retrieve", "/v1/search", "/v1/context-pack", "/v1/context"}
@@ -91,6 +92,8 @@ class ReadAccess:
         finally:
             self.visiting.remove(key)
         self.checked[key] = bool(result)
+        if result:
+            record_source(kind, target_id)
         return bool(result)
 
     def _allowed(self, kind, target_id):
@@ -140,6 +143,18 @@ class ReadAccess:
     def conflicts(self, conflicts):
         return [item for item in conflicts if item["claim_ids"]
                 and all(self.allowed("claim", value) for value in item["claim_ids"])]
+
+    def sync_conflict(self, conflict):
+        from aletheia.core.federation import _sync_resolution_targets
+        from aletheia.core.errors import ValidationError
+        def require_source(kind, value):
+            if not self.allowed(kind, value):
+                raise forbidden("Conflict source unavailable.")
+        try:
+            _sync_resolution_targets(self.memory, conflict, require_source)
+        except (NotFoundError, ValidationError, ServiceError):
+            return {**asdict(conflict), "metadata": {}}
+        return asdict(conflict)
 
     def explanation(self, claim_id):
         self.require("claim", claim_id)

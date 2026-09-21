@@ -221,6 +221,26 @@ def governed_claim_filter(namespace: str, filters: dict | None = None, *, alias:
     return clauses, params
 
 
+def ranking_features(connection, claim_ids: list[str], project_id: str | None) -> dict[str, dict]:
+    """Read lightweight score inputs before bounding expensive result hydration."""
+    features = {}
+    for start in range(0, len(claim_ids), 500):
+        chunk = claim_ids[start:start + 500]
+        rows = connection.execute(f"""
+            SELECT c.id,
+              EXISTS (SELECT 1 FROM project_claim_links p WHERE p.claim_id=c.id AND p.project_id=?) AS project,
+              (EXISTS (SELECT 1 FROM conflict_family_claims f WHERE f.claim_id=c.id) OR
+               EXISTS (SELECT 1 FROM conflict_claim_links f WHERE f.claim_id=c.id)) AS conflict,
+              EXISTS (SELECT 1 FROM conflict_family_claims f JOIN conflict_families cf ON cf.id=f.conflict_id
+                      WHERE f.claim_id=c.id AND cf.status='unresolved') AS unresolved,
+              EXISTS (SELECT 1 FROM claim_relationships r WHERE r.relationship_type='duplicate_of'
+                      AND (r.source_claim_id=c.id OR r.target_claim_id=c.id)) AS duplicate
+            FROM claims c WHERE c.id IN ({','.join('?' for _ in chunk)})
+            """, [project_id, *chunk]).fetchall()
+        features.update({row["id"]: dict(row) for row in rows})
+    return features
+
+
 class SQLiteFTSRetriever:
     """Lexical retriever that keeps the public retrieval interface stable."""
 
@@ -265,56 +285,34 @@ class SQLiteFTSRetriever:
         rows = self.connection.execute(sql, params).fetchall()
         if row_filter is not None:
             rows = row_filter(rows)
-        # Every eligible match can compete, regardless of creation time. Only
-        # the relevance-selected set needs provenance and conflict reranking.
+        # Every supported policy feature must participate before the bound.
+        features = ranking_features(self.connection, [row["id"] for row in rows], project_id)
+        lexical_scores = {row["id"]: lexical_score(query, [row["subject"], row["predicate"], row["object"],
+                          row["memory_type"], claim_text(row["subject"], row["predicate"], row["object"])]) for row in rows}
         def preliminary_score(row):
+            flags = features[row["id"]]
             return deterministic_score(
-                lexical=lexical_score(query, [row["subject"], row["predicate"], row["object"], row["memory_type"]]),
+                lexical=lexical_scores[row["id"]],
                 confidence_effective=row["confidence_effective"], memory_type=row["memory_type"], status=row["status"],
-                project_relevance=float(bool(project_id)), created_at=row["created_at"], importance=row["importance"],
-                conflict_ids=[], last_verified_at=row["last_verified_at"], half_life_days=row["half_life_days"], weights=weights,
+                project_relevance=float(flags["project"]), created_at=row["created_at"], importance=row["importance"],
+                conflict_ids=[True] if flags["conflict"] else [], last_verified_at=row["last_verified_at"],
+                half_life_days=row["half_life_days"], weights=weights,
+                unresolved_conflict=bool(flags["unresolved"]), duplicate=bool(flags["duplicate"]),
             )
-        rows.sort(key=lambda row: (-preliminary_score(row), row["id"]))
+        scores = {row["id"]: preliminary_score(row) for row in rows}
+        rows.sort(key=lambda row: (-scores[row["id"]], -row["confidence_effective"], row["created_at"], row["id"]))
         rows = rows[:candidate_limit]
         claim_ids = [row["id"] for row in rows]
         evidence_by_claim = self._evidence_ids_by_claim(claim_ids)
         conflict_by_claim = self._conflict_ids_by_claim(claim_ids)
-        penalty_flags = self._penalty_flags(claim_ids) if weights is not None else {}
         project_by_claim = self._project_ids_by_claim(claim_ids)
         results: list[RetrievalResult] = []
         for row in rows:
             evidence_ids = evidence_by_claim.get(row["id"], [])
             conflict_ids = conflict_by_claim.get(row["id"], [])
             project_ids = project_by_claim.get(row["id"], [])
-            project_relevance = 1.0 if project_id and project_id in project_ids else 0.0
-            lexical = lexical_score(
-                query,
-                [
-                    row["subject"],
-                    row["predicate"],
-                    row["object"],
-                    row["memory_type"],
-                    claim_text(row["subject"], row["predicate"], row["object"]),
-                ],
-            )
-            # Metadata-only retrieval should still rank deterministically.
-            if not query.strip():
-                lexical = 0.0
-            score = deterministic_score(
-                lexical=lexical,
-                confidence_effective=row["confidence_effective"],
-                memory_type=row["memory_type"],
-                status=row["status"],
-                project_relevance=project_relevance,
-                created_at=row["created_at"],
-                importance=row["importance"],
-                conflict_ids=conflict_ids,
-                last_verified_at=row["last_verified_at"],
-                half_life_days=row["half_life_days"],
-                weights=weights,
-                unresolved_conflict=bool(penalty_flags.get(row["id"], {}).get("unresolved")),
-                duplicate=bool(penalty_flags.get(row["id"], {}).get("duplicate")),
-            )
+            lexical = lexical_scores[row["id"]]
+            score = scores[row["id"]]
             results.append(
                 RetrievalResult(
                     claim_id=row["id"],

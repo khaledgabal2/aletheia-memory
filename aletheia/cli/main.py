@@ -1658,7 +1658,7 @@ def _add_m7_parsers(subparsers: argparse._SubParsersAction) -> None:
     traces_context.add_argument("--mode", default="hybrid")
     traces_context.add_argument("--project")
     traces_context.add_argument("--session")
-    traces_context.add_argument("--budget", type=int, default=2000)
+    traces_context.add_argument("--budget", type=int, help="Override the active context policy token budget.")
     traces_list = trace_subparsers.add_parser("list")
     _add_db_namespace(traces_list)
     traces_list.add_argument("--type", dest="trace_type")

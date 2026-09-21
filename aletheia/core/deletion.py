@@ -140,6 +140,21 @@ def apply(memory, roots, *, reason, actor="user", scrub=False, replacement="[RED
         hardening._stale_semantic_for_targets(memory, namespace=namespace, target_ids=[value], reason=reason)
         memory._write_audit(namespace=namespace, target_type=kind, target_id=value,
             action="content.redact" if scrub else "derived.invalidate", details={"reason": reason})
+    if scrub:
+        affected = {row["id"] for kind, row in nodes if include_roots or (kind, row["id"]) not in root_set}
+        for value in affected:
+            db.execute("""UPDATE sync_conflicts SET metadata_json = '{}'
+                WHERE local_object_id = ? OR EXISTS (
+                    SELECT 1 FROM remote_memory_sources r WHERE r.local_object_id = ?
+                    AND r.origin_instance_id = sync_conflicts.origin_instance_id
+                    AND r.remote_object_id = sync_conflicts.remote_object_id
+                    AND r.remote_object_type = sync_conflicts.remote_object_type)""", (value, value))
+        # Retain the operation key as a tombstone: dropping the receipt would
+        # allow a retry to perform the original mutation again.
+        for cached in db.execute("SELECT id, response_json FROM idempotency_records WHERE response_json IS NOT NULL").fetchall():
+            response = json.loads(cached["response_json"])
+            if (affected and "_authorization" not in response) or any(value in cached["response_json"] for value in affected):
+                db.execute("UPDATE idempotency_records SET response_json=NULL, status='redacted', expires_at=NULL WHERE id=?", (cached["id"],))
     return nodes
 
 

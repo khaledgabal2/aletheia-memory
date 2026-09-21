@@ -1624,6 +1624,9 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
                 "importance": claim.importance,
                 "half_life_days": claim.half_life_days,
                 "evidence_ids": evidence_ids,
+                # The claim's label travels even when source text is withheld.
+                "privacy_level": max((memory.read_event(value).privacy_level for value in claim.evidence_ids),
+                                     key=lambda level: PRIVACY_ORDER.get(level, PRIVACY_ORDER["secret"]), default="personal"),
                 "created_at": claim.created_at,
             })
         for evidence_id in evidence_ids:
@@ -1643,7 +1646,7 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
                 "trust_level": event.trust_level,
                 "privacy_level": event.privacy_level,
             }
-    tombstones = _exportable_tombstones(memory, share) if read_claims and "receive_redactions" in permissions else []
+    tombstones = _exportable_tombstones(memory, share, collection) if "receive_redactions" in permissions else []
     payloads = {"claims": claims, "evidence": list(evidence_by_id.values()), "tombstones": tombstones}
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1657,7 +1660,13 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
     }
 
 
-def _exportable_tombstones(memory, share: ShareGrant) -> list[dict]:
+def _exportable_tombstones(memory, share: ShareGrant, collection: SyncCollection) -> list[dict]:
+    # Notices apply to previously disclosed objects, including evidence-only
+    # shares and objects that no longer match the grant's current filters.
+    disclosed = {(row["object_type"], row["object_id"]) for row in memory.store.connection.execute(
+        """SELECT i.object_type, i.object_id FROM sync_change_items i
+           JOIN sync_changesets c ON c.id=i.changeset_id WHERE c.collection_id=?
+           AND i.object_type IN ('claim', 'evidence_event')""", (collection.id,))}
     rows = memory.store.connection.execute(
         "SELECT * FROM deletion_tombstones WHERE namespace = ? ORDER BY created_at",
         (share.namespace,),
@@ -1673,6 +1682,8 @@ def _exportable_tombstones(memory, share: ShareGrant) -> list[dict]:
             "created_at": row["created_at"],
         }
         for row in rows
+        if ({"evidence": "evidence_event", "event": "evidence_event"}.get(row["target_type"], row["target_type"]),
+            row["target_id"]) in disclosed
     ]
 
 
@@ -2183,6 +2194,14 @@ def _import_evidence(memory, evidence: dict, *, peer: PeerDevice, share_id: str,
 
 
 def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, collection_id: str, sync_run_id: str, policy: ImportTrustPolicy, evidence_ids: list[str]) -> dict:
+    source_levels = [memory.read_event(value).privacy_level for value in evidence_ids]
+    privacy = claim.get("privacy_level")
+    if privacy is None and source_levels:
+        # Older full-evidence bundles can recover the label from their sources.
+        privacy = max(source_levels, key=PRIVACY_ORDER.__getitem__)
+    if not isinstance(privacy, str) or privacy not in PRIVACY_ORDER:
+        raise ValidationError("Remote claims require a valid privacy label or labeled source evidence.")
+    privacy = max([privacy, *source_levels], key=PRIVACY_ORDER.__getitem__)
     previous, found = _previous_remote_object(memory, claim, peer=peer, kind="claim")
     if found:
         conflict = _local_claim_conflict(memory, claim) if previous else None
@@ -2201,6 +2220,11 @@ def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, colle
             _create_conflict_review_task(memory, namespace=claim["namespace"], conflict_id=conflict_id)
             return {"applied": 0, "conflict": 1}
         return {"applied": 0, "conflict": 0}
+    if not evidence_ids or max(PRIVACY_ORDER[level] for level in source_levels) < PRIVACY_ORDER[privacy]:
+        evidence_ids = [*evidence_ids, memory.write_event(
+            namespace=claim["namespace"], source_type="remote_sync", content=_claim_text(claim),
+            source_uri=f"aletheia-peer:{peer.peer_instance_id}/claim/{claim['id']}",
+            trust_level="remote:" + peer.trust_status, privacy_level=privacy).id]
     conflict = _local_claim_conflict(memory, claim)
     if conflict:
         conflict_id = _create_sync_conflict(
@@ -2230,7 +2254,7 @@ def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, colle
             predicate=claim["predicate"],
             object=claim["object"],
             memory_type=claim["memory_type"],
-            evidence_ids=evidence_ids or [memory.write_event(namespace=claim["namespace"], source_type="remote_sync", content=_claim_text(claim), trust_level="remote:" + peer.trust_status).id],
+            evidence_ids=evidence_ids,
             confidence=claim.get("confidence_base", 0.65),
             status=status,
             half_life_days=claim.get("half_life_days"),
@@ -2267,15 +2291,8 @@ def _claim_imports_active(claim: dict, policy: ImportTrustPolicy, peer: PeerDevi
 def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], peer: PeerDevice, sync_run_id: str) -> str:
     namespace = claim["namespace"]
     if not evidence_ids:
-        evidence_ids = [
-            memory.write_event(
-                namespace=namespace,
-                source_type="remote_sync",
-                content=_claim_text(claim),
-                trust_level="remote:" + peer.trust_status,
-                privacy_level="personal",
-            ).id
-        ]
+        raise ValidationError("Remote candidates require labeled source evidence.")
+    privacy = max((memory.read_event(value).privacy_level for value in evidence_ids), key=PRIVACY_ORDER.__getitem__)
     run_id = new_id("run")
     candidate_id = new_id("cand")
     now = utc_now_iso()
@@ -2317,7 +2334,7 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
                 suggested_scope_json, contradiction_risk, duplicate_risk,
                 privacy_level, created_at, metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, NULL, 0.0, 0.0, 'personal', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, NULL, 0.0, 0.0, ?, ?, ?)
             """,
             (
                 candidate_id,
@@ -2330,6 +2347,7 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
                 float(claim.get("confidence_base", 0.65)),
                 float(claim.get("importance", 0.5)),
                 claim.get("half_life_days"),
+                privacy,
                 now,
                 json.dumps({"remote_candidate": True, "peer_id": peer.id, "sync_run_id": sync_run_id}, sort_keys=True),
             ),

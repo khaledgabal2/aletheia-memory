@@ -9,7 +9,8 @@ Retrieval loads one immutable ranking version before selecting candidates. All
 three modes use its weights for lexical/semantic relevance, confidence,
 importance, type/status priority, project relevance, recency, and conflict,
 duplicate, and staleness penalties. A feature unavailable in a mode contributes
-zero (for example, semantic similarity in lexical mode). Retrieval remains
+zero (for example, semantic similarity in lexical mode). Project membership and
+all penalty features participate before bounding candidates. Retrieval remains
 bounded top-N selection, not exhaustive enumeration.
 
 Omitting a version selects the active `rpol_default` or `cpol_default` version.
@@ -22,7 +23,9 @@ Context budget, reflection/inference inclusion, and derivation metadata default
 to the selected context configuration. Explicit request options override those
 defaults. The initial policy still uses 1,500 tokens, includes reflections, and
 excludes inferences and derivation metadata. CLI `context` and `context-pack`
-also inherit policy defaults when flags are omitted.
+also inherit policy defaults when flags are omitted. Context traces through
+Python, HTTP, and CLI inherit the same budget and record the effective budget;
+an explicit trace budget still overrides the policy.
 
 Applying a proposal merges supported partial configuration into its current
 version. Unknown fields, invalid weights/budgets, and attempts to disable
@@ -45,6 +48,13 @@ Resolution reads the current local claim, imported remote object, mapping, and
 all supporting evidence inside one write transaction. Missing, changed,
 already reviewed, cross-namespace, or deleted sources are rejected. It does not
 recreate deleted data from an old bundle snapshot.
+
+The console's ordinary conflict-family resolution uses the same current-source
+authorization as the ordinary HTTP route. Embedded resolution also rejects
+nonmember targets before any mutation. Redaction scrubs federation conflict
+snapshots as well as their source objects. HTTP conflict listings reveal
+snapshots only when both current sources remain accessible and match them;
+otherwise they return structural conflict state with empty metadata.
 
 | Strategy | Verified effect |
 | --- | --- |

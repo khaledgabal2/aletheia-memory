@@ -28,8 +28,10 @@ not reconstruct past content, status, authorization, or deleted data. The HTTP
 read contract does not expose `as_of` as a supported input.
 
 All eligible lexical matches and indexed semantic vectors can compete,
-including old memories. Relevance selects a bounded set for the more expensive
-provenance/conflict reranking. The local SQLite/vector implementation still
+including old memories. Every configured score feature, including actual project
+membership and conflict/duplicate penalties, participates before selecting a
+bounded set for provenance and relationship hydration. Selection and returned
+ordering use the same scores and tie breakers. The local SQLite/vector implementation still
 scans matching rows and eligible vectors; this is not an approximate-nearest-
 neighbor index or a production-scale throughput guarantee. Returned results
 remain ranked top-N, without an exhaustive enumeration or cursor guarantee.
@@ -65,12 +67,24 @@ the call. The request cache is discarded when the request finishes. This does
 not promise concurrent execution of database phases or slow administrative
 filesystem work.
 
-HTTP job execution commits the existing `running` claim and attempt count before
+HTTP and daemon background job execution commit the existing `running` claim and attempt count before
 provider work starts. That ownership survives the temporary snapshot rollback,
 so another service or worker cannot pick up the same pending job. Completion
 commits the results once. A failed request returns unfinished owned jobs to
 `pending`, or marks them `failed` when their attempt limit is reached. Snapshot
 retries do not consume another job attempt or repeat successful provider calls.
+Closing the service releases only its own unfinished jobs before closing its
+connection. A provider result arriving after closure cannot complete that job.
+
+Completed idempotency replies carry the original credential authority and the
+sources, object scopes, and approved providers checked during execution. Replays
+recheck those dependencies without repeating provider work or mutations. A
+changed authority or unavailable source denies the cached reply. Legacy generic
+replies without that evidence fail closed; candidate creation retains its
+separate current-object checks. Redaction clears affected reply content and
+retains a nonexpiring operation-key tombstone, preventing accidental execution
+of the original mutation on retry. Existing unclassified legacy replies are
+conservatively invalidated when content is scrubbed.
 
 ## Python SDK redirects
 
