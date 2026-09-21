@@ -1,6 +1,6 @@
 # Local Registration And Pairing v1
 
-Available in Memory 1.5.0. This is local application pairing, independent
+Available since Memory 1.5.0. This is local application pairing, independent
 of federation. The existing HTTP API and 1.4.1 client contracts remain compatible.
 No storage schema migration is added.
 
@@ -97,7 +97,7 @@ LAN discovery, enterprise identity, OS service supervision, or signed packaging.
 ## Validation
 
 The installed-artifact release gate is
-`python scripts/v1_5_install_recovery_check.py --python /fresh/venv/bin/python --previous-python /1.4.1/venv/bin/python`.
+`python scripts/v1_5_install_recovery_check.py --python /fresh/venv/bin/python --previous-python /1.5.0/venv/bin/python --expected-version 1.6.0 --previous-version 1.5.0`.
 Run it for both the wheel and source distribution, with no development extras
 in either installation. It uses disposable databases and loopback services to
 verify CLI startup, quoted `~` paths, lease renewal/expiry, restart and crash
@@ -127,7 +127,9 @@ Loss or replacement of identity files also requires new pairing. Revoke old
 credentials through `aletheia auth list-tokens` and `aletheia auth revoke-token`
 using the intended `--db`, then approve fresh grants.
 
-Storage remains readable by Memory 1.4.1. Before downgrading, stop 1.5.0 and revoke
+Storage remains readable by Memory 1.4.1. Before downgrading, stop the current service and revoke
 all pairing-issued credentials with owner administration. Memory 1.4.1 does not
 enforce their original TLS binding. Only then start the older service. Returning
-to 1.5.0 requires fresh credentials; no storage downgrade is necessary.
+to the current release requires fresh credentials; no storage downgrade is necessary.
+Older versions also reintroduce their defects; see the
+[1.6.0 beta upgrade guide](v1_6_0_upgrade.md) before choosing recovery by rollback.

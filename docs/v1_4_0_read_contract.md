@@ -52,7 +52,7 @@ support. This additive negotiation validates known input types and these limits:
 | --- | --- |
 | `namespace` | Required, nonempty; explicit for overview as well |
 | Retrieval `limit` | Integer 1–200, default 10 |
-| Context `token_budget` | Integer 1–12,000, default 1,500 |
+| Context `token_budget` | Integer 1–12,000; defaults to the selected context policy (initially 1,500) |
 | `mode` / `retrieval_mode` | `lexical`, `semantic`, or `hybrid`; legacy default `hybrid` retained |
 | Flags | JSON booleans, not strings or numeric coercions |
 | Optional project/session/policy IDs | String or null |
@@ -66,10 +66,12 @@ candidate review/creation operations, as declared by each operation's schema.
 New examples explicitly choose lexical mode and `record_usage: false`; lexical
 retrieval matches words and does not promise arbitrary paraphrase understanding.
 
-Retrieval is ranked top-N, not exhaustive enumeration. Authorization filtering
-can reduce the returned count without refilling it. There is no cursor or total
-count guarantee. Context has a token budget and the existing bounded candidate
-selection. Overview returns at most ten items per available section. These
+Retrieval is ranked top-N, not exhaustive enumeration. Status, validity, scope,
+and caller visibility are checked before candidate selection and result limits;
+hidden content does not consume context tokens. There is no cursor or total
+count guarantee. Context has a token budget and bounded relevance-based
+candidate selection. See [retrieval boundaries](retrieval_execution_boundaries.md).
+Overview returns at most ten items per available section. These
 responses have null pagination; review-list continuation is defined by the
 [review contract](v1_4_0_review_contract.md).
 
@@ -136,11 +138,14 @@ Read POSTs ignore idempotency replay caches so each call rechecks access. This
 does not promise exactly-once usage recording. Governed mutation replay is
 defined separately by the review and agent onboarding contracts.
 
-HTTP handlers serialize access to their shared SQLite connection. Selected reads
-evaluate authorization, provenance and result construction in one transaction.
-This favors correctness; it is not evidence of high-throughput scalability, and
-overview currently scans its scoped resources. No cross-writer mutation or stale
-review guarantee is claimed here.
+HTTP handlers serialize database phases on their shared SQLite connection.
+Selected reads evaluate authorization, provenance and result construction in
+one transaction. Provider construction and inference run outside that transaction
+and the service lock; the route then rechecks access and inputs in a fresh
+snapshot before using the result. Changed inputs return `409 provider_input_changed`.
+This is not evidence of high-throughput scalability, and overview currently scans
+its scoped resources. Governed mutation and stale-review behavior is defined by
+the separate review contract.
 
 ## Reproduce the checks
 

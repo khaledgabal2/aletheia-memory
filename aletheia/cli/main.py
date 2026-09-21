@@ -92,12 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
     context.add_argument("--query", required=True)
     context.add_argument("--project")
     context.add_argument("--session")
-    context.add_argument("--budget", type=int, default=1500)
+    context.add_argument("--budget", type=int, help="Override the active context policy token budget.")
     context.add_argument("--mode", choices=["lexical", "semantic", "hybrid"], default="lexical")
     context.add_argument("--include-candidate-warnings", action="store_true")
     context.add_argument("--no-reflections", action="store_true")
-    context.add_argument("--include-inferences", action="store_true")
-    context.add_argument("--include-derivation", action="store_true")
+    context.add_argument("--include-inferences", action="store_true", default=None)
+    context.add_argument("--include-derivation", action="store_true", default=None)
     context.add_argument("--policy-version")
     context.add_argument("--record-usage", action="store_true")
     context.add_argument("--explain-policy", action="store_true")
@@ -108,14 +108,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_db_namespace(context_pack)
     context_pack.add_argument("query")
-    context_pack.add_argument("--token-budget", type=int, default=1500)
+    context_pack.add_argument("--token-budget", type=int, help="Override the active context policy token budget.")
     context_pack.add_argument("--project")
     context_pack.add_argument("--session")
     context_pack.add_argument("--mode", choices=["lexical", "semantic", "hybrid"], default="lexical")
     context_pack.add_argument("--include-candidate-warnings", action="store_true")
     context_pack.add_argument("--no-reflections", action="store_true")
-    context_pack.add_argument("--include-inferences", action="store_true")
-    context_pack.add_argument("--include-derivation", action="store_true")
+    context_pack.add_argument("--include-inferences", action="store_true", default=None)
+    context_pack.add_argument("--include-derivation", action="store_true", default=None)
     context_pack.add_argument("--policy-version")
     context_pack.add_argument("--record-usage", action="store_true")
     context_pack.add_argument("--explain-policy", action="store_true")
@@ -980,6 +980,17 @@ def _add_m10_parsers(subparsers: argparse._SubParsersAction) -> None:
     federation_rotate.add_argument("--db", default="./aletheia.db")
     federation_rotate.add_argument("--reason", required=True)
     federation_rotate.add_argument("--actor", default="user")
+    federation_rotate.add_argument("--expected-fingerprint", required=True)
+    federation_rotate.add_argument("--recovery-output", dest="recovery_path", required=True,
+                                   help="New encrypted recovery file; uses ALETHEIA_FEDERATION_RECOVERY_KEY.")
+    federation_recover = federation_sub.add_parser("recover-bundle", help="Recover a historical bundle into an encrypted review file without importing.")
+    federation_recover.add_argument("--db", default="./aletheia.db")
+    federation_recover.add_argument("--input", dest="input_path", required=True)
+    federation_recover.add_argument("--recovery-key", dest="recovery_path", required=True)
+    federation_recover.add_argument("--expected-fingerprint", required=True)
+    federation_recover.add_argument("--output", dest="output_path", required=True)
+    federation_recover.add_argument("--reason", required=True)
+    federation_recover.add_argument("--actor", default="user")
 
     peers = subparsers.add_parser("peers", help="Add, trust, revoke, and inspect federation peers.")
     peers_sub = peers.add_subparsers(dest="peers_command", required=True)
@@ -1008,6 +1019,14 @@ def _add_m10_parsers(subparsers: argparse._SubParsersAction) -> None:
     peers_revoke.add_argument("--reason", required=True)
     peers_revoke.add_argument("--actor", default="user")
     peers_revoke.add_argument("--keep-shares", action="store_true")
+    peers_replace = peers_sub.add_parser("replace-key", help="Approve new keys with independently verified fingerprints; reset trust and revoke grants.")
+    peers_replace.add_argument("peer_id")
+    peers_replace.add_argument("--db", default="./aletheia.db")
+    peers_replace.add_argument("--identity", dest="peer_identity_file", required=True)
+    peers_replace.add_argument("--expected-fingerprint", required=True)
+    peers_replace.add_argument("--confirmed-fingerprint", required=True)
+    peers_replace.add_argument("--reason", required=True)
+    peers_replace.add_argument("--actor", default="user")
     peers_domains = peers_sub.add_parser("trust-domains")
     peers_domains.add_argument("--db", default="./aletheia.db")
 
@@ -1639,7 +1658,7 @@ def _add_m7_parsers(subparsers: argparse._SubParsersAction) -> None:
     traces_context.add_argument("--mode", default="hybrid")
     traces_context.add_argument("--project")
     traces_context.add_argument("--session")
-    traces_context.add_argument("--budget", type=int, default=2000)
+    traces_context.add_argument("--budget", type=int, help="Override the active context policy token budget.")
     traces_list = trace_subparsers.add_parser("list")
     _add_db_namespace(traces_list)
     traces_list.add_argument("--type", dest="trace_type")
@@ -1841,7 +1860,7 @@ def _run(args: argparse.Namespace) -> int:
                 token_budget=args.budget,
                 retrieval_mode=args.mode,
                 include_candidate_warnings=args.include_candidate_warnings,
-                include_reflections=not args.no_reflections,
+                include_reflections=False if args.no_reflections else None,
                 include_inferences=args.include_inferences,
                 include_derivation_metadata=args.include_derivation,
                 policy_version_id=args.policy_version,
@@ -1862,7 +1881,7 @@ def _run(args: argparse.Namespace) -> int:
                 token_budget=args.token_budget,
                 retrieval_mode=args.mode,
                 include_candidate_warnings=args.include_candidate_warnings,
-                include_reflections=not args.no_reflections,
+                include_reflections=False if args.no_reflections else None,
                 include_inferences=args.include_inferences,
                 include_derivation_metadata=args.include_derivation,
                 policy_version_id=args.policy_version,
@@ -2067,11 +2086,12 @@ def _run_installed_docs(args: argparse.Namespace) -> int:
 def _run_m10(memory: Memory, args: argparse.Namespace) -> int:
     if args.command == "federation":
         if args.federation_command == "init":
-            _print_json(asdict(memory.create_federation_identity(
+            memory.create_federation_identity(
                 display_name=args.display_name,
                 key_algorithm=args.key_algorithm,
                 protected=not args.unprotected,
-            )))
+            )
+            _print_json(memory.public_federation_identity())
             return 0
         if args.federation_command == "status":
             _print_json(memory.federation_status())
@@ -2080,10 +2100,26 @@ def _run_m10(memory: Memory, args: argparse.Namespace) -> int:
             _print_json(memory.export_federation_identity(output_path=args.output))
             return 0
         if args.federation_command == "rotate-key":
-            _print_json(asdict(memory.rotate_federation_key(reason=args.reason, actor=args.actor)))
+            memory.rotate_federation_key(reason=args.reason, actor=args.actor,
+                                         expected_fingerprint=args.expected_fingerprint, recovery_path=args.recovery_path)
+            _print_json(memory.public_federation_identity())
+            return 0
+        if args.federation_command == "recover-bundle":
+            _print_json(memory.recover_share_bundle_for_review(
+                input_path=args.input_path, recovery_path=args.recovery_path,
+                expected_fingerprint=args.expected_fingerprint, output_path=args.output_path,
+                reason=args.reason, actor=args.actor,
+            ))
             return 0
 
     if args.command == "peers":
+        if args.peers_command == "replace-key":
+            _print_json(asdict(memory.replace_peer_key(
+                args.peer_id, peer_identity=json.loads(Path(args.peer_identity_file).expanduser().read_text(encoding="utf-8")),
+                expected_fingerprint=args.expected_fingerprint, confirmed_fingerprint=args.confirmed_fingerprint,
+                reason=args.reason, actor=args.actor,
+            )))
+            return 0
         if args.peers_command == "add":
             _print_json(asdict(memory.add_peer(
                 peer_identity_file=args.peer_identity_file,

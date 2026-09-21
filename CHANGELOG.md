@@ -2,6 +2,88 @@
 
 All notable public changes to Aletheia are tracked here.
 
+## Unreleased
+
+## 1.6.0 — 2026-09-21
+
+Beta audit-remediation release. Includes all 29 original audit repairs and the
+nine residual defects found by independent behavioral review. Python remains
+3.11+, the API remains v1, and the storage schema remains 1.3.1. See the
+[beta upgrade guide](docs/v1_6_0_upgrade.md) before reusing existing data.
+
+- Recheck current authority and sources for conflict resolution and cached
+  mutation replies. Rejected replay does not repeat the original mutation;
+  deletion removes cached content while retaining operation keys.
+- Scope operational reports and metrics before aggregation; exclude legacy
+  snapshots without verified scope metadata.
+- Preserve claims-only federation privacy, scrub retained conflict snapshots,
+  and restrict deletion notices to objects actually disclosed to recipients.
+- Release the daemon lock during provider work, preserve durable job ownership,
+  and reject stale results after inputs or permissions change.
+- Apply project relevance and conflict/duplicate penalties before retrieval
+  truncation; honor the active context budget in Python, HTTP, and CLI traces.
+  See [follow-up verification](docs/audit_followup_verification.md).
+- Require cryptography 50.0.1 or newer and update the development OpenAPI
+  toolchain to resolve js-yaml 4.3.2 through @redocly/openapi-core 1.34.20.
+- Refresh the packaged TypeScript schema for policy selection and context
+  defaults. Publication now runs the existing release gates at the publishing
+  commit, including installed upgrade/recovery checks from published 1.5.0.
+- Execute applied ranking/context policy versions in reads and evaluations;
+  validate configuration and make activation, gates, and rollback atomic.
+- Apply supported sync conflict decisions to stored memories and provenance,
+  enforce effect permissions, and reject unsupported strategies without receipts.
+- Require behavioral adapter evidence for certification. Structural conformance
+  and missing probes no longer produce behavioral passes or satisfy the v1 gate.
+  See [behavior verification](docs/behavior_verification.md) for upgrade details.
+- Exclude unreviewed legacy candidate claims from default retrieval/context and
+  enforce claim/scope validity before selection, including normalized timestamps.
+- Rank eligible memories across their full history before bounding reranking;
+  apply HTTP privacy and scope checks before result limits and context budgets.
+- Run governed HTTP provider construction and inference outside the service lock
+  and database transaction, then recheck current access and source inputs before
+  using results. Concurrent idempotent requests retain one provider execution;
+  queued jobs preserve durable ownership and retry accounting during waits.
+- Reject redirects in both Python SDK clients so service credentials and request
+  bodies cannot be forwarded. See
+  [retrieval and provider execution](docs/retrieval_execution_boundaries.md).
+- Omit plaintext span copies of protected evidence across extraction, HTTP,
+  plugins, and federation; clear existing span/risk copies when opening a database.
+- Reject unsupported JSONL encryption and physical backup auth exclusion before
+  writing output. Redacted exports use reviewed structural column allowlists.
+- Preserve archive source evidence, privacy, and identity; make archive/federation
+  reimports reuse mapped objects and honor deletion notices. Legacy or changed
+  sources require review rather than another copy or an implicit overwrite.
+- Apply the requested forget mode and follow transitive redaction dependencies,
+  including source documents and promoted candidates/inferences; scrub retained
+  derivatives and purge content snapshots/indexes atomically. See
+  [storage privacy boundaries](docs/storage_privacy_boundaries.md).
+- Enforce stored object scope and source privacy across HTTP session, feedback,
+  review, reasoning, evaluation, and policy operations. Session summaries now
+  default to reviewable candidates; active summaries require explicit active
+  mode and active-write capability, with atomic session/summary changes.
+- Filter HTTP trace content before storage and recheck current access on reads.
+  Authorize LLM sources before provider construction, including conflict and
+  duplicate-merge sources. HTTP Python providers must be enabled `llm_provider`
+  installations with approved permissions, selected by installation ID or name.
+- Require an explicit namespace for scoped operational lists and filter federation
+  history before pagination. Signed federation imports authorize the grant's
+  actual scope and reject content outside that namespace. See
+  [HTTP access boundaries](docs/service_access_boundaries.md) for migration details.
+- Add explicit federation recovery: verified encrypted decryption-key archives,
+  fingerprint-confirmed peer replacement, trust reset and grant revocation,
+  and encrypted recovery of historical bundles for review without importing.
+  Rotation now requires an expected fingerprint and a fresh recovery path;
+  HTTP rotation/replacement require admin capability. Identity responses and
+  CLI output contain public data only. See the
+  [operator procedure](docs/federation_key_recovery.md).
+- Repair federation bundle identity serialization, pinned-key verification,
+  import revocation checks, candidate-only policy enforcement, and share read
+  permissions. Invalid imports leave content and federation state unchanged.
+- Require explicit `read_evidence` permission to export source evidence; `read`
+  grants claim access only. Dry-run imports enforce normal trust checks.
+  See the [security guide](docs/security_privacy_guide.md) for compatibility
+  and recovery considerations for previously distributed bundles.
+
 ## 1.5.0
 
 - Automatically advertise participating local POSIX daemons with owner-only,

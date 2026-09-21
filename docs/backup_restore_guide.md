@@ -35,9 +35,19 @@ Passphrase resolution order:
 Important limits:
 
 - Full physical backups can include raw SQLite files and auth metadata.
+- Physical/hybrid backups reject `include_auth_metadata=False`; use a logical
+  backup when authentication records must be excluded.
 - Use logical redacted exports for support or sharing.
+- JSONL does not support encryption and is rejected when encryption is requested
+  or required. Use `.alet` for encrypted exports.
+- Use a full or namespace-filtered archive to import evidence and claims.
+  Structural redacted/metadata-only archives cannot restore their content.
 - Redaction and forget operations cannot remove data from old backups,
   filesystem snapshots, OS caches, or external copies.
+
+See [storage privacy boundaries](storage_privacy_boundaries.md) for import
+identity, source keys, repeated imports, deletion notices, and legacy import
+review requirements.
 
 Read `docs/encryption_layer.md` for the full protected-content and archive
 encryption model.

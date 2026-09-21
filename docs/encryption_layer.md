@@ -8,7 +8,7 @@ implemented by `aletheia/core/crypto.py` and `aletheia/core/hardening.py`.
 
 The current implementation covers two main paths:
 
-- Protected content encryption for secret-tier stored evidence content.
+- Protected content encryption for private, sensitive, and secret evidence.
 - Archive encryption for backups, namespace exports, and support bundles.
 
 It also records key metadata, key rotation events, protected-mode state,
@@ -31,9 +31,15 @@ When protected mode is enabled, Aletheia sets:
 - indexing policy `index_public_and_personal_only`
 - request logging policy `metadata_only`
 
-Stored evidence content is encrypted only when its privacy level is in the
-secret privacy tier. Public, personal, and other non-secret evidence remains
-plain unless future policy expands that behavior.
+Stored evidence content is encrypted when its privacy level is `private`,
+`sensitive`, or `secret`. Public and personal evidence remains plain. This is
+not full-database encryption: claim/candidate summaries and other metadata can
+still contain sensitive information.
+
+Encrypted evidence has no duplicate plaintext span in evidence spans or
+content-risk flags. Candidate reads reconstruct spans from the source and its
+offsets. Opening an existing database clears those redundant copies without
+needing the key; this does not erase old database pages or external copies.
 
 Use secret privacy for evidence that should be protected at rest:
 
@@ -169,6 +175,11 @@ aletheia export namespace \
   --passphrase "change-me"
 ```
 
+Encrypted exports require the `.alet` format. JSONL rejects encryption requests
+and cannot be used when protected mode requires encrypted backups. Redacted
+logical exports retain structural fields only and cannot be imported as full
+content. See [storage privacy boundaries](storage_privacy_boundaries.md).
+
 Support bundles can be encrypted too:
 
 ```bash
@@ -211,7 +222,11 @@ aletheia forget preview \
 ```
 
 These workflows preserve auditability through tombstones and audit records.
-They also mark affected semantic indexes stale when needed.
+They follow transitive dependencies, invalidate affected records, and remove
+content snapshots and vectors when scrubbing content. Forget modes distinguish
+retaining content (`tombstone`), replacing it (`redact_content`), and deleting
+the selected row (`hard_delete`). See
+[deletion semantics](storage_privacy_boundaries.md#deletion-semantics).
 
 Important limit: redaction and forget cannot remove data from old backups,
 filesystem snapshots, OS caches, or external copies. Rotate or destroy external

@@ -1,6 +1,8 @@
-"""Validate installed 1.5.0 artifacts using disposable CLI services and databases.
+"""Validate installed artifacts using disposable CLI services and databases.
 
-Run with --python /fresh/venv/bin/python --previous-python /1.4.1/venv/bin/python.
+Run with --python /fresh/venv/bin/python --previous-python /previous/venv/bin/python
+and --expected-version / --previous-version for the releases under test.
+Defaults retain the original 1.5.0-from-1.4.1 check for historical reproduction.
 Neither environment needs development extras. Secrets never appear in output.
 """
 from __future__ import annotations
@@ -75,7 +77,7 @@ def request(port: int, path: str, *, method: str = "GET", payload=None, token=No
 
 
 class Service:
-    def __init__(self, database: str, cli: list[str], env: dict, extra: tuple = ()):
+    def __init__(self, database: str, cli: list[str], env: dict, expected_version: str, extra: tuple = ()):
         self.log = tempfile.TemporaryFile(mode="w+")
         self.process = subprocess.Popen([*cli, "serve", "--db", database, "--port", "0", *extra],
                                         env=env, stdout=self.log, stderr=self.log)
@@ -92,7 +94,7 @@ class Service:
                 if match:
                     self.port = int(match[1])
                     status, version, _ = request(self.port, "/v1/version")
-                    assert status == 200 and version["data"]["software_version"] == "1.5.0"
+                    assert status == 200 and version["data"]["software_version"] == expected_version
                     return
                 time.sleep(0.05)
             raise AssertionError("Installed service did not become ready.")
@@ -121,14 +123,14 @@ class Service:
         self.log.close()
 
 
-def worker(previous_python: str):
+def worker(previous_python: str, expected_version: str, previous_version: str):
     import aletheia
     from aletheia.help import docs_root
 
     assert os.name == "posix", "Local pairing currently supports POSIX only."
     package = Path(aletheia.__file__).resolve().parent
     assert "site-packages" in package.parts
-    assert metadata.version("aletheia-memory") == "1.5.0"
+    assert metadata.version("aletheia-memory") == expected_version
     assert docs_root().resolve() == package / "docs"
     assert not any(metadata.packages_distributions().get(name) for name in ("pytest", "openai", "torch", "transformers"))
     root = Path.cwd()
@@ -186,7 +188,7 @@ def worker(previous_python: str):
     services = []
 
     def start(database, *extra):
-        service = Service(str(database), cli, env, extra)
+        service = Service(str(database), cli, env, expected_version, extra)
         services.append(service)
         return service
 
@@ -203,9 +205,9 @@ def worker(previous_python: str):
         assert not records()
         passed("core-only installed CLI, packaged pairing docs, fresh initialization and startup")
 
-        previous_version = run([previous_python, "-I", "-c",
+        installed_previous_version = run([previous_python, "-I", "-c",
                                 "from importlib.metadata import version; print(version('aletheia-memory'))"]).strip()
-        assert previous_version == "1.4.1"
+        assert installed_previous_version == previous_version
         database = root / "previous.db"
         before = database_state(previous_python, database, seed=True)
         spelling = "~/" + os.path.relpath(database, Path.home())
@@ -218,7 +220,7 @@ def worker(previous_python: str):
         assert registration.stat().st_mode & 0o777 == 0o600
         token = pair(spelling, service)
         unused = invite(spelling, service)
-        passed("1.4.1 database opens without migration; quoted tilde paths, explicit grants and TLS-only credentials")
+        passed(f"{previous_version} database opens without migration; quoted tilde paths, explicit grants and TLS-only credentials")
 
         deadline = time.monotonic() + 15
         while records()[registration]["expires_at_ms"] <= initial["expires_at_ms"]:
@@ -287,7 +289,7 @@ def worker(previous_python: str):
         finally:
             memory.close()
         assert database_state(previous_python, database) == before
-        passed("identity-directory loss rejects old credentials; owner revocation allows 1.4.1 data rollback without migration")
+        passed(f"identity-directory loss rejects old credentials; revoked credentials and unchanged data can reopen in {previous_version}")
 
         hidden = start(database, "--no-advertise", "--no-local-pairing")
         assert not any(value["port"] == hidden.port for value in records().values())
@@ -298,6 +300,7 @@ def worker(previous_python: str):
         for service in reversed(services):
             service.stop()
     print(json.dumps({"status": "passed", "version": metadata.version("aletheia-memory"),
+                      "previous_version": previous_version,
                       "python": sys.version.split()[0], "checks": checks}, indent=2))
 
 
@@ -305,6 +308,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python")
     parser.add_argument("--previous-python")
+    parser.add_argument("--expected-version", default="1.5.0")
+    parser.add_argument("--previous-version", default="1.4.1")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--snapshot", help=argparse.SUPPRESS)
     parser.add_argument("--seed", action="store_true", help=argparse.SUPPRESS)
@@ -312,7 +317,7 @@ def main():
     if args.snapshot:
         print(json.dumps(snapshot(args.snapshot, seed=args.seed)))
     elif args.worker:
-        worker(args.previous_python)
+        worker(args.previous_python, args.expected_version, args.previous_version)
     else:
         if not args.python or not args.previous_python:
             parser.error("--python and --previous-python are required")
@@ -321,7 +326,9 @@ def main():
             shutil.copyfile(__file__, script)
             environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATH") if key in os.environ}
             result = subprocess.run([str(Path(args.python).absolute()), "-I", str(script), "--worker",
-                                     "--previous-python", str(Path(args.previous_python).absolute())],
+                                     "--previous-python", str(Path(args.previous_python).absolute()),
+                                     "--expected-version", args.expected_version,
+                                     "--previous-version", args.previous_version],
                                     cwd=directory, env=environment, timeout=240)
             raise SystemExit(result.returncode)
 

@@ -7,8 +7,10 @@ import re
 import sqlite3
 from datetime import UTC, datetime
 
+from aletheia.core.errors import ValidationError
 from aletheia.core.time import parse_iso, utc_now
 from aletheia.models.retrieval import RetrievalResult
+from aletheia.retrieval.policy import weighted_score
 
 EXCLUDED_ALWAYS = ("rejected",)
 EXCLUDED_DEFAULT = ("archived", "superseded", "disputed")
@@ -91,9 +93,21 @@ def deterministic_score(
     conflict_ids: list[str],
     last_verified_at: str | None,
     half_life_days: float,
+    weights: dict | None = None,
+    unresolved_conflict: bool = False,
+    duplicate: bool = False,
 ) -> float:
     conflict_penalty = 1.0 if conflict_ids and status != "active" else 0.0
     stale_penalty = staleness_penalty(created_at, last_verified_at, half_life_days)
+    if weights is not None:
+        return weighted_score(weights, {
+            "lexical_score": lexical, "effective_confidence": confidence_effective,
+            "memory_type_priority": MEMORY_TYPE_PRIORITY.get(memory_type, .50),
+            "status_priority": STATUS_PRIORITY.get(status, .20), "project_relevance": project_relevance,
+            "recency_score": recency_score(created_at), "retrieval_salience": importance,
+            "unresolved_conflict_penalty": float(unresolved_conflict), "duplicate_penalty": float(duplicate),
+            "conflict_penalty": conflict_penalty, "staleness_penalty": stale_penalty,
+        })
     return (
         0.35 * lexical
         + 0.20 * confidence_effective
@@ -109,21 +123,33 @@ def deterministic_score(
 
 def governed_claim_filter(namespace: str, filters: dict | None = None, *, alias: str = "c") -> tuple[list[str], list[object]]:
     filters = filters or {}
-    params: list[object] = [namespace, EXCLUDED_ALWAYS[0]]
-    clauses = [f"{alias}.namespace = ?", f"{alias}.status NOT IN (?)"]
+    params: list[object] = [namespace]
+    clauses = [f"{alias}.namespace = ?"]
     statuses = _as_list(filters.get("statuses") or filters.get("status"))
     if statuses:
-        clauses.append(f"{alias}.status IN ({','.join('?' for _ in statuses)})")
-        params.extend(statuses)
+        statuses = [value for value in statuses if value in STATUS_PRIORITY]
     else:
-        excluded = []
-        if not filters.get("include_archived", False):
-            excluded.extend(["archived", "superseded"])
-        if not filters.get("include_disputed", False):
-            excluded.append("disputed")
-        if excluded:
-            clauses.append(f"{alias}.status NOT IN ({','.join('?' for _ in excluded)})")
-            params.extend(excluded)
+        statuses = ["active", "core"]
+        if filters.get("include_candidates", False):
+            statuses.append("candidate")
+        if filters.get("include_archived", False):
+            statuses.extend(["archived", "superseded"])
+        if filters.get("include_disputed", False):
+            statuses.append("disputed")
+    clauses.append(f"{alias}.status IN ({','.join('?' for _ in statuses)})" if statuses else "0")
+    params.extend(statuses)
+    try:
+        at = parse_iso(filters.get("as_of")) or utc_now()
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValidationError("as_of must be an ISO timestamp.") from exc
+    # julianday normalizes offsets; malformed stored bounds fail closed.
+    clauses.extend([
+        f"({alias}.valid_from IS NULL OR julianday({alias}.valid_from) <= julianday(?))",
+        f"({alias}.valid_to IS NULL OR julianday({alias}.valid_to) > julianday(?))",
+    ])
+    params.extend([at.isoformat(), at.isoformat()])
+    if filters.get("require_provenance"):
+        clauses.append(f"EXISTS (SELECT 1 FROM claim_evidence_links cel JOIN evidence_events e ON e.id = cel.evidence_id WHERE cel.claim_id = {alias}.id)")
     memory_types = _as_list(filters.get("memory_types") or filters.get("memory_type"))
     if memory_types:
         clauses.append(f"{alias}.memory_type IN ({','.join('?' for _ in memory_types)})")
@@ -195,6 +221,26 @@ def governed_claim_filter(namespace: str, filters: dict | None = None, *, alias:
     return clauses, params
 
 
+def ranking_features(connection, claim_ids: list[str], project_id: str | None) -> dict[str, dict]:
+    """Read lightweight score inputs before bounding expensive result hydration."""
+    features = {}
+    for start in range(0, len(claim_ids), 500):
+        chunk = claim_ids[start:start + 500]
+        rows = connection.execute(f"""
+            SELECT c.id,
+              EXISTS (SELECT 1 FROM project_claim_links p WHERE p.claim_id=c.id AND p.project_id=?) AS project,
+              (EXISTS (SELECT 1 FROM conflict_family_claims f WHERE f.claim_id=c.id) OR
+               EXISTS (SELECT 1 FROM conflict_claim_links f WHERE f.claim_id=c.id)) AS conflict,
+              EXISTS (SELECT 1 FROM conflict_family_claims f JOIN conflict_families cf ON cf.id=f.conflict_id
+                      WHERE f.claim_id=c.id AND cf.status='unresolved') AS unresolved,
+              EXISTS (SELECT 1 FROM claim_relationships r WHERE r.relationship_type='duplicate_of'
+                      AND (r.source_claim_id=c.id OR r.target_claim_id=c.id)) AS duplicate
+            FROM claims c WHERE c.id IN ({','.join('?' for _ in chunk)})
+            """, [project_id, *chunk]).fetchall()
+        features.update({row["id"]: dict(row) for row in rows})
+    return features
+
+
 class SQLiteFTSRetriever:
     """Lexical retriever that keeps the public retrieval interface stable."""
 
@@ -207,6 +253,8 @@ class SQLiteFTSRetriever:
         query: str,
         filters: dict | None = None,
         limit: int = 10,
+        row_filter=None,
+        weights: dict | None = None,
     ) -> list[RetrievalResult]:
         filters = filters or {}
         project_id = filters.get("project_id")
@@ -226,21 +274,34 @@ class SQLiteFTSRetriever:
                 JOIN claims c ON c.id = claims_fts.claim_id
                 WHERE {' AND '.join(clauses)}
                 GROUP BY c.id
-                ORDER BY c.created_at DESC, c.id ASC
-                LIMIT ?
             """
         else:
-            # An empty search is a bounded recent-claims listing and does not
-            # scan the FTS virtual table.
+            # Empty searches rank eligible metadata without scanning FTS.
             sql = f"""
                 SELECT c.*
                 FROM claims c
                 WHERE {' AND '.join(clauses)}
-                ORDER BY c.created_at DESC, c.id ASC
-                LIMIT ?
             """
-        params.append(candidate_limit)
         rows = self.connection.execute(sql, params).fetchall()
+        if row_filter is not None:
+            rows = row_filter(rows)
+        # Every supported policy feature must participate before the bound.
+        features = ranking_features(self.connection, [row["id"] for row in rows], project_id)
+        lexical_scores = {row["id"]: lexical_score(query, [row["subject"], row["predicate"], row["object"],
+                          row["memory_type"], claim_text(row["subject"], row["predicate"], row["object"])]) for row in rows}
+        def preliminary_score(row):
+            flags = features[row["id"]]
+            return deterministic_score(
+                lexical=lexical_scores[row["id"]],
+                confidence_effective=row["confidence_effective"], memory_type=row["memory_type"], status=row["status"],
+                project_relevance=float(flags["project"]), created_at=row["created_at"], importance=row["importance"],
+                conflict_ids=[True] if flags["conflict"] else [], last_verified_at=row["last_verified_at"],
+                half_life_days=row["half_life_days"], weights=weights,
+                unresolved_conflict=bool(flags["unresolved"]), duplicate=bool(flags["duplicate"]),
+            )
+        scores = {row["id"]: preliminary_score(row) for row in rows}
+        rows.sort(key=lambda row: (-scores[row["id"]], -row["confidence_effective"], row["created_at"], row["id"]))
+        rows = rows[:candidate_limit]
         claim_ids = [row["id"] for row in rows]
         evidence_by_claim = self._evidence_ids_by_claim(claim_ids)
         conflict_by_claim = self._conflict_ids_by_claim(claim_ids)
@@ -250,32 +311,8 @@ class SQLiteFTSRetriever:
             evidence_ids = evidence_by_claim.get(row["id"], [])
             conflict_ids = conflict_by_claim.get(row["id"], [])
             project_ids = project_by_claim.get(row["id"], [])
-            project_relevance = 1.0 if project_id and project_id in project_ids else 0.0
-            lexical = lexical_score(
-                query,
-                [
-                    row["subject"],
-                    row["predicate"],
-                    row["object"],
-                    row["memory_type"],
-                    claim_text(row["subject"], row["predicate"], row["object"]),
-                ],
-            )
-            # Metadata-only retrieval should still rank deterministically.
-            if not query.strip():
-                lexical = 0.0
-            score = deterministic_score(
-                lexical=lexical,
-                confidence_effective=row["confidence_effective"],
-                memory_type=row["memory_type"],
-                status=row["status"],
-                project_relevance=project_relevance,
-                created_at=row["created_at"],
-                importance=row["importance"],
-                conflict_ids=conflict_ids,
-                last_verified_at=row["last_verified_at"],
-                half_life_days=row["half_life_days"],
-            )
+            lexical = lexical_scores[row["id"]]
+            score = scores[row["id"]]
             results.append(
                 RetrievalResult(
                     claim_id=row["id"],
@@ -321,6 +358,19 @@ class SQLiteFTSRetriever:
             claim_ids,
         ).fetchall()
         return _group_ids(rows, "claim_id", "evidence_id")
+
+    def _penalty_flags(self, claim_ids: list[str]) -> dict[str, dict]:
+        if not claim_ids:
+            return {}
+        rows = self.connection.execute(f"""
+            SELECT c.id,
+              EXISTS (SELECT 1 FROM conflict_family_claims cfc JOIN conflict_families cf ON cf.id = cfc.conflict_id
+                      WHERE cfc.claim_id = c.id AND cf.status = 'unresolved') AS unresolved,
+              EXISTS (SELECT 1 FROM claim_relationships cr WHERE cr.relationship_type = 'duplicate_of'
+                      AND (cr.source_claim_id = c.id OR cr.target_claim_id = c.id)) AS duplicate
+            FROM claims c WHERE c.id IN ({','.join('?' for _ in claim_ids)})
+            """, claim_ids).fetchall()
+        return {row["id"]: dict(row) for row in rows}
 
     def _conflict_ids_by_claim(self, claim_ids: list[str]) -> dict[str, list[str]]:
         if not claim_ids:

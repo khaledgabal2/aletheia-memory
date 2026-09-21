@@ -25,11 +25,17 @@ clear audit trail.
 
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
-- Version: `1.5.0`
+- Version: `1.6.0`
+- Maturity: beta; intended for development and evaluation, not production use.
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
-- Distribution: published on PyPI; source installs and release wheels are also supported.
+- Distribution: [PyPI 1.6.0](https://pypi.org/project/aletheia-memory/1.6.0/); source installs and release wheels are also supported.
+
+1.6.0 includes the audit repairs and stricter access, privacy, and execution
+checks. See the [1.6.0 beta upgrade guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_6_0_upgrade.md)
+for compatibility changes, a fresh start with disposable data, or preserving an
+existing database.
 
 ## What Aletheia Provides
 
@@ -510,11 +516,12 @@ python -m pytest
 
 A reviewed wheel can instead be installed by its local path. Development
 checkouts may contain unreleased changes; use a pinned published version for
-production. Never commit credentials or private databases.
+repeatable evaluation. All releases so far are beta. Never commit credentials or
+private databases.
 
 ## Local Application Pairing
 
-Memory 1.5.0 automatically advertises POSIX loopback services and
+Since 1.5.0, Memory automatically advertises POSIX loopback services and
 supports owner-approved, scoped pairing over a persistent local TLS identity.
 Use `aletheia pairing invite --help` to create a five-minute code. Discovery alone
 never authorizes access. See the [local pairing protocol](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/local_pairing_v1.md)

@@ -289,7 +289,8 @@ aletheia plugins logs plug_... --db ./aletheia.db
 Common causes:
 
 - Manifest is missing required fields.
-- Plugin compatibility does not match Aletheia v1.3.0.
+- Plugin compatibility does not match Aletheia's API contract version
+  (`1.3.0`, distinct from the package version).
 - Required permissions were not approved at enable time.
 - The plugin tried a high-risk operation such as active claim writing.
 
@@ -307,7 +308,7 @@ Run:
 python scripts/release_gate.py --branch main
 ```
 
-The generic production baseline rejects product-specific integration paths.
+The generic project baseline rejects product-specific integration paths.
 Keep personal or product-specific layers on a branch or fork.
 
 Also run:

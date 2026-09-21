@@ -7,17 +7,19 @@ The source of truth for this page is the code and tests in this repository, espe
 
 Aletheia is a local, auditable memory system for AI agents.
 
+The current release is 1.6.0 beta, for development and evaluation.
+
 The current implementation is a Python package named `aletheia-memory` with:
 
 - An in-process memory kernel exposed by `aletheia.Memory`.
-- A SQLite-backed store and migration schema at version `1.3.0`.
+- A SQLite-backed store and migration schema at version `1.3.1`.
 - A command-line interface named `aletheia`.
-- A dependency-free local HTTP service under `/v1/*`.
+- A local HTTP service under `/v1/*`; the package requires cryptography 50.0.1+.
 - A Python HTTP client SDK, including sync and async clients.
 - An MCP-style tool registry for local agents.
 - A small generic HTTP agent adapter.
 - Local plugin, conformance, compatibility, diagnostics, and v1 gate surfaces.
-- Local production controls for backup, restore, protected mode, redaction, forget/tombstone, retention, integrity checks, import/export, support bundles, benchmarks, release manifests, and readiness checks.
+- Local operational controls for backup, restore, protected mode, redaction, forget/tombstone, retention, integrity checks, import/export, support bundles, benchmarks, release manifests, and readiness checks.
 
 Aletheia stores memory as evidence-backed records. Raw evidence, extracted candidates, promoted claims, conflicts, confidence snapshots, review decisions, context packs, audit records, operational traces, service logs, and platform records live in the configured SQLite database unless explicitly exported.
 

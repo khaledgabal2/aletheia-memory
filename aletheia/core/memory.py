@@ -6,16 +6,18 @@ import json
 import math
 import os
 import re
+import sqlite3
 from dataclasses import asdict, replace
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 import aletheia.core.federation as federation
 import aletheia.core.hardening as production
 import aletheia.core.platform as stable_platform
+from aletheia.retrieval.policy import ranking_config, context_config, weighted_score
 from aletheia.core.errors import NotFoundError, ValidationError
 from aletheia.core.ids import content_hash, new_id, stable_event_id
 from aletheia.core.time import parse_iso, utc_now, utc_now_iso
@@ -105,6 +107,8 @@ from aletheia.retrieval.lexical import (
     governed_claim_filter,
     lexical_score,
     recency_score,
+    ranking_features,
+    staleness_penalty,
 )
 from aletheia.semantic import (
     SQLiteVectorStore,
@@ -486,6 +490,7 @@ class Memory:
         self.namespace = namespace
         self.config = config or {}
         self.retriever = SQLiteFTSRetriever(store.connection)
+        production.repair_protected_span_copies(self)
 
     @classmethod
     def open(
@@ -754,6 +759,18 @@ class Memory:
 
     def rotate_federation_key(self, **kwargs):
         return federation.rotate_federation_key(self, **kwargs)
+
+    def public_federation_identity(self):
+        return federation.public_federation_identity(self)
+
+    def replace_peer_key(self, peer_id: str, **kwargs):
+        return federation.replace_peer_key(self, peer_id, **kwargs)
+
+    def recover_share_bundle_for_review(self, **kwargs):
+        return federation.recover_share_bundle_for_review(self, **kwargs)
+
+    def read_federation_recovery_review(self, **kwargs):
+        return federation.read_federation_recovery_review(self, **kwargs)
 
     def federation_status(self):
         return federation.federation_status(self)
@@ -1544,8 +1561,12 @@ class Memory:
         candidate = self.read_candidate(candidate_id)
         if candidate.namespace != namespace:
             raise ValidationError("LLM duplicate merge suggestion candidate belongs to a different namespace.")
-        evidence = self._llm_allowed_evidence(namespace=namespace, evidence_ids=candidate.evidence_ids, provider=provider, model=model)
         merge_candidates = self._llm_merge_candidates(candidate)
+        evidence_ids = list(candidate.evidence_ids)
+        for target in merge_candidates:
+            source = self.read_claim(target["id"]) if target["target_type"] == "claim" else self.read_candidate(target["id"])
+            evidence_ids.extend(source.evidence_ids)
+        evidence = self._llm_allowed_evidence(namespace=namespace, evidence_ids=sorted(set(evidence_ids)), provider=provider, model=model)
         output = self._llm_source_task(
             namespace=namespace,
             task_type="suggest_duplicate_merge",
@@ -3544,6 +3565,7 @@ class Memory:
         *,
         eval_set_id: str,
         policy_version_id: str | None = None,
+        context_policy_version_id: str | None = None,
         retrieval_mode: str = "hybrid",
         context_pack: bool = True,
         limit: int = 10,
@@ -3552,6 +3574,10 @@ class Memory:
         eval_set = self.get_eval_set(eval_set_id)
         if eval_set.namespace != namespace:
             raise ValidationError("Evaluation set belongs to a different namespace.")
+        policy = self._ranking_policy_for_read(namespace, policy_version_id)
+        policy_version_id = policy.id
+        if context_pack:
+            context_policy_version_id, context_configured = self._context_policy_for_read(namespace, context_policy_version_id)
         cases = self.list_eval_cases(eval_set_id)
         started = utc_now()
         result_rows: list[dict[str, Any]] = []
@@ -3580,6 +3606,7 @@ class Memory:
                 limit=limit,
                 project_id=case.project_id,
                 session_id=case.session_id,
+                policy_version_id=policy_version_id,
             )
             pack = (
                 self.context_pack(
@@ -3588,9 +3615,8 @@ class Memory:
                     project_id=case.project_id,
                     session_id=case.session_id,
                     retrieval_mode=retrieval_mode,
-                    token_budget=1500,
-                    include_derivation_metadata=False,
                     policy_version_id=policy_version_id,
+                    context_policy_version_id=context_policy_version_id,
                     record_usage=False,
                 )
                 if context_pack
@@ -3612,7 +3638,10 @@ class Memory:
                 pack=pack,
                 started=case_started,
             )
-            failure_reasons = self._evaluation_failure_reasons(case_metrics)
+            failure_reasons = self._evaluation_failure_reasons(case_metrics, thresholds=policy.thresholds)
+            if context_pack:
+                failure_reasons += self._evaluation_failure_reasons(case_metrics, thresholds=context_configured["thresholds"])
+                failure_reasons = list(dict.fromkeys(failure_reasons))
             result_rows.append(
                 {
                     "case": case,
@@ -3652,7 +3681,7 @@ class Memory:
                 metrics=metrics,
                 passed=passed,
                 created_at=utc_now_iso(),
-                metadata={"dry_run": True},
+                metadata={"dry_run": True, "context_policy_version_id": context_policy_version_id},
             )
         now = utc_now_iso()
         with self.store.transaction():
@@ -3674,7 +3703,8 @@ class Memory:
                     int(passed),
                     now,
                     json.dumps(metrics, sort_keys=True),
-                    json.dumps({"duration_ms": (utc_now() - started).total_seconds() * 1000}, sort_keys=True),
+                    json.dumps({"duration_ms": (utc_now() - started).total_seconds() * 1000,
+                                "context_policy_version_id": context_policy_version_id}, sort_keys=True),
                 ),
             )
             for row in result_rows:
@@ -4017,6 +4047,7 @@ class Memory:
             )
         return self.get_policy_proposal(proposal_id)
 
+    @_atomic_review
     def apply_policy_proposal(
         self,
         proposal_id: str,
@@ -4028,6 +4059,8 @@ class Memory:
         proposal = self.get_policy_proposal(proposal_id)
         if proposal.status != "approved":
             raise ValidationError("Policy proposal must be approved before application.")
+        if proposal.policy_type not in {"ranking", "context_pack"}:
+            raise ValidationError("Only ranking and context_pack policies have executable application support.")
         if require_evaluation_pass:
             passed, failures = self._policy_gate_status(proposal.evaluation_run_id)
             if not passed:
@@ -4036,10 +4069,15 @@ class Memory:
         if proposal.policy_type == "ranking":
             policy_id = proposal.target_policy_id or "rpol_default"
             policy = self.get_ranking_policy(policy_id)
+            if policy.namespace not in {None, proposal.namespace}:
+                raise ValidationError("Policy belongs to another namespace.")
             old_version_id = policy.active_version_id
+            base = self._ranking_policy_for_read(proposal.namespace, old_version_id)
+            config = ranking_config(proposal.proposed_config,
+                {"weights": base.weights, "filters": base.filters, "thresholds": base.thresholds})
             new_version_id = self._create_ranking_policy_version(
                 policy_id=policy_id,
-                config=proposal.proposed_config,
+                config=config,
                 created_by=f"proposal:{proposal.id}",
                 status="active",
                 evaluation_summary=self._evaluation_summary(proposal.evaluation_run_id),
@@ -4057,9 +4095,12 @@ class Memory:
         elif proposal.policy_type == "context_pack":
             policy_id = proposal.target_policy_id or "cpol_default"
             old_version_id = self._active_context_policy_version_id(policy_id)
+            if old_version_id is None:
+                raise ValidationError("Context policy must exist before application.")
+            _, base = self._context_policy_for_read(proposal.namespace, old_version_id)
             new_version_id = self._create_context_policy_version(
                 policy_id=policy_id,
-                config=proposal.proposed_config,
+                config=context_config(proposal.proposed_config, base),
                 created_by=f"proposal:{proposal.id}",
                 status="active",
                 evaluation_summary=self._evaluation_summary(proposal.evaluation_run_id),
@@ -4074,8 +4115,20 @@ class Memory:
                     "UPDATE context_pack_policies SET active_version_id = ?, updated_at = ? WHERE id = ?",
                     (new_version_id, utc_now_iso(), policy_id),
                 )
-        else:
-            new_version_id = self._stable_id("polv", proposal.policy_type, proposal.id)
+        if require_evaluation_pass:
+            prior = self.read_evaluation_run(proposal.evaluation_run_id)
+            if prior.namespace != proposal.namespace:
+                raise ValidationError("Policy evaluation belongs to another namespace.")
+            evaluated = self.run_evaluation(
+                proposal.namespace, eval_set_id=prior.eval_set_id, retrieval_mode=prior.retrieval_mode,
+                policy_version_id=new_version_id if proposal.policy_type == "ranking" else None,
+                context_policy_version_id=new_version_id if proposal.policy_type == "context_pack" else None,
+            )
+            if not evaluated.passed:
+                raise ValidationError("The proposed policy version failed its evaluation gate.")
+            table = "ranking_policy_versions" if proposal.policy_type == "ranking" else "context_pack_policy_versions"
+            self.store.connection.execute(f"UPDATE {table} SET evaluation_summary_json = ? WHERE id = ?",
+                (json.dumps(self._evaluation_summary(evaluated.id), sort_keys=True), new_version_id))
         app_id = new_id("app")
         now = utc_now_iso()
         with self.store.transaction():
@@ -4210,6 +4263,7 @@ class Memory:
         ).fetchall()
         return [RankingPolicyVersion.from_row(row) for row in rows]
 
+    @_atomic_review
     def rollback_policy(
         self,
         namespace: str,
@@ -4219,22 +4273,31 @@ class Memory:
         reason: str,
         rolled_back_by: str = "user",
     ) -> RollbackRecord:
-        policy = self.get_ranking_policy(policy_id)
-        self.get_ranking_policy_version(target_version_id)
-        from_version_id = policy.active_version_id
+        table, versions = "ranking_policies", "ranking_policy_versions"
+        policy = self.store.connection.execute(f"SELECT * FROM {table} WHERE id = ?", (policy_id,)).fetchone()
+        if policy is None:
+            table, versions = "context_pack_policies", "context_pack_policy_versions"
+            policy = self.store.connection.execute(f"SELECT * FROM {table} WHERE id = ?", (policy_id,)).fetchone()
+        if policy is None or policy["namespace"] not in {None, namespace}:
+            raise ValidationError("Policy is unavailable in this namespace.")
+        version = self.store.connection.execute(f"SELECT 1 FROM {versions} WHERE id = ? AND policy_id = ?",
+            (target_version_id, policy_id)).fetchone()
+        if version is None:
+            raise ValidationError("Rollback version must belong to the selected policy.")
+        from_version_id = policy["active_version_id"]
         rollback_id = new_id("roll")
         with self.store.transaction():
             if from_version_id:
                 self.store.connection.execute(
-                    "UPDATE ranking_policy_versions SET status = 'rolled_back' WHERE id = ?",
+                    f"UPDATE {versions} SET status = 'rolled_back' WHERE id = ?",
                     (from_version_id,),
                 )
             self.store.connection.execute(
-                "UPDATE ranking_policy_versions SET status = 'active' WHERE id = ?",
+                f"UPDATE {versions} SET status = 'active' WHERE id = ?",
                 (target_version_id,),
             )
             self.store.connection.execute(
-                "UPDATE ranking_policies SET active_version_id = ?, updated_at = ? WHERE id = ?",
+                f"UPDATE {table} SET active_version_id = ?, updated_at = ? WHERE id = ?",
                 (target_version_id, utc_now_iso(), policy_id),
             )
             self.store.connection.execute(
@@ -4806,6 +4869,13 @@ class Memory:
         job_type: str | None = None,
         max_jobs: int = 10,
     ) -> list[LocalJob]:
+        completed: list[LocalJob] = []
+        for job in self._pending_jobs(namespace=namespace, job_type=job_type, max_jobs=max_jobs):
+            self._run_single_job(job)
+            completed.append(self.get_job(job.id))
+        return completed
+
+    def _pending_jobs(self, *, namespace=None, job_type=None, max_jobs=10) -> list[LocalJob]:
         params: list[object] = [utc_now_iso()]
         clauses = ["status = 'pending'", "(run_after IS NULL OR run_after <= ?)"]
         if namespace:
@@ -4825,10 +4895,13 @@ class Memory:
             """,
             params,
         ).fetchall()
+        return [LocalJob.from_row(row) for row in rows]
+
+    def _run_claimed_jobs(self, job_ids: list[str]) -> list[LocalJob]:
         completed: list[LocalJob] = []
-        for row in rows:
-            job = LocalJob.from_row(row)
-            self._run_single_job(job)
+        for job_id in job_ids:
+            job = self.get_job(job_id)
+            self._run_single_job(job, already_claimed=True)
             completed.append(self.get_job(job.id))
         return completed
 
@@ -5222,8 +5295,12 @@ class Memory:
         project_id: str | None = None,
         session_id: str | None = None,
         limit: int = 10,
+        result_filter: Callable[[list], list] | None = None,
+        claim_filter: Callable[[str], bool] | None = None,
+        query_privacy: str | None = None,
     ) -> TraceRun:
         started = perf_counter()
+        policy_version_id = self._ranking_policy_for_read(namespace).id
         results = self.retrieve(
             namespace=namespace,
             query=query,
@@ -5231,11 +5308,14 @@ class Memory:
             limit=limit,
             project_id=project_id,
             session_id=session_id,
+            policy_version_id=policy_version_id,
+            _read_access=(lambda kind, value: claim_filter(value)) if claim_filter is not None else None,
         )
+        if result_filter is not None:
+            results = result_filter(results)
         trace_id = new_id("trc")
         now = utc_now_iso()
         included_ids = {result.claim_id for result in results}
-        policy_version_id = self._active_ranking_policy_version_id()
         with self.store.transaction():
             self.store.connection.execute(
                 """
@@ -5256,7 +5336,7 @@ class Memory:
                     policy_version_id,
                     int((perf_counter() - started) * 1000),
                     now,
-                    json.dumps({"limit": limit}, sort_keys=True),
+                    json.dumps({"limit": limit, "query_privacy": query_privacy}, sort_keys=True),
                 ),
             )
             self._write_trace_event(trace_id, "retrieval.started", "Retrieval trace captured.", {"query": query})
@@ -5285,6 +5365,8 @@ class Memory:
                     ),
                 )
             for row in self._trace_candidate_claim_rows(namespace=namespace, project_id=project_id, limit=max(limit * 4, 20)):
+                if claim_filter is not None and not claim_filter(row["id"]):
+                    continue
                 if row["id"] in included_ids:
                     continue
                 reason = self._omission_reason_for_claim_row(row, project_id=project_id)
@@ -5327,7 +5409,11 @@ class Memory:
         project_id: str | None = None,
         session_id: str | None = None,
         retrieval_mode: str = "hybrid",
-        token_budget: int = 2000,
+        token_budget: int | None = None,
+        context_filter: Callable[[ContextPack], ContextPack] | None = None,
+        claim_filter: Callable[[str], bool] | None = None,
+        query_privacy: str | None = None,
+        read_access: Callable[[str, str], bool] | None = None,
     ) -> TraceRun:
         started = perf_counter()
         pack = self.context_pack(
@@ -5338,7 +5424,11 @@ class Memory:
             retrieval_mode=retrieval_mode,
             token_budget=token_budget,
             include_derivation_metadata=True,
+            record_usage=False,
+            _read_access=read_access,
         )
+        if context_filter is not None:
+            pack = context_filter(pack)
         trace_id = new_id("trc")
         now = utc_now_iso()
         included_claim_ids = {item.claim_id for item in pack.items()}
@@ -5365,7 +5455,8 @@ class Memory:
                     json.dumps(
                         {
                             "context_pack_id": pack.id,
-                            "token_budget": token_budget,
+                            "token_budget": pack.token_budget,
+                            "query_privacy": query_privacy,
                             "ranking_policy_version_id": pack.ranking_policy_version_id,
                             "warnings": [asdict(warning) for warning in pack.warnings],
                         },
@@ -5424,6 +5515,8 @@ class Memory:
                     ),
                 )
             for row in self._trace_candidate_claim_rows(namespace=namespace, project_id=project_id, limit=50):
+                if claim_filter is not None and not claim_filter(row["id"]):
+                    continue
                 if row["id"] in included_claim_ids:
                     continue
                 if any(omitted.claim_id == row["id"] for omitted in pack.omitted):
@@ -5537,7 +5630,7 @@ class Memory:
                     json.dumps(metrics, sort_keys=True),
                     source,
                     now,
-                    json.dumps({}, sort_keys=True),
+                    json.dumps({"scope_version": 1}, sort_keys=True),
                 ),
             )
         return self.get_metric_snapshot(snapshot_id)
@@ -5554,7 +5647,7 @@ class Memory:
         namespace: str | None = None,
         project_id: str | None = None,
     ) -> MetricSnapshot | None:
-        clauses: list[str] = []
+        clauses: list[str] = ["json_extract(metadata_json, '$.scope_version') = 1"]
         params: list[object] = []
         if namespace is None:
             clauses.append("namespace IS NULL")
@@ -5586,7 +5679,7 @@ class Memory:
         limit: int = 50,
     ) -> list[MetricSnapshot]:
         params: list[object] = []
-        clauses: list[str] = []
+        clauses: list[str] = ["json_extract(metadata_json, '$.scope_version') = 1"]
         if namespace:
             clauses.append("namespace = ?")
             params.append(namespace)
@@ -6464,11 +6557,14 @@ class Memory:
         include_candidates: bool = False,
         recompute_confidence: bool = False,
         record_access: bool = False,
+        policy_version_id: str | None = None,
+        _read_access: Callable[[str, str], bool] | None = None,
     ) -> list[RetrievalResult]:
         namespace = namespace or self.namespace
         query = query or ""
         if mode not in {"lexical", "semantic", "hybrid"}:
             raise ValidationError("Retrieval mode must be lexical, semantic, or hybrid.")
+        policy = self._ranking_policy_for_read(namespace, policy_version_id)
         if recompute_confidence:
             self.recompute_confidence(namespace=namespace)
         merged_filters = dict(filters or {})
@@ -6491,12 +6587,19 @@ class Memory:
         merged_filters["include_disputed"] = include_disputed
         merged_filters["include_archived"] = include_archived
         merged_filters["include_candidates"] = include_candidates
+        merged_filters.setdefault("as_of", utc_now_iso())
+        merged_filters["require_provenance"] = policy.filters["require_provenance"]
+        limit = max(1, int(limit))
         if mode == "lexical":
             results = self.retriever.retrieve(
                 namespace=namespace,
                 query=query,
                 filters=merged_filters,
                 limit=limit,
+                weights=policy.weights,
+                row_filter=lambda rows: self._eligible_claim_rows(
+                    rows, query=query, filters=merged_filters, read_access=_read_access
+                ),
             )
         else:
             results = self._retrieve_semantic_or_hybrid(
@@ -6506,13 +6609,9 @@ class Memory:
                 filters=merged_filters,
                 limit=limit,
                 provider=semantic_provider,
+                weights=policy.weights,
+                read_access=_read_access,
             )
-        results = self._filter_results_by_scope(
-            results,
-            query=query,
-            project_id=project_id,
-            session_id=session_id,
-        )[:limit]
         if record_access:
             now = utc_now_iso()
             with self.store.transaction():
@@ -6548,24 +6647,30 @@ class Memory:
         *,
         session_id: str | None = None,
         project_id: str | None = None,
-        token_budget: int = 1500,
+        token_budget: int | None = None,
         include_sources: bool = True,
         include_confidence: bool = True,
         include_warnings: bool = True,
         retrieval_mode: str = "lexical",
         include_candidate_warnings: bool = False,
-        include_reflections: bool = True,
-        include_inferences: bool = False,
-        include_derivation_metadata: bool = False,
+        include_reflections: bool | None = None,
+        include_inferences: bool | None = None,
+        include_derivation_metadata: bool | None = None,
         policy_version_id: str | None = None,
+        context_policy_version_id: str | None = None,
         record_usage: bool = False,
         explain_policy: bool = False,
+        _read_access: Callable[[str, str], bool] | None = None,
     ) -> ContextPack:
         namespace = namespace or self.namespace
         query = query or ""
         context_pack_id = new_id("ctx")
-        ranking_policy_version_id = policy_version_id or self._active_ranking_policy_version_id()
-        context_policy_version_id = self._active_context_policy_version_id()
+        ranking_policy_version_id = self._ranking_policy_for_read(namespace, policy_version_id).id
+        context_policy_version_id, config = self._context_policy_for_read(namespace, context_policy_version_id)
+        token_budget = config["token_budget"] if token_budget is None else token_budget
+        include_reflections = config["include_reflections"] if include_reflections is None else include_reflections
+        include_inferences = config["include_inferences"] if include_inferences is None else include_inferences
+        include_derivation_metadata = config["include_derivation_metadata"] if include_derivation_metadata is None else include_derivation_metadata
         results = self.retrieve(
             namespace=namespace,
             query=query,
@@ -6574,6 +6679,8 @@ class Memory:
             project_id=project_id,
             session_id=None,
             recompute_confidence=False,
+            _read_access=_read_access,
+            policy_version_id=ranking_policy_version_id,
         )
         ambient_results = self.retrieve(
             namespace=namespace,
@@ -6585,6 +6692,8 @@ class Memory:
             min_confidence=0.70,
             project_id=project_id,
             recompute_confidence=False,
+            _read_access=_read_access,
+            policy_version_id=ranking_policy_version_id,
         )
         result_by_id = {result.claim_id: result for result in results}
         for result in ambient_results:
@@ -6602,6 +6711,8 @@ class Memory:
                 project_id=project_id,
                 memory_types=["project", "project_state", "session_summary"],
                 recompute_confidence=False,
+                _read_access=_read_access,
+                policy_version_id=ranking_policy_version_id,
             )
             result_by_id = {result.claim_id: result for result in results}
             for result in project_results:
@@ -6615,6 +6726,8 @@ class Memory:
                 namespace=namespace,
                 session_id=session_id,
                 project_id=project_id,
+                read_access=_read_access,
+                policy_version_id=ranking_policy_version_id,
             )
             result_by_id = {result.claim_id: result for result in results}
             for result in session_results:
@@ -6652,14 +6765,25 @@ class Memory:
                 )
             )
 
+        if _read_access is not None:
+            warnings = [
+                warning for warning in warnings
+                if warning.warning_type == "unresolved_conflict" and warning.claim_ids
+                and all(_read_access("claim", value) for value in warning.claim_ids)
+                and all(_read_access("conflict", value) for value in warning.conflict_ids)
+            ]
         used_tokens = self._estimate_warning_tokens(warnings)
         if include_reflections:
             for reflection in self.list_reflections(
                 namespace=namespace,
                 status="active",
                 project_id=project_id,
-                limit=12,
+                limit=2147483647 if _read_access is not None else 12,
             ):
+                if _read_access is not None and not _read_access("reflection", reflection.id):
+                    continue
+                if len(reflection_memory) >= 12:
+                    break
                 item = ContextItem(
                     text=reflection.text,
                     claim_id=reflection.id,
@@ -6692,12 +6816,17 @@ class Memory:
                 used_tokens += item_tokens
 
         if include_inferences:
+            included_inferences = 0
             for inference in self.list_inferences(
                 namespace,
                 status="validated",
                 project_id=project_id,
-                limit=10,
+                limit=2147483647 if _read_access is not None else 10,
             ):
+                if _read_access is not None and not _read_access("inference", inference.id):
+                    continue
+                if included_inferences >= 10:
+                    break
                 item = ContextItem(
                     text=inference.text,
                     claim_id=inference.id,
@@ -6727,6 +6856,7 @@ class Memory:
                     )
                     continue
                 relevant_memory.append(item)
+                included_inferences += 1
                 used_tokens += item_tokens
 
         for result in results:
@@ -7671,6 +7801,9 @@ class Memory:
         superseded_claim_ids = list(superseded_claim_ids or [])
         rejected_claim_ids = list(rejected_claim_ids or [])
         scoped_claims = list(scoped_claims or [])
+        targets = superseded_claim_ids + rejected_claim_ids + [item.get("claim_id") for item in scoped_claims]
+        if any(target not in claim_ids for target in targets):
+            raise ValidationError("Resolution targets must belong to the conflict.")
         if selected_active and not superseded_claim_ids and strategy not in {
             "context_scope",
             "time_scope",
@@ -8817,12 +8950,15 @@ class Memory:
                 span.evidence_id,
                 span.start_char,
                 span.end_char,
-                span.text,
+                self._stored_evidence_span_text(span.evidence_id, span.text),
                 span.role,
                 utc_now_iso(),
             ),
         )
         return span_id
+
+    def _stored_evidence_span_text(self, evidence_id: str, text: str) -> str:
+        return production.evidence_span_text_for_storage(self, evidence_id, text)
 
     def _candidate_duplicate_risk(
         self,
@@ -9110,7 +9246,8 @@ class Memory:
             """,
             (candidate_id,),
         ).fetchall()
-        return [EvidenceSpan.from_row(row) for row in rows]
+        return [replace(EvidenceSpan.from_row(row), text=self.read_event(row["evidence_id"]).content[row["start_char"]:row["end_char"]])
+                if row["span_text"] == "" else EvidenceSpan.from_row(row) for row in rows]
 
     def _labels_for_target(self, target_id: str, target_type: str) -> list[str]:
         rows = self.store.connection.execute(
@@ -9436,7 +9573,7 @@ class Memory:
                         evidence_id,
                         risk_type,
                         severity,
-                        content[match.start():match.end()],
+                        self._stored_evidence_span_text(evidence_id, content[match.start():match.end()]),
                         match.start(),
                         match.end(),
                         "Imported content treated as untrusted evidence.",
@@ -10501,6 +10638,29 @@ class Memory:
         ).fetchone()
         return row["active_version_id"] if row else None
 
+    def _ranking_policy_for_read(self, namespace: str, version_id: str | None = None) -> RankingPolicyVersion:
+        row = self.store.connection.execute("""
+            SELECT v.*, p.namespace AS policy_namespace FROM ranking_policy_versions v
+            JOIN ranking_policies p ON p.id = v.policy_id
+            WHERE v.id = COALESCE(?, (SELECT active_version_id FROM ranking_policies WHERE id = 'rpol_default'))
+        """, (version_id,)).fetchone()
+        if row is None or row["policy_namespace"] not in {None, namespace}:
+            raise ValidationError("Ranking policy version is unavailable in this namespace.")
+        version = RankingPolicyVersion.from_row(row)
+        config = ranking_config({"weights": version.weights, "filters": version.filters, "thresholds": version.thresholds})
+        return replace(version, **config)
+
+    def _context_policy_for_read(self, namespace: str, version_id: str | None = None) -> tuple[str, dict]:
+        row = self.store.connection.execute("""
+            SELECT v.*, p.namespace AS policy_namespace FROM context_pack_policy_versions v
+            JOIN context_pack_policies p ON p.id = v.policy_id
+            WHERE v.id = COALESCE(?, (SELECT active_version_id FROM context_pack_policies WHERE id = 'cpol_default'))
+        """, (version_id,)).fetchone()
+        if row is None or row["policy_namespace"] not in {None, namespace}:
+            raise ValidationError("Context policy version is unavailable in this namespace.")
+        return row["id"], context_config({**json.loads(row["config_json"]),
+            "filters": json.loads(row["filters_json"]), "thresholds": json.loads(row["thresholds_json"])})
+
     def _active_context_policy_version_id(self, policy_id: str = "cpol_default") -> str | None:
         row = self.store.connection.execute(
             "SELECT active_version_id FROM context_pack_policies WHERE id = ?",
@@ -10565,8 +10725,12 @@ class Memory:
             "average_latency_ms": max((utc_now() - started).total_seconds() * 1000.0, 0.0),
         }
 
-    def _evaluation_failure_reasons(self, metrics: dict[str, float]) -> list[str]:
+    def _evaluation_failure_reasons(self, metrics: dict[str, float], *, thresholds: dict | None = None) -> list[str]:
         failures = []
+        for name, value in (thresholds or {}).items():
+            actual = float(metrics.get(name, 0.0))
+            if (actual < value if name == "provenance_preservation_rate" else actual > value):
+                failures.append(f"policy threshold failed: {name}")
         for name in [
             "forbidden_memory_leak_rate",
             "rejected_memory_leak_rate",
@@ -10949,14 +11113,14 @@ class Memory:
             [namespace, namespace],
         )
         recent_context_pack_count = scalar(
-            "SELECT count(*) FROM service_request_log WHERE path IN ('/v1/context-pack', '/v1/context')",
+            f"SELECT count(*) FROM service_request_log WHERE {ns_clause} AND path IN ('/v1/context-pack', '/v1/context')", ns_params,
         )
-        recent_service_request_count = scalar("SELECT count(*) FROM service_request_log")
+        recent_service_request_count = scalar(f"SELECT count(*) FROM service_request_log WHERE {ns_clause}", ns_params)
         avg_retrieval_latency = scalar(
-            "SELECT avg(duration_ms) FROM service_request_log WHERE path IN ('/v1/retrieve', '/v1/search')"
+            f"SELECT avg(duration_ms) FROM service_request_log WHERE {ns_clause} AND path IN ('/v1/retrieve', '/v1/search')", ns_params
         )
         avg_context_latency = scalar(
-            "SELECT avg(duration_ms) FROM service_request_log WHERE path IN ('/v1/context-pack', '/v1/context')"
+            f"SELECT avg(duration_ms) FROM service_request_log WHERE {ns_clause} AND path IN ('/v1/context-pack', '/v1/context')", ns_params
         )
         policy_proposals_pending = scalar(f"SELECT count(*) FROM policy_proposals WHERE {ns_clause} AND status = 'pending_review'", ns_params)
         warning_count = 0
@@ -10974,11 +11138,12 @@ class Memory:
             warning_count = len(json.loads(latest_health["warnings_json"] or "[]"))
         eval_rows = self.store.connection.execute(
             """
-            SELECT metric_name, metric_value, passed
-            FROM evaluation_metrics
-            ORDER BY created_at DESC
+            SELECT em.metric_name, em.metric_value, em.passed
+            FROM evaluation_metrics em JOIN evaluation_runs er ON er.id = em.evaluation_run_id
+            WHERE (? IS NULL OR er.namespace = ?)
+            ORDER BY em.created_at DESC
             LIMIT 100
-            """
+            """, (namespace, namespace)
         ).fetchall()
         eval_pass_rate = 1.0
         if eval_rows:
@@ -11002,7 +11167,7 @@ class Memory:
             "average_retrieval_latency": avg_retrieval_latency,
             "average_context_pack_latency": avg_context_latency,
             "context_packs_generated": recent_context_pack_count,
-            "service_requests_by_endpoint": self._service_requests_by_endpoint(),
+            "service_requests_by_endpoint": self._service_requests_by_endpoint(namespace=namespace),
             "failed_jobs": failed_job_count,
             "pending_jobs": pending_job_count,
             "evaluation_pass_rate": eval_pass_rate,
@@ -11011,14 +11176,15 @@ class Memory:
             "project_id": project_id,
         }
 
-    def _service_requests_by_endpoint(self) -> dict[str, int]:
+    def _service_requests_by_endpoint(self, *, namespace=None) -> dict[str, int]:
         rows = self.store.connection.execute(
             """
             SELECT path, count(*) AS count
             FROM service_request_log
+            WHERE (? IS NULL OR namespace = ?)
             GROUP BY path
             ORDER BY count DESC, path ASC
-            """
+            """, (namespace, namespace)
         ).fetchall()
         return {row["path"]: row["count"] for row in rows}
 
@@ -11043,7 +11209,8 @@ class Memory:
             payload["policy_proposals"] = [asdict(item) for item in self.list_policy_proposals(namespace=namespace, limit=100)]
         elif report_type == "service_activity":
             rows = self.store.connection.execute(
-                "SELECT * FROM service_request_log ORDER BY created_at DESC LIMIT 100"
+                "SELECT * FROM service_request_log WHERE (? IS NULL OR namespace = ?) ORDER BY created_at DESC LIMIT 100",
+                (namespace, namespace)
             ).fetchall()
             payload["service_requests"] = [dict(row) for row in rows]
         elif report_type == "audit_summary":
@@ -11087,30 +11254,15 @@ class Memory:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
-    def _run_single_job(self, job: LocalJob) -> None:
-        if not self._claim_pending_job(job):
+    def _run_single_job(self, job: LocalJob, *, already_claimed: bool = False) -> None:
+        if already_claimed and job.status != "running":
+            raise ValidationError("The claimed job is no longer running.")
+        if not already_claimed and not self._claim_pending_job(job):
             return
         try:
             self._execute_job(job)
         except Exception as exc:  # noqa: BLE001 - job queue records operational failures.
-            updated = self.get_job(job.id)
-            status = "failed" if updated.attempts >= updated.max_attempts else "pending"
-            with self.store.transaction():
-                self.store.connection.execute(
-                    """
-                    UPDATE local_jobs
-                    SET status = ?, last_error = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (status, str(exc), utc_now_iso(), job.id),
-                )
-                self._write_audit(
-                    namespace=job.namespace or "global",
-                    target_type="local_job",
-                    target_id=job.id,
-                    action="job.failed",
-                    details={"error": str(exc), "status": status},
-                )
+            self._fail_running_job(job.id, str(exc))
             return
         with self.store.transaction():
             self.store.connection.execute(
@@ -11127,6 +11279,21 @@ class Memory:
                 target_id=job.id,
                 action="job.completed",
                 details={"job_type": job.job_type},
+            )
+
+    def _fail_running_job(self, job_id: str, error: str) -> None:
+        with self.store.transaction(immediate=True):
+            job = self.get_job(job_id)
+            if job.status != "running":
+                return
+            status = "failed" if job.attempts >= job.max_attempts else "pending"
+            self.store.connection.execute(
+                "UPDATE local_jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?",
+                (status, error, utc_now_iso(), job.id),
+            )
+            self._write_audit(
+                namespace=job.namespace or "global", target_type="local_job", target_id=job.id,
+                action="job.failed", details={"error": error, "status": status},
             )
 
     def _claim_pending_job(self, job: LocalJob) -> bool:
@@ -11835,14 +12002,17 @@ class Memory:
         filters: dict,
         limit: int,
         provider: str | None = None,
+        weights: dict,
+        read_access: Callable[[str, str], bool] | None = None,
     ) -> list[RetrievalResult]:
         limit = max(1, int(limit))
         candidate_limit = max(limit, min(max(limit * 20, 100), 1000))
-        rows = self._governed_claim_rows(
-            namespace=namespace,
-            filters=filters,
-            limit=candidate_limit,
+        rows = self._eligible_claim_rows(
+            self._governed_claim_rows(namespace=namespace, filters=filters),
+            query=query, filters=filters, read_access=read_access,
         )
+        if not rows:
+            return []
         semantic_scores = self._semantic_scores_for_query(
             namespace=namespace,
             query=query,
@@ -11850,51 +12020,34 @@ class Memory:
             provider=provider,
             target_ids=[row["id"] for row in rows],
         )
+        lexical_scores = {
+            row["id"]: lexical_score(query, [row["subject"], row["predicate"], row["object"], row["memory_type"],
+                claim_text(row["subject"], row["predicate"], row["object"])])
+            for row in rows
+        }
+        if mode == "semantic" and semantic_scores:
+            rows = [row for row in rows if semantic_scores.get(row["id"], 0.0) > 0.0]
+        features = ranking_features(self.store.connection, [row["id"] for row in rows], filters.get("project_id"))
+        def preliminary_score(row):
+            flags = features[row["id"]]
+            return self._hybrid_score_for_row(row=row,
+                lexical=0.0 if mode == "semantic" and semantic_scores else lexical_scores[row["id"]],
+                semantic=semantic_scores.get(row["id"], 0.0), project_relevance=float(flags["project"]),
+                conflict_ids=[True] if flags["conflict"] else [], has_unresolved_conflict=bool(flags["unresolved"]),
+                has_duplicate_relationship=bool(flags["duplicate"]), weights=weights)
+        scores = {row["id"]: preliminary_score(row) for row in rows}
+        rows = sorted(rows, key=lambda row: (-scores[row["id"]], -semantic_scores.get(row["id"], 0.0),
+                      -lexical_scores[row["id"]], -row["confidence_effective"], row["id"]))[:candidate_limit]
         claim_ids = [row["id"] for row in rows]
         project_ids_by_claim = self._project_ids_for_claims(claim_ids)
         conflict_ids_by_claim = self._conflict_ids_for_claims(claim_ids)
         evidence_ids_by_claim = self._evidence_ids_for_claims(claim_ids)
-        unresolved_conflict_claim_ids = self._claim_ids_with_unresolved_conflicts(claim_ids)
-        duplicate_claim_ids = self._claim_ids_with_duplicate_relationships(claim_ids)
-        scope_rows_by_claim = self._scope_rows_by_claim(claim_ids)
         results: list[RetrievalResult] = []
         for row in rows:
             project_ids = project_ids_by_claim.get(row["id"], [])
-            project_id = filters.get("project_id")
-            session_id = filters.get("session_id")
-            if not self._scope_rows_match(
-                scope_rows_by_claim.get(row["id"], []),
-                query=query,
-                project_id=project_id,
-                session_id=session_id,
-            ):
-                continue
-            lexical = lexical_score(
-                query,
-                [
-                    row["subject"],
-                    row["predicate"],
-                    row["object"],
-                    row["memory_type"],
-                    claim_text(row["subject"], row["predicate"], row["object"]),
-                ],
-            )
-            if not query.strip():
-                lexical = 0.0
+            lexical = lexical_scores[row["id"]]
             semantic = semantic_scores.get(row["id"], 0.0)
-            if mode == "semantic" and semantic_scores and semantic <= 0.0:
-                continue
-            score = self._hybrid_score_for_row(
-                row=row,
-                lexical=0.0 if mode == "semantic" and semantic_scores else lexical,
-                semantic=semantic,
-                project_relevance=1.0 if project_id and project_id in project_ids else 0.0,
-                conflict_ids=conflict_ids_by_claim.get(row["id"], []),
-                has_unresolved_conflict=row["id"] in unresolved_conflict_claim_ids,
-                has_duplicate_relationship=row["id"] in duplicate_claim_ids,
-            )
-            if mode == "semantic" and not semantic_scores:
-                score = lexical
+            score = scores[row["id"]]
             results.append(
                 RetrievalResult(
                     claim_id=row["id"],
@@ -11965,22 +12118,19 @@ class Memory:
         conflict_ids: list[str],
         has_unresolved_conflict: bool,
         has_duplicate_relationship: bool,
+        weights: dict,
     ) -> float:
         unresolved_conflict = 1.0 if has_unresolved_conflict else 0.0
         duplicate_penalty = 1.0 if has_duplicate_relationship else 0.0
-        return (
-            0.25 * lexical
-            + 0.25 * semantic
-            + 0.15 * float(row["confidence_effective"])
-            + 0.10 * float(row["importance"])
-            + 0.08 * MEMORY_TYPE_PRIORITY.get(row["memory_type"], 0.50)
-            + 0.07 * project_relevance
-            + 0.05 * STATUS_PRIORITY.get(row["status"], 0.20)
-            + 0.05 * recency_score(row["created_at"])
-            - 0.20 * unresolved_conflict
-            - 0.10 * duplicate_penalty
-            - (0.05 if conflict_ids and row["status"] != "active" else 0.0)
-        )
+        return weighted_score(weights, {
+            "lexical_score": lexical, "semantic_score": semantic,
+            "effective_confidence": float(row["confidence_effective"]), "retrieval_salience": float(row["importance"]),
+            "memory_type_priority": MEMORY_TYPE_PRIORITY.get(row["memory_type"], .50), "project_relevance": project_relevance,
+            "status_priority": STATUS_PRIORITY.get(row["status"], .20), "recency_score": recency_score(row["created_at"]),
+            "unresolved_conflict_penalty": unresolved_conflict, "duplicate_penalty": duplicate_penalty,
+            "conflict_penalty": float(bool(conflict_ids and row["status"] != "active")),
+            "staleness_penalty": staleness_penalty(row["created_at"], row["last_verified_at"], row["half_life_days"]),
+        })
 
     def _has_duplicate_relationship(self, claim_id: str) -> bool:
         row = self.store.connection.execute(
@@ -12097,6 +12247,8 @@ class Memory:
         namespace: str,
         session_id: str,
         project_id: str | None,
+        read_access: Callable[[str, str], bool] | None = None,
+        policy_version_id: str | None = None,
     ) -> list[RetrievalResult]:
         try:
             session = self.get_session(session_id)
@@ -12112,6 +12264,8 @@ class Memory:
             memory_types=["session_summary"],
             project_id=continuity_project_id,
             recompute_confidence=False,
+            _read_access=read_access,
+            policy_version_id=policy_version_id,
         )
 
     def _estimate_tokens(self, text: str) -> int:
@@ -13038,18 +13192,35 @@ class Memory:
             )
         ]
 
+    def _eligible_claim_rows(
+        self, rows: list[sqlite3.Row], *, query: str, filters: dict,
+        read_access: Callable[[str, str], bool] | None = None,
+    ) -> list[sqlite3.Row]:
+        scopes = self._scope_rows_by_claim([row["id"] for row in rows])
+        return [
+            row for row in rows
+            if self._scope_rows_match(
+                scopes.get(row["id"], []), query=query, project_id=filters.get("project_id"),
+                session_id=filters.get("session_id"), as_of=filters.get("as_of"),
+            )
+            and (read_access is None or read_access("claim", row["id"]))
+        ]
+
     def _scope_rows_by_claim(self, claim_ids: list[str]) -> dict[str, list[ClaimScope]]:
         if not claim_ids:
             return {}
-        rows = self.store.connection.execute(
-            f"""
-            SELECT *
-            FROM claim_scopes
-            WHERE claim_id IN ({','.join('?' for _ in claim_ids)})
-            ORDER BY claim_id, created_at ASC
-            """,
-            claim_ids,
-        ).fetchall()
+        rows = []
+        for offset in range(0, len(claim_ids), 500):
+            chunk = claim_ids[offset:offset + 500]
+            rows.extend(self.store.connection.execute(
+                f"""
+                SELECT *
+                FROM claim_scopes
+                WHERE claim_id IN ({','.join('?' for _ in chunk)})
+                ORDER BY claim_id, created_at ASC
+                """,
+                chunk,
+            ).fetchall())
         scopes_by_claim: dict[str, list[ClaimScope]] = {}
         for row in rows:
             scopes_by_claim.setdefault(row["claim_id"], []).append(ClaimScope.from_row(row))
@@ -13062,14 +13233,21 @@ class Memory:
         query: str,
         project_id: str | None,
         session_id: str | None,
+        as_of: str | None = None,
     ) -> bool:
         if not scopes:
             return True
-        now = utc_now()
+        now = parse_iso(as_of) or utc_now()
         for scope in scopes:
-            if scope.valid_from and (parse_iso(scope.valid_from) or now) > now:
+            try:
+                starts, ends = parse_iso(scope.valid_from), parse_iso(scope.valid_to)
+            except (ValueError, TypeError, AttributeError):
                 continue
-            if scope.valid_to and (parse_iso(scope.valid_to) or now) < now:
+            if (scope.valid_from is not None and starts is None) or (scope.valid_to is not None and ends is None):
+                continue
+            if starts and starts > now:
+                continue
+            if ends and ends <= now:
                 continue
             if scope.scope_type == "project":
                 if scope.applies_when in {None, project_id}:

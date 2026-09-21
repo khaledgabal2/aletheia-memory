@@ -198,7 +198,8 @@ def test_m9_plugin_manifest_permissions_and_candidate_first_execution(tmp_path):
         assert "unapproved permissions" in denied_logs[0].error
 
         run = memory.run_conformance(suite="plugin", target=installation.id)
-        assert run.status == "passed"
+        assert run.status == "incomplete"
+        assert run.metadata["assurance"] == "structural"
     finally:
         memory.close()
 
@@ -238,12 +239,13 @@ def test_m9_conformance_docs_adapters_doctor_and_v1_gate(tmp_path):
         assert certification.status == "certified"
 
         for suite in ["kernel", "http-api", "mcp", "python-sdk", "context-pack-schema", "plugin", "agent-adapter"]:
-            assert memory.run_conformance(suite=suite).status == "passed"
+            assert memory.run_conformance(suite=suite).status == "incomplete"
 
         doctor = memory.doctor_run()
         assert doctor.status in {"healthy", "healthy_with_warnings"}
         gate = memory.v1_gate_run(metadata={"allow_missing_backup": True})
-        assert gate.status == "passed"
+        assert gate.status == "failed"
+        assert any(item["name"] == "conformance_passed" and item["status"] == "failed" for item in gate.checks)
     finally:
         memory.close()
 
@@ -311,7 +313,7 @@ def test_m9_http_openapi_and_cli_surfaces(tmp_path, capsys):
 
         status, envelope = _post(service, "/v1/v1-gate/run", token, {"metadata": {"allow_missing_backup": True}})
         assert status == 200
-        assert envelope["data"]["status"] == "passed"
+        assert envelope["data"]["status"] == "failed"
 
         schema = openapi_schema()
         assert schema["info"]["version"] == software_version()

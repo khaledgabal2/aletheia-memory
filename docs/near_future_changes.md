@@ -1,10 +1,12 @@
 # Near-Future Changes
 
-This document separates the current v1.4.1 source release from likely future directions.
+This document separates the current 1.6.0 beta release from likely future directions.
+All Memory releases so far are for development and evaluation. Milestone names
+that include "production" describe feature areas, not a production-readiness certification.
 
 Current implementation source:
 
-- `pyproject.toml` declares package version `1.4.1`.
+- `pyproject.toml` declares package version `1.6.0` and Beta maturity.
 - `aletheia/storage/sqlite.py` declares `SCHEMA_VERSION = "1.3.1"`.
 - `docs/v1_public_contracts.md` defines stable v1 surfaces and semver policy.
 - `docs/m10_federated_memory_contract.md` is implemented as the M10 federation-beta milestone.
@@ -12,7 +14,7 @@ Current implementation source:
 - `docs/M12_LLM_Integration_contract.md` is implemented as the M12 governed LLM memory formation milestone.
 - The current CLI, schema, HTTP routes, SDK, tests, and live scorecards include M10 federation, M11 semantic retrieval, and M12 LLM governance.
 
-## Stable In v1.4.0
+## Public v1 Contracts
 
 The repository treats these as stable public contracts:
 
@@ -24,6 +26,11 @@ The repository treats these as stable public contracts:
 - Database migration behavior for the tested release path from storage schema `1.3.0` to `1.3.1`, including encrypted backup and recovery verification.
 
 M10 federation is present as an experimental federation-beta surface. It is additive and local-first.
+
+1.5.0 added local registration and scoped TLS pairing. 1.6.0 includes the 29
+audit repairs and nine follow-up corrections, patched dependencies and refreshed
+TypeScript schemas. See the [beta upgrade guide](v1_6_0_upgrade.md) and
+[release verification](v1_6_0_release_verification.md) for compatibility and evidence.
 
 M11 production semantic retrieval is present as an additive local-first surface. `MockEmbeddingProvider` remains the deterministic default for tests, while `local_hash`, OpenAI-compatible/local HTTP providers, semantic index versioning, `sqlite_local` vector storage, reindex/resume, verification, stale pruning, and protected-mode semantic policies are available through the kernel and CLI.
 
@@ -112,6 +119,10 @@ Revocation prevents future sync and records the limit honestly; it cannot forcib
 
 Future milestones may add relay transports, richer peer discovery, stronger cryptographic key management, richer console federation workflows, richer vector-store plugins, richer provider-specific LLM policies, or richer LLM review workflows. Those should remain explicit, governed, and compatible with existing v1 public contracts.
 
+A general historical-data recovery scanner and production qualification are
+deferred beyond this beta. Existing recovery procedures remain available for
+affected real-data use.
+
 ## Practical Guidance For Integrators
 
 - Tolerate unknown JSON response fields.
@@ -124,4 +135,6 @@ Future milestones may add relay transports, richer peer discovery, stronger cryp
 
 ## Short Version
 
-Aletheia v1.4.0 is a local, stable, auditable memory platform with federation-beta support, production semantic retrieval, and governed LLM memory formation: embeddings improve recall and LLMs can draft candidates or summaries without turning Aletheia into a cloud service, global truth store, or unreviewed truth engine.
+Aletheia 1.6.0 beta is a local, auditable memory platform with governed
+federation, semantic retrieval and LLM memory formation. Embeddings improve
+recall; LLMs draft candidates and summaries for explicit review and governance.

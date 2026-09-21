@@ -13,6 +13,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from aletheia.core.provider_work import deferred_factory
+
 
 class LLMProvider(Protocol):
     name: str
@@ -320,6 +322,7 @@ class PluginLLMProvider:
         return output
 
 
+@deferred_factory
 def provider_for_name(name: str | None, *, model: str | None = None) -> LLMProvider:
     if name in {None, "mock", "mock_llm", "llm"}:
         return MockLLMProvider()

@@ -23,6 +23,7 @@ NAMESPACE = "user/m10"
 @pytest.fixture(autouse=True)
 def _configured_federation_key(monkeypatch):
     monkeypatch.setenv("ALETHEIA_FEDERATION_KEY", "m10-test-federation-key")
+    monkeypatch.setenv("ALETHEIA_FEDERATION_RECOVERY_KEY", "m10-test-recovery-key")
 
 
 def _json(payload: dict) -> bytes:
@@ -84,7 +85,7 @@ def test_m10_migration_backfills_federation_contracts_without_implicit_identity(
         contracts = {contract.name for contract in memory.list_public_contracts()}
         assert {"Federation protocol v1", "Aletheia sync bundle format", "Python SDK federation methods"} <= contracts
         assert {policy.id for policy in memory.list_import_trust_policies()} >= {"itp_candidate_only", "itp_trusted_device"}
-        assert memory.federation_conformance()["status"] == "passed"
+        assert memory.federation_conformance()["status"] == "structural_passed"
     finally:
         memory.close()
 
@@ -121,7 +122,9 @@ def test_federation_identity_private_key_ref_is_encrypted_and_requires_key(monke
         private_ref = identity.metadata["private_key_ref"]
         assert private_ref.startswith("local_enc_v2_")
         assert "private_key" not in private_ref
-        protected.rotate_federation_key(reason="prove encrypted key material can be used", actor="pytest")
+        protected.rotate_federation_key(reason="prove encrypted key material can be used", actor="pytest",
+                                        expected_fingerprint=identity.key_fingerprint,
+                                        recovery_path=str(tmp_path / "protected.recovery"))
         rotated = protected.active_federation_identity()
         assert rotated.metadata["private_key_ref"].startswith("local_enc_v2_")
     finally:
@@ -136,7 +139,8 @@ def test_identity_peer_share_and_encrypted_bundle_export(tmp_path):
         assert "private_key_ref" not in json.dumps(exported_identity)
         assert exported_identity["public_key"].startswith("fedpub_v2_")
 
-        rotated = left.rotate_federation_key(reason="unit key rotation")
+        rotated = left.rotate_federation_key(reason="unit key rotation", expected_fingerprint=exported_identity["key_fingerprint"],
+                                            recovery_path=str(tmp_path / "left.recovery"))
         assert rotated.key_fingerprint != exported_identity["key_fingerprint"]
         assert any(record.revocation_type == "key_revocation" for record in left.list_revocations())
 
@@ -345,7 +349,9 @@ def test_import_share_bundle_dry_run_does_not_mutate_peer_or_sync_state(tmp_path
 
         assert right.list_peers() == []
         assert right.list_sync_runs() == []
-        run = right.import_share_bundle(input_path=str(bundle), trust_policy="trusted_device", dry_run=True)
+        with pytest.raises(ValidationError, match="previously added and trusted peer"):
+            right.import_share_bundle(input_path=str(bundle), trust_policy="trusted_device", dry_run=True)
+        run = right.import_share_bundle(input_path=str(bundle), trust_policy="candidate_only", dry_run=True)
         assert run.status == "planned"
         assert run.warnings == ["dry_run_no_mutation"]
         assert right.list_peers() == []
@@ -406,7 +412,7 @@ def test_import_is_candidate_first_conflicts_and_tombstones_are_governed(tmp_pat
             name="sync-share",
             namespace=NAMESPACE,
             recipient_peer_ids=[left_meta["peer"].id],
-            permissions=["read", "sync_pull", "receive_redactions"],
+            permissions=["read", "read_evidence", "sync_pull", "receive_redactions"],
             privacy_ceiling="personal",
             memory_types=["project"],
             statuses=["active"],
@@ -541,4 +547,4 @@ def test_m10_http_cli_openapi_and_sdk_surfaces(tmp_path, capsys):
     assert main(["federation", "init", "--db", str(cli_db), "--display-name", "CLI M10"]) == 0
     assert "CLI M10" in capsys.readouterr().out
     assert main(["federation-conformance", "run", "--db", str(cli_db)]) == 0
-    assert '"status": "passed"' in capsys.readouterr().out
+    assert '"status": "structural_passed"' in capsys.readouterr().out

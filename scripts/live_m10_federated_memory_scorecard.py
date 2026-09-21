@@ -150,7 +150,8 @@ class M10LiveScorecard:
             exported = memory.export_federation_identity()
             assert exported["key_fingerprint"] == identity.key_fingerprint
             assert "private_key_ref" not in json.dumps(exported)
-            rotated = memory.rotate_federation_key(reason="live key rotation")
+            rotated = memory.rotate_federation_key(reason="live key rotation", expected_fingerprint=identity.key_fingerprint,
+                                                  recovery_path=str(self.base_dir / "identity.recovery"))
             assert rotated.key_fingerprint != identity.key_fingerprint
             assert any(record.revocation_type == "key_revocation" for record in memory.list_revocations())
             return f"identity={identity.id}, rotated={rotated.key_fingerprint[:8]}"

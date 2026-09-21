@@ -289,7 +289,9 @@ aletheia docs test-examples --db ./aletheia.db
 
 ## Release Gate
 
-Before a generic production release from `main`:
+For the 1.6.0 beta, use the [release verification record](v1_6_0_release_verification.md)
+and [upgrade guide](v1_6_0_upgrade.md). The following commands inspect a selected
+database and its configuration; they do not certify production readiness:
 
 ```bash
 python scripts/release_gate.py --branch main

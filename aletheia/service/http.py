@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 from aletheia import Memory
 from aletheia.core.errors import AletheiaError, NotFoundError, ValidationError
 from aletheia.core.ids import content_hash, new_id
+from aletheia.core.provider_work import ProviderInputsChanged, ProviderWork, ProviderWorkNeeded
 from aletheia.core.time import parse_iso, utc_now, utc_now_iso
 from aletheia.models import ApiToken, ServiceConfig, ServiceHealth
 from aletheia.service.local_pairing import LocalPairing, PAIRING_PATHS
@@ -28,6 +29,8 @@ from aletheia.service.local_discovery import LocalAdvertisement
 from aletheia.service.auth import AuthContext, AuthService, PRIVACY_ORDER
 from aletheia.service.contracts import DISCOVERY_PATHS, apply_discovery_contracts
 from aletheia.service.reads import READ_POST_PATHS, ReadAccess, is_read_path
+from aletheia.service.operations import OperationAccess
+from aletheia.service.replay import ReceiptAccess, validate as validate_receipt
 from aletheia.service.read_contracts import apply_read_contracts, validate_read_input
 from aletheia.service.errors import (
     ServiceError,
@@ -309,6 +312,7 @@ class AletheiaService:
         self.service_identity = new_id("service")
         self.local_pairing: LocalPairing | None = None
         self._closed = False
+        self._owned_jobs: set[str] = set()
         from aletheia.service.reviews import ReviewProtocol
         self.review_protocol = ReviewProtocol(self)
 
@@ -328,6 +332,9 @@ class AletheiaService:
     def close(self) -> None:
         with self.lock:
             if not self._closed:
+                for job_id in self._owned_jobs:
+                    self.memory._fail_running_job(job_id, "Service closed before job completion.")
+                self._owned_jobs.clear()
                 self.memory.close()
                 self._closed = True
 
@@ -335,10 +342,8 @@ class AletheiaService:
         self, *, method: str, path: str, headers: Mapping[str, str], body: bytes = b"",
         transport_identity: str | None = None,
     ) -> tuple[int, dict]:
-        # HTTP handlers share one SQLite connection. Keep authentication writes
-        # and request logging out of another request's read transaction.
-        with self.lock:
-            if path.split("?", 1)[0] in PAIRING_PATHS:
+        if path.split("?", 1)[0] in PAIRING_PATHS:
+            with self.lock:
                 request_id = new_id("req")
                 try:
                     if path not in PAIRING_PATHS or len(body) > 4096:
@@ -353,7 +358,7 @@ class AletheiaService:
                     return exc.status_code, self._error(exc, request_id)
                 except Exception:
                     return 500, self._error(ServiceError("pairing_failed", "Local pairing could not be completed.", status_code=500), request_id)
-            return self._handle_http(method=method, path=path, headers=headers, body=body, transport_identity=transport_identity)
+        return self._handle_http(method=method, path=path, headers=headers, body=body, transport_identity=transport_identity)
 
     def _handle_http(
         self,
@@ -376,7 +381,10 @@ class AletheiaService:
         status = 200
         response: dict[str, Any]
         try:
-            self.review_protocol.state()
+            with self.lock:
+                if self._closed:
+                    raise ServiceError("service_closed", "The service is closed.", status_code=503)
+                self.review_protocol.state()
             if method == "GET" and (endpoint == "/console" or endpoint.startswith("/console/")):
                 status, response = self._console_static(endpoint)
                 return status, response
@@ -388,13 +396,15 @@ class AletheiaService:
             if namespace_for_log is None and query.get("namespace"):
                 namespace_for_log = query["namespace"][0]
             try:
-                auth_context = self._authenticate(method, endpoint, headers)
+                with self.lock:
+                    auth_context = self._authenticate(method, endpoint, headers)
                 paired_identity = auth_context.token.metadata.get("local_pairing_identity") if auth_context.token else None
                 if paired_identity and paired_identity != transport_identity:
                     raise unauthorized("This paired credential requires its original encrypted service identity.")
             except ServiceError as exc:
                 if self.config.rate_limit_enabled and exc.status_code == 401:
-                    self._check_rate_limit("auth-failure:" + self._anonymous_rate_limit_identity(headers))
+                    with self.lock:
+                        self._check_rate_limit("auth-failure:" + self._anonymous_rate_limit_identity(headers))
                 raise
             client_id = auth_context.client_id
             idempotency_scope = (
@@ -411,10 +421,12 @@ class AletheiaService:
                     self._check_rate_limit(self._rate_limit_identity(auth_context, headers))
             if method == "POST" and endpoint == "/v1/remember":
                 from aletheia.service.onboarding_contract import remember_response
-                status, response = remember_response(self, payload, headers, request_id, request_hash)
+                with self.lock:
+                    status, response = remember_response(self, payload, headers, request_id, request_hash)
             elif self.review_protocol.handles(method, endpoint, self._header(headers, "X-Aletheia-Contract")):
-                status, response = self.review_protocol.process(method=method, endpoint=endpoint, query=query,
-                    payload=payload, headers=headers, request_id=request_id, request_hash=request_hash)
+                with self.lock:
+                    status, response = self.review_protocol.process(method=method, endpoint=endpoint, query=query,
+                        payload=payload, headers=headers, request_id=request_id, request_hash=request_hash)
             else:
                 with self.lock:
                     replay = self._idempotency_replay(
@@ -435,15 +447,17 @@ class AletheiaService:
                     idempotency_record_id = self._idempotency_record_id(
                         method, endpoint, headers, idempotency_scope
                     )
-                    data, warnings, pagination = self._route_consistent(
-                        method=method,
-                        endpoint=endpoint,
-                        query=query,
-                        payload=payload,
-                        auth_context=auth_context,
-                        request_id=request_id,
-                        headers=headers,
-                    )
+                    receipt_access = ReceiptAccess(auth_context)
+                    with receipt_access.capture():
+                        data, warnings, pagination = self._route_consistent(
+                            method=method,
+                            endpoint=endpoint,
+                            query=query,
+                            payload=payload,
+                            auth_context=auth_context,
+                            request_id=request_id,
+                            headers=headers,
+                        )
                     response = self._success(data=data, request_id=request_id, warnings=warnings, pagination=pagination)
                     with self.lock:
                         self._idempotency_store(
@@ -456,6 +470,7 @@ class AletheiaService:
                             client_id=idempotency_scope,
                             status_code=status,
                             response=response,
+                            receipt_access=receipt_access.payload(),
                         )
                     idempotency_record_id = None
         except ServiceError as exc:
@@ -488,7 +503,7 @@ class AletheiaService:
             duration_ms = int((time.perf_counter() - started) * 1000)
             if idempotency_record_id is not None:
                 try:
-                    with self.memory.store.transaction(immediate=True):
+                    with self.lock, self.memory.store.transaction(immediate=True):
                         self.memory.store.connection.execute(
                             "DELETE FROM idempotency_records WHERE id=? AND status='in_progress'",
                             (idempotency_record_id,),
@@ -496,17 +511,18 @@ class AletheiaService:
                 except sqlite3.Error:
                     logging.getLogger(__name__).warning("Idempotency reservation cleanup unavailable.")
             try:
-                self._log_request(
-                    request_id=request_id,
-                    client_id=client_id,
-                    namespace=namespace_for_log,
-                    method=method,
-                    path=endpoint,
-                    status_code=status,
-                    duration_ms=duration_ms,
-                    request_hash=request_hash,
-                    response=response if "response" in locals() else None,
-                )
+                with self.lock:
+                    self._log_request(
+                        request_id=request_id,
+                        client_id=client_id,
+                        namespace=namespace_for_log,
+                        method=method,
+                        path=endpoint,
+                        status_code=status,
+                        duration_ms=duration_ms,
+                        request_hash=request_hash,
+                        response=response if "response" in locals() else None,
+                    )
             except sqlite3.Error:
                 # Operational logging must not replace a committed receipt or
                 # a structured failure. Governance audit remains transactional.
@@ -514,15 +530,86 @@ class AletheiaService:
         return status, response
 
     def _route_consistent(self, **kwargs):
+        work = ProviderWork()
+        if kwargs["method"] == "POST" and kwargs["endpoint"] == "/v1/jobs/run":
+            # Job ownership must survive provider snapshot rollback, including
+            # against a worker using a different service or SQLite connection.
+            with self.lock, self.memory.store.transaction(immediate=True):
+                if self._closed:
+                    raise ServiceError("service_closed", "The service is closed.", status_code=503)
+                context = self._authenticate(kwargs["method"], kwargs["endpoint"], kwargs["headers"], previous=kwargs["auth_context"])
+                OperationAccess(self, context).scope("memory:jobs", kwargs["payload"].get("namespace"))
+                jobs = self.memory._pending_jobs(**self._run_jobs_args(kwargs["payload"]))
+                work.claimed_jobs = [job.id for job in jobs if self.memory._claim_pending_job(job)]
+                self._owned_jobs.update(work.claimed_jobs)
+        try:
+            return self._route_with_provider_work(work, **kwargs)
+        except BaseException:
+            if work.claimed_jobs:
+                with self.lock:
+                    if not self._closed:
+                        for job_id in work.claimed_jobs:
+                            self.memory._fail_running_job(job_id, "Service request ended before job completion.")
+            raise
+        finally:
+            with self.lock:
+                self._owned_jobs.difference_update(work.claimed_jobs or [])
+
+    def run_background_jobs(self, *, max_jobs):
+        """Own jobs durably; keep provider I/O outside the shared DB snapshot."""
+        work = ProviderWork()
+        with self.lock:
+            if self._closed:
+                return []
+            with self.memory.store.transaction(immediate=True):
+                jobs = self.memory._pending_jobs(max_jobs=max_jobs)
+                work.claimed_jobs = [job.id for job in jobs if self.memory._claim_pending_job(job)]
+            self._owned_jobs.update(work.claimed_jobs)
+        try:
+            while True:
+                try:
+                    with self.lock:
+                        if self._closed:
+                            return []
+                        with self.memory.store.transaction(immediate=True), work.snapshot():
+                            return self.memory._run_claimed_jobs(work.claimed_jobs)
+                except ProviderWorkNeeded as needed:
+                    work.perform(needed)
+        except BaseException:
+            with self.lock:
+                if not self._closed:
+                    for job_id in work.claimed_jobs:
+                        self.memory._fail_running_job(job_id, "Background worker ended before job completion.")
+            raise
+        finally:
+            with self.lock:
+                self._owned_jobs.difference_update(work.claimed_jobs)
+
+    def _route_with_provider_work(self, work, **kwargs):
         endpoint, method = kwargs["endpoint"], kwargs["method"]
-        if is_read_path(endpoint) and (method == "GET" or endpoint in READ_POST_PATHS):
-            # One SQLite snapshot for authorization, provenance and serialization;
-            # the store lock also excludes other writers on this connection.
-            with self.lock, self.memory.store.transaction():
-                kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"])
-                validate_read_input(endpoint, kwargs["query"], kwargs["payload"], self._header(kwargs["headers"], "X-Aletheia-Contract"))
-                return self._route(**kwargs)
-        return self._route(**kwargs)
+        read = is_read_path(endpoint) and (method == "GET" or endpoint in READ_POST_PATHS)
+        consistent = read or endpoint.startswith(("/v1/llm/", "/v1/traces", "/v1/sessions", "/v1/claims/", "/v1/candidates/",
+                                "/v1/conflicts", "/v1/infer", "/v1/reflections", "/v1/derivation/", "/v1/eval/",
+                                "/v1/policies/", "/v1/jobs", "/v1/sync/conflicts", "/v1/console/actions/")) or endpoint in {"/v1/feedback", "/v1/outcomes", "/v1/retrieval-judgments", "/v1/extract"}
+        while True:
+            try:
+                with self.lock:
+                    if self._closed:
+                        raise ServiceError("service_closed", "The service is closed.", status_code=503)
+                    if not consistent:
+                        kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"], previous=kwargs["auth_context"])
+                        return self._route(**kwargs)
+                    # Fresh authorization/provenance and final writes share a
+                    # snapshot. Missing provider work unwinds it before I/O.
+                    with self.memory.store.transaction(immediate=method in STATE_CHANGING_METHODS), work.snapshot():
+                        kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"], previous=kwargs["auth_context"])
+                        if read:
+                            validate_read_input(endpoint, kwargs["query"], kwargs["payload"], self._header(kwargs["headers"], "X-Aletheia-Contract"))
+                        return self._route(**kwargs)
+            except ProviderWorkNeeded as needed:
+                work.perform(needed)
+            except ProviderInputsChanged as exc:
+                raise ServiceError("provider_input_changed", str(exc), status_code=409) from None
 
     def _route(
         self,
@@ -577,18 +664,33 @@ class AletheiaService:
             return self._remember(payload, auth_context), [], None
         if method == "POST" and endpoint == "/v1/feedback":
             self._require(auth_context, "memory:feedback", payload)
+            access = OperationAccess(self, auth_context)
+            access.target(payload.get("target_type", "claim"), self._required(payload, "target_id"), namespace=self._required(payload, "namespace"))
+            if payload.get("evidence_id"):
+                access.target("evidence", payload["evidence_id"], namespace=payload["namespace"])
             return asdict(self.memory.feedback(**self._feedback_args(payload))), [], None
         if method == "POST" and endpoint == "/v1/outcomes":
             self._require(auth_context, "memory:feedback", payload)
+            self._require_read_session(payload, auth_context)
             return asdict(self.memory.record_outcome(**self._outcome_args(payload))), [], None
         if method == "POST" and endpoint == "/v1/retrieval-judgments":
             self._require(auth_context, "memory:feedback", payload)
+            self._require_read_session(payload, auth_context)
+            OperationAccess(self, auth_context).target(payload.get("result_type", "claim"), self._required(payload, "result_id"), namespace=self._required(payload, "namespace"))
             return asdict(self.memory.judge_retrieval(**self._retrieval_judgment_args(payload))), [], None
         if method == "POST" and endpoint == "/v1/ingest":
             self._require(auth_context, "memory:ingest", payload)
+            self._require_read_session(payload, auth_context)
             return asdict(self.memory.ingest(**self._ingest_args(payload))), [], None
         if method == "POST" and endpoint == "/v1/extract":
             self._require(auth_context, "memory:extract", payload)
+            access = OperationAccess(self, auth_context)
+            namespace = self._required(payload, "namespace")
+            evidence_ids = list(payload.get("evidence_ids") or [])
+            if payload.get("batch_id"):
+                batch = access.target("ingestion_batch", payload["batch_id"], namespace=namespace)
+                evidence_ids.extend(batch.evidence_ids)
+            access.evidence_sources(namespace, evidence_ids)
             return asdict(self.memory.extract_candidates(**self._extract_args(payload))), [], None
         if endpoint.startswith("/v1/llm/"):
             return self._llm_endpoint(method, endpoint, query, payload, auth_context), [], None
@@ -620,8 +722,7 @@ class AletheiaService:
             parts = endpoint.split("/")
             candidate_id = parts[3]
             self.auth.require_capability(auth_context, "memory:review")
-            candidate = self.memory.read_candidate(candidate_id)
-            self._require(auth_context, "memory:review", {"namespace": candidate.namespace})
+            candidate = OperationAccess(self, auth_context).target("candidate_claim", candidate_id)
             if len(parts) == 5 and parts[4] == "promote":
                 return asdict(self.memory.promote_candidate(candidate_id, reason=payload["reason"])), [], None
             if len(parts) == 5 and parts[4] == "reject":
@@ -677,20 +778,24 @@ class AletheiaService:
         project_id = payload.get("project_id")
         self.auth.require_namespace(auth_context, namespace=namespace, project_id=project_id)
         self._require_read_session(payload, auth_context)
+        access = ReadAccess(self, auth_context)
         pack = self.memory.context_pack(
             namespace=namespace,
             query=payload.get("query", ""),
             project_id=project_id,
             session_id=payload.get("session_id"),
             retrieval_mode=payload.get("retrieval_mode", "hybrid"),
-            token_budget=self._integer(payload.get("token_budget", 1500), "token_budget"),
-            include_reflections=bool(payload.get("include_reflections", True)),
-            include_inferences=bool(payload.get("include_inferences", False)),
-            include_derivation_metadata=bool(payload.get("include_derivation_metadata", False)),
+            token_budget=self._integer(payload["token_budget"], "token_budget") if "token_budget" in payload else None,
+            include_reflections=bool(payload["include_reflections"]) if "include_reflections" in payload else None,
+            include_inferences=bool(payload["include_inferences"]) if "include_inferences" in payload else None,
+            include_derivation_metadata=bool(payload["include_derivation_metadata"]) if "include_derivation_metadata" in payload else None,
             policy_version_id=payload.get("policy_version_id"),
+            context_policy_version_id=payload.get("context_policy_version_id"),
             record_usage=False,
+            _read_access=access.allowed,
         )
-        pack, omitted_by_policy = ReadAccess(self, auth_context).filter_context(pack)
+        pack, omitted_by_policy = access.filter_context(pack)
+        omitted_by_policy = omitted_by_policy or any(not allowed for allowed in access.checked.values())
         if payload.get("record_usage", False):
             self.memory._record_context_pack_usage(pack, metadata={
                 "include_confidence": True,
@@ -728,6 +833,7 @@ class AletheiaService:
         project_id = payload.get("project_id")
         self.auth.require_namespace(auth_context, namespace=namespace, project_id=project_id)
         self._require_read_session(payload, auth_context)
+        access = ReadAccess(self, auth_context)
         results = self.memory.retrieve(
             namespace=namespace,
             query=payload.get("query", ""),
@@ -738,13 +844,10 @@ class AletheiaService:
             memory_types=payload.get("memory_types"),
             include_disputed=bool(payload.get("include_disputed", False)),
             include_archived=bool(payload.get("include_archived", False)),
+            policy_version_id=payload.get("policy_version_id"),
+            _read_access=access.allowed,
         )
-        access = ReadAccess(self, auth_context)
-        visible = [result for result in results if access.allowed("claim", result.claim_id)]
-        return [{**asdict(result),
-                 "project_ids": [project for project in result.project_ids if access.namespace(result.namespace, [project])],
-                 "conflict_ids": [value for value in result.conflict_ids if access.allowed("conflict", value)]}
-                for result in visible]
+        return [asdict(result) for result in access.filter_retrieval(results)]
 
     def _require_read_session(self, payload, auth_context):
         session_id = payload.get("session_id")
@@ -757,68 +860,47 @@ class AletheiaService:
             raise forbidden("Session does not belong to the requested scope.")
         self.auth.require_namespace(auth_context, namespace=row["namespace"], project_id=row["project_id"])
 
-    def _llm_endpoint(
-        self,
-        method: str,
-        endpoint: str,
-        query: dict[str, list[str]],
-        payload: dict,
-        auth_context: AuthContext,
-    ) -> dict:
+    def _llm_endpoint(self, method, endpoint, query, payload, auth_context):
+        access = OperationAccess(self, auth_context)
         if method == "GET" and endpoint == "/v1/llm/runs":
-            namespace = self._query_value(query, "namespace", none_if_missing=True)
-            if namespace:
-                self._require(auth_context, "memory:review", {"namespace": namespace})
-            else:
-                self.auth.require_capability(auth_context, "memory:review")
-            return {
-                "runs": self.memory.list_llm_runs(
-                    namespace=namespace,
-                    task_type=self._query_value(query, "task", none_if_missing=True),
-                    limit=self._limit(query),
-                )
-            }
+            namespace = access.scope("memory:review", self._query_value(query, "namespace", none_if_missing=True))
+            runs = self.memory.list_llm_runs(namespace=namespace, task_type=self._query_value(query, "task", none_if_missing=True), limit=self._limit(query))
+            # Runs may contain source IDs, safety warnings, or stored query input.
+            return {"runs": [run for run in runs if access.llm_run_allowed(run)]}
         if method != "POST":
             raise not_found(f"Endpoint not found: {method} {endpoint}")
-        if endpoint == "/v1/llm/explain-conflict":
-            conflict_id = self._required(payload, "conflict_id")
-            self.auth.require_capability(auth_context, "memory:review")
-            conflict = self.memory.read_conflict(conflict_id)
-            self._require(auth_context, "memory:review", {"namespace": conflict.namespace})
-            return self.memory.explain_conflict_with_llm(conflict_id, provider=payload.get("provider", "mock_llm"), model=payload.get("model"))
-        namespace = self._required(payload, "namespace")
         capability = "memory:read" if endpoint == "/v1/llm/expand-query" else "memory:review"
-        self._require(auth_context, capability, {"namespace": namespace})
-        provider = payload.get("provider", "mock_llm")
+        self.auth.require_capability(auth_context, capability)
+        if endpoint == "/v1/llm/explain-conflict":
+            conflict = access.target("conflict", self._required(payload, "conflict_id"))
+            provider = access.provider(payload.get("provider", "mock_llm"), source_task=True)
+            return self.memory.explain_conflict_with_llm(conflict.id, provider=provider, model=payload.get("model"))
+        namespace = self._required(payload, "namespace")
         model = payload.get("model")
         if endpoint == "/v1/llm/expand-query":
-            return self.memory.expand_query(
-                namespace=namespace,
-                query=self._required(payload, "query"),
-                provider=provider,
-                model=model,
-                privacy_level=payload.get("privacy_level", "personal"),
-            )
-        if endpoint == "/v1/llm/summarize-evidence":
-            return self.memory.summarize_evidence(namespace=namespace, evidence_ids=payload.get("evidence_ids") or [], provider=provider, model=model)
-        if endpoint == "/v1/llm/suggest-entities":
-            return self.memory.suggest_entities(namespace=namespace, evidence_ids=payload.get("evidence_ids") or [], provider=provider, model=model)
-        if endpoint == "/v1/llm/suggest-categories":
-            return self.memory.suggest_categories(namespace=namespace, evidence_ids=payload.get("evidence_ids") or [], provider=provider, model=model)
-        if endpoint == "/v1/llm/suggest-scope":
-            return self.memory.suggest_scope_with_llm(
-                namespace=namespace,
-                candidate_id=self._required(payload, "candidate_id"),
-                provider=provider,
-                model=model,
-            )
-        if endpoint == "/v1/llm/suggest-duplicate-merge":
-            return self.memory.suggest_duplicate_merge_with_llm(
-                namespace=namespace,
-                candidate_id=self._required(payload, "candidate_id"),
-                provider=provider,
-                model=model,
-            )
+            access.scope(capability, namespace, payload.get("project_id"))
+            privacy = self._requested_privacy(payload, auth_context)
+            provider = access.provider(payload.get("provider", "mock_llm"), privacy_level=privacy)
+            return self.memory.expand_query(namespace=namespace, query=self._required(payload, "query"),
+                provider=provider, model=model, privacy_level=privacy)
+        source_tasks = {"/v1/llm/summarize-evidence": self.memory.summarize_evidence,
+                        "/v1/llm/suggest-entities": self.memory.suggest_entities,
+                        "/v1/llm/suggest-categories": self.memory.suggest_categories}
+        if endpoint in source_tasks:
+            evidence_ids = payload.get("evidence_ids") or []
+            access.evidence_sources(namespace, evidence_ids)
+            provider = access.provider(payload.get("provider", "mock_llm"), source_task=True)
+            return source_tasks[endpoint](namespace=namespace, evidence_ids=evidence_ids, provider=provider, model=model)
+        if endpoint in {"/v1/llm/suggest-scope", "/v1/llm/suggest-duplicate-merge"}:
+            candidate = access.target("candidate_claim", self._required(payload, "candidate_id"), namespace=namespace)
+            if endpoint.endswith("suggest-duplicate-merge"):
+                for target in self.memory._llm_merge_candidates(candidate):
+                    access.target(target["target_type"], target["id"], namespace=namespace)
+                task = self.memory.suggest_duplicate_merge_with_llm
+            else:
+                task = self.memory.suggest_scope_with_llm
+            provider = access.provider(payload.get("provider", "mock_llm"), source_task=True)
+            return task(namespace=namespace, candidate_id=candidate.id, provider=provider, model=model)
         raise not_found(f"Endpoint not found: {method} {endpoint}")
 
     def _remember(self, payload: dict, auth_context: AuthContext) -> dict:
@@ -899,7 +981,7 @@ class AletheiaService:
                 )
                 VALUES (?, ?, ?, 0, ?, ?, 'supporting', ?)
                 """,
-                (span_id, namespace, evidence_id, len(evidence_text), evidence_text, now),
+                (span_id, namespace, evidence_id, len(evidence_text), self.memory._stored_evidence_span_text(evidence_id, evidence_text), now),
             )
             self.memory.store.connection.execute(
                 """
@@ -976,8 +1058,8 @@ class AletheiaService:
         parts = endpoint.split("/")
         claim_id = parts[3]
         self.auth.require_capability(auth_context, "memory:review")
-        claim = self.memory.read_claim(claim_id)
-        self.auth.require_namespace(auth_context, namespace=claim.namespace)
+        access = OperationAccess(self, auth_context)
+        claim = access.target("claim", claim_id)
         if len(parts) == 5 and parts[4] == "promote":
             return asdict(self.memory.promote_claim(claim_id, payload.get("to", "active"), reason=payload["reason"]))
         if len(parts) == 5 and parts[4] == "demote":
@@ -985,6 +1067,7 @@ class AletheiaService:
         if len(parts) == 5 and parts[4] == "scope":
             return asdict(self.memory.scope_claim(claim_id, **self._scope_claim_args(payload)))
         if len(parts) == 6 and parts[4] == "supersede":
+            access.target("claim", parts[5], namespace=claim.namespace)
             return asdict(self.memory.supersede_claim(claim_id, parts[5], reason=payload["reason"]))
         raise not_found(endpoint)
 
@@ -994,14 +1077,29 @@ class AletheiaService:
             return asdict(self.memory.start_session(**self._start_session_args(payload)))
         if method == "POST" and endpoint.startswith("/v1/sessions/") and endpoint.endswith("/end"):
             self.auth.require_capability(auth_context, "memory:write_candidate")
-            return asdict(self.memory.end_session(endpoint.split("/")[3], **self._end_session_args(payload)))
+            session = OperationAccess(self, auth_context).target("session", endpoint.split("/")[3])
+            mode = payload.get("write_mode", "candidate")
+            if mode not in {"candidate", "active"}:
+                raise validation_error("write_mode must be candidate or active.")
+            if mode == "active":
+                self.auth.require_capability(auth_context, "memory:write_active")
+            privacy = self._requested_privacy(payload, auth_context)
+            with self.memory.store.transaction():
+                ended = self.memory.end_session(session.id, remember_summary=False)
+                if payload.get("summary") and self._bool(payload.get("remember_summary", True)):
+                    self._remember({"namespace": session.namespace, "project_id": session.project_id,
+                                    "session_id": session.id, "subject": f"session:{session.id}",
+                                    "predicate": "has_summary", "object": payload["summary"],
+                                    "evidence_text": payload["summary"], "memory_type": "session_summary",
+                                    "source_type": "session_summary", "write_mode": mode, "privacy_level": privacy}, auth_context)
+            return asdict(ended)
         if method == "GET" and endpoint == "/v1/sessions":
             namespace = self._query_value(query, "namespace")
             self._require(auth_context, "memory:read", {"namespace": namespace})
             return [asdict(item) for item in self.memory.list_sessions(namespace=namespace)]
         if method == "GET" and endpoint.startswith("/v1/sessions/"):
-            session = self.memory.get_session(endpoint.split("/")[3])
-            self._require(auth_context, "memory:read", {"namespace": session.namespace})
+            self.auth.require_capability(auth_context, "memory:read")
+            session = OperationAccess(self, auth_context).target("session", endpoint.split("/")[3])
             return asdict(session)
         raise not_found(endpoint)
 
@@ -1019,21 +1117,36 @@ class AletheiaService:
             return asdict(self.memory.get_project(namespace=namespace, project_id=endpoint.split("/")[3]))
         raise not_found(endpoint)
 
+    def _authorize_conflict_resolution(self, auth_context, conflict_id, payload):
+        self.auth.require_capability(auth_context, "memory:review")
+        access = OperationAccess(self, auth_context)
+        family = access.target("conflict_family", conflict_id)
+        targets = ([payload["active_claim_id"]] if payload.get("active_claim_id") else [])
+        targets += (payload.get("superseded_claim_ids") or []) + (payload.get("rejected_claim_ids") or [])
+        targets += [item.get("claim_id") for item in payload.get("scoped_claims") or []]
+        for target in targets:
+            access.target("claim", target, namespace=family.namespace)
+            if target not in family.claim_ids:
+                raise validation_error("Resolution targets must belong to the conflict.")
+        return family
+
     def _governance_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
+        access = OperationAccess(self, auth_context)
         if method == "GET" and endpoint == "/v1/conflicts":
             namespace = self._query_value(query, "namespace")
             self._require(auth_context, "memory:read", {"namespace": namespace})
             return [asdict(item) for item in self.memory.list_conflict_families(namespace=namespace)]
         if method == "POST" and endpoint == "/v1/conflicts/detect":
-            self._require(auth_context, "memory:review", payload)
+            access.scope("memory:review", payload.get("namespace") or self.memory.namespace, payload.get("project_id"))
+            if payload.get("claim_id"):
+                access.target("claim", payload["claim_id"], namespace=payload.get("namespace") or self.memory.namespace)
             return [asdict(item) for item in self.memory.detect_conflicts(**self._detect_conflicts_args(payload))]
         if method == "POST" and endpoint.startswith("/v1/conflicts/") and endpoint.endswith("/resolve"):
-            self.auth.require_capability(auth_context, "memory:review")
+            self._authorize_conflict_resolution(auth_context, endpoint.split("/")[3], payload)
             return asdict(self.memory.resolve_conflict(endpoint.split("/")[3], **self._resolve_conflict_args(payload)))
         if method == "GET" and endpoint.startswith("/v1/confidence/"):
             self.auth.require_capability(auth_context, "memory:read")
-            claim = self.memory.read_claim(endpoint.split("/")[3])
-            self._require(auth_context, "memory:read", {"namespace": claim.namespace})
+            claim = access.target("claim", endpoint.split("/")[3])
             return asdict(self.memory.compute_confidence(claim.id, explain=True))
         if method == "POST" and endpoint == "/v1/confidence/recompute":
             self._require(auth_context, "memory:admin", payload)
@@ -1047,8 +1160,13 @@ class AletheiaService:
         raise not_found(endpoint)
 
     def _reasoning_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
+        access = OperationAccess(self, auth_context)
         if method == "POST" and endpoint == "/v1/infer/run":
             self._require(auth_context, "memory:review", payload)
+            self._require_read_session(payload, auth_context)
+            for field, kind in (("target_claim_ids", "claim"), ("target_evidence_ids", "evidence")):
+                for value in payload.get(field) or []:
+                    access.target(kind, value, namespace=self._required(payload, "namespace"))
             return asdict(self.memory.run_inference(**self._run_inference_args(payload)))
         if method == "GET" and endpoint == "/v1/inferences":
             namespace = self._query_value(query, "namespace")
@@ -1057,12 +1175,16 @@ class AletheiaService:
         if method == "POST" and endpoint.startswith("/v1/inferences/"):
             self.auth.require_capability(auth_context, "memory:review")
             inference_id = endpoint.split("/")[3]
+            access.target("inference", inference_id)
             if endpoint.endswith("/promote"):
                 return asdict(self.memory.promote_inference(inference_id, reason=payload["reason"]))
             if endpoint.endswith("/reject"):
                 return asdict(self.memory.review_inference(inference_id, decision="reject", reason=payload["reason"]))
         if method == "POST" and endpoint == "/v1/reflections":
             self._require(auth_context, "memory:review", payload)
+            for field, kind in (("source_claim_ids", "claim"), ("source_evidence_ids", "evidence"), ("source_reflection_ids", "reflection")):
+                for value in payload.get(field) or []:
+                    access.target(kind, value, namespace=self._required(payload, "namespace"))
             return asdict(self.memory.build_reflection(**self._build_reflection_args(payload)))
         if method == "GET" and endpoint == "/v1/reflections":
             namespace = self._query_value(query, "namespace")
@@ -1070,30 +1192,43 @@ class AletheiaService:
             return [asdict(item) for item in self.memory.list_reflections(namespace=namespace)]
         if method == "GET" and endpoint.startswith("/v1/reflections/") and endpoint.endswith("/expand"):
             self.auth.require_capability(auth_context, "memory:read")
-            reflection = self.memory.get_reflection(endpoint.split("/")[3])
-            self._require(auth_context, "memory:read", {"namespace": reflection.namespace})
+            reflection = access.target("reflection", endpoint.split("/")[3])
             return asdict(self.memory.expand_reflection(endpoint.split("/")[3]))
         if method == "GET" and endpoint.startswith("/v1/derivation/"):
             parts = endpoint.split("/")
             self.auth.require_capability(auth_context, "memory:read")
+            access.target(parts[3], parts[4])
             return asdict(self.memory.trace_derivation(parts[4], target_type=parts[3]))
         raise not_found(endpoint)
 
     def _admin_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
+        access = OperationAccess(self, auth_context)
         if method == "POST" and endpoint == "/v1/eval/sets":
             self._require(auth_context, "memory:evaluate", payload)
             return asdict(self.memory.create_eval_set(**self._create_eval_set_args(payload)))
         if method == "POST" and endpoint.startswith("/v1/eval/sets/") and endpoint.endswith("/cases"):
             self.auth.require_capability(auth_context, "memory:evaluate")
+            target = access.target("evaluation_set", endpoint.split("/")[4], namespace=payload.get("namespace"))
+            for field, kind in (("expected_claim_ids", "claim"), ("forbidden_claim_ids", "claim"), ("expected_reflection_ids", "reflection")):
+                for value in payload.get(field) or []:
+                    access.target(kind, value, namespace=target.namespace)
+            if payload.get("session_id"):
+                access.target("session", payload["session_id"], namespace=target.namespace)
             return asdict(self.memory.add_eval_case(endpoint.split("/")[4], **self._add_eval_case_args(payload)))
         if method == "POST" and endpoint.startswith("/v1/eval/sets/") and endpoint.endswith("/run"):
             self.auth.require_capability(auth_context, "memory:evaluate")
-            return asdict(self.memory.run_evaluation(payload.get("namespace", self.memory.namespace), eval_set_id=endpoint.split("/")[4]))
+            target = access.target("evaluation_set", endpoint.split("/")[4], namespace=payload.get("namespace"))
+            return asdict(self.memory.run_evaluation(target.namespace, eval_set_id=target.id,
+                policy_version_id=payload.get("policy_version_id"), context_policy_version_id=payload.get("context_policy_version_id")))
         if method == "POST" and endpoint == "/v1/optimize/retrieval":
             self._require(auth_context, "memory:policy", payload)
+            if payload.get("eval_set_id"):
+                access.target("evaluation_set", payload["eval_set_id"], namespace=self._required(payload, "namespace"))
             return asdict(self.memory.optimize_retrieval(**self._optimize_retrieval_args(payload)))
         if method == "POST" and endpoint == "/v1/learning/run":
             self._require(auth_context, "memory:learn", payload)
+            if payload.get("eval_set_id"):
+                access.target("evaluation_set", payload["eval_set_id"], namespace=self._required(payload, "namespace"))
             return asdict(self.memory.run_learning(**self._run_learning_args(payload)))
         if method == "GET" and endpoint == "/v1/policies/proposals":
             namespace = self._query_value(query, "namespace")
@@ -1102,19 +1237,31 @@ class AletheiaService:
         if method == "POST" and endpoint.startswith("/v1/policies/proposals/"):
             self.auth.require_capability(auth_context, "memory:policy")
             proposal_id = endpoint.split("/")[4]
+            access.target("policy_proposal", proposal_id)
             if endpoint.endswith("/review"):
                 return asdict(self.memory.review_policy_proposal(proposal_id, **self._review_policy_args(payload)))
             if endpoint.endswith("/apply"):
+                proposal = self.memory.get_policy_proposal(proposal_id)
+                table, default = ("ranking_policies", "rpol_default") if proposal.policy_type == "ranking" else ("context_pack_policies", "cpol_default")
+                policy = self.memory.store.connection.execute(f"SELECT namespace FROM {table} WHERE id = ?",
+                    (proposal.target_policy_id or default,)).fetchone()
+                if policy and policy["namespace"] is None and "*" not in auth_context.namespace_grants:
+                    raise forbidden("Applying a global policy requires access to all namespaces.")
                 return asdict(self.memory.apply_policy_proposal(proposal_id, **self._apply_policy_args(payload)))
         if method == "POST" and endpoint == "/v1/jobs":
             self._require(auth_context, "memory:jobs", payload)
+            if (payload.get("payload") or {}).get("eval_set_id"):
+                access.target("evaluation_set", payload["payload"]["eval_set_id"], namespace=self._required(payload, "namespace"))
             return asdict(self.memory.enqueue_job(**self._enqueue_job_args(payload)))
         if method == "POST" and endpoint == "/v1/jobs/run":
-            self.auth.require_capability(auth_context, "memory:jobs")
+            access.scope("memory:jobs", payload.get("namespace"))
+            work = ProviderWork.current()
+            if work is not None and work.claimed_jobs is not None:
+                return [asdict(item) for item in self.memory._run_claimed_jobs(work.claimed_jobs)]
             return [asdict(item) for item in self.memory.run_jobs(**self._run_jobs_args(payload))]
         if method == "GET" and endpoint == "/v1/jobs":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
-            self.auth.require_capability(auth_context, "memory:jobs")
+            OperationAccess(self, auth_context).scope("memory:jobs", namespace)
             return [asdict(item) for item in self.memory.list_jobs(namespace=namespace)]
         if method == "GET" and endpoint == "/v1/health-report":
             namespace = self._query_value(query, "namespace")
@@ -1184,8 +1331,7 @@ class AletheiaService:
         if method == "POST" and endpoint.startswith("/v1/console/actions/conflicts/") and endpoint.endswith("/resolve"):
             self.auth.require_capability(auth_context, "memory:review")
             conflict_id = endpoint.split("/")[5]
-            family = self.memory.read_conflict_family(conflict_id)
-            self.auth.require_namespace(auth_context, namespace=family.namespace)
+            family = self._authorize_conflict_resolution(auth_context, conflict_id, payload)
             reason = self._required(payload, "reason")
             confirmation = self._required(payload, "confirmation")
             if confirmation != "resolve conflict":
@@ -1279,8 +1425,10 @@ class AletheiaService:
         raise not_found(endpoint)
 
     def _traces_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
+        access = ReadAccess(self, auth_context)
         if method == "POST" and endpoint == "/v1/traces/retrieval":
             self._require(auth_context, "memory:read", payload)
+            self._require_read_session(payload, auth_context)
             return asdict(self.memory.trace_retrieval(
                 self._required(payload, "namespace"),
                 query=self._required(payload, "query"),
@@ -1288,52 +1436,57 @@ class AletheiaService:
                 project_id=payload.get("project_id"),
                 session_id=payload.get("session_id"),
                 limit=self._integer(payload.get("limit", 10), "limit"),
+                result_filter=access.filter_retrieval,
+                claim_filter=lambda value: access.allowed("claim", value),
+                query_privacy=auth_context.privacy_ceiling,
             ))
         if method == "POST" and endpoint == "/v1/traces/context-pack":
             self._require(auth_context, "memory:read", payload)
+            self._require_read_session(payload, auth_context)
             return asdict(self.memory.trace_context_pack(
                 self._required(payload, "namespace"),
                 query=self._required(payload, "query"),
                 project_id=payload.get("project_id"),
                 session_id=payload.get("session_id"),
                 retrieval_mode=payload.get("retrieval_mode", "hybrid"),
-                token_budget=self._integer(payload.get("token_budget", 2000), "token_budget"),
+                token_budget=self._integer(payload["token_budget"], "token_budget") if payload.get("token_budget") is not None else None,
+                context_filter=lambda pack: access.filter_context(pack)[0],
+                read_access=access.allowed,
+                claim_filter=lambda value: access.allowed("claim", value),
+                query_privacy=auth_context.privacy_ceiling,
             ))
         if method == "GET" and endpoint == "/v1/traces":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
-            if namespace:
-                self._require(auth_context, "memory:read", {"namespace": namespace})
-            else:
-                self.auth.require_capability(auth_context, "memory:read")
-            return [asdict(trace) for trace in self.memory.list_traces(namespace=namespace, trace_type=self._query_value(query, "trace_type", none_if_missing=True), limit=self._limit(query))]
+            OperationAccess(self, auth_context).scope("memory:read", namespace)
+            return [access.trace_summary(trace) for trace in self.memory.list_traces(namespace=namespace, trace_type=self._query_value(query, "trace_type", none_if_missing=True), limit=self._limit(query))
+                    if access.namespace(trace.namespace, [trace.project_id])]
         if method == "GET" and endpoint.startswith("/v1/traces/"):
             trace_id = endpoint.split("/")[3]
             trace = self.memory.get_trace(trace_id)
-            self._require(auth_context, "memory:read", {"namespace": trace.namespace})
+            self._require(auth_context, "memory:read", {"namespace": trace.namespace, "project_id": trace.project_id})
             if endpoint.endswith("/items"):
-                return [asdict(item) for item in self.memory.list_trace_items(trace_id)]
+                return access.trace_items(trace_id)
             return {
-                "trace": asdict(trace),
-                "events": [asdict(event) for event in self.memory.list_trace_events(trace_id)],
-                "items": [asdict(item) for item in self.memory.list_trace_items(trace_id)],
+                "trace": access.trace_summary(trace),
+                "events": [{**asdict(event), "message": "Trace event recorded.", "metadata": {}}
+                           for event in self.memory.list_trace_events(trace_id)],
+                "items": access.trace_items(trace_id),
             }
         raise not_found(endpoint)
 
     def _metrics_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
         if method == "POST" and endpoint == "/v1/metrics/snapshot":
-            self._require(auth_context, "memory:admin", payload)
+            # Operational aggregates include namespace-wide jobs and requests;
+            # a project annotation cannot grant access to that wider scope.
+            OperationAccess(self, auth_context).scope("memory:admin", payload.get("namespace"))
             return asdict(self.memory.metrics_snapshot(namespace=payload.get("namespace"), project_id=payload.get("project_id"), source=payload.get("source", "api")))
         if method == "GET" and endpoint == "/v1/metrics/snapshots":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
-            if namespace:
-                self._require(auth_context, "memory:read", {"namespace": namespace})
-            else:
-                self.auth.require_capability(auth_context, "memory:read")
+            OperationAccess(self, auth_context).scope("memory:read", namespace)
             return [asdict(item) for item in self.memory.list_metric_snapshots(namespace=namespace, limit=self._limit(query))]
         if method == "GET" and endpoint == "/v1/metrics/latest":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
-            if namespace:
-                self._require(auth_context, "memory:read", {"namespace": namespace})
+            OperationAccess(self, auth_context).scope("memory:read", namespace)
             snapshot = self.memory.latest_metric_snapshot(namespace=namespace) or self.memory.metrics_snapshot(namespace=namespace, source="api_latest")
             return asdict(snapshot)
         raise not_found(endpoint)
@@ -1341,19 +1494,13 @@ class AletheiaService:
     def _notifications_endpoint(self, method: str, endpoint: str, query: dict, payload: dict, auth_context: AuthContext):
         if method == "GET" and endpoint == "/v1/notifications":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
-            if namespace:
-                self._require(auth_context, "memory:read", {"namespace": namespace})
-            else:
-                self.auth.require_capability(auth_context, "memory:read")
+            OperationAccess(self, auth_context).scope("memory:read", namespace)
             return [asdict(item) for item in self.memory.list_notifications(namespace=namespace, status=self._query_value(query, "status", none_if_missing=True), limit=self._limit(query))]
         if method == "POST" and endpoint.startswith("/v1/notifications/"):
             self.auth.require_capability(auth_context, "memory:read")
             notification_id = endpoint.split("/")[3]
             notification = self.memory.get_notification(notification_id)
-            if notification.namespace:
-                self.auth.require_namespace(
-                    auth_context, namespace=notification.namespace, project_id=None
-                )
+            OperationAccess(self, auth_context).scope("memory:read", notification.namespace)
             if endpoint.endswith("/dismiss"):
                 return asdict(self.memory.dismiss_notification(notification_id))
             if endpoint.endswith("/snooze"):
@@ -1366,7 +1513,7 @@ class AletheiaService:
             if namespace:
                 self._require(auth_context, "memory:read", {"namespace": namespace})
             else:
-                self.auth.require_capability(auth_context, "memory:admin")
+                OperationAccess(self, auth_context).scope("memory:admin", namespace)
             requested_path = payload.get("output_path")
             if requested_path is not None and requested_path != "":
                 self.auth.require_capability(auth_context, "memory:admin")
@@ -1386,17 +1533,14 @@ class AletheiaService:
             ))
         if method == "GET" and endpoint == "/v1/reports":
             namespace = self._query_value(query, "namespace", none_if_missing=True)
-            if namespace:
-                self._require(auth_context, "memory:read", {"namespace": namespace})
-            else:
-                self.auth.require_capability(auth_context, "memory:read")
+            OperationAccess(self, auth_context).scope("memory:read", namespace)
             return [asdict(report) for report in self.memory.list_reports(namespace=namespace, report_type=self._query_value(query, "report_type", none_if_missing=True), limit=self._limit(query))]
         if method == "GET" and endpoint.startswith("/v1/reports/"):
             report = self.memory.get_report(endpoint.split("/")[3])
             if report.namespace:
                 self._require(auth_context, "memory:read", {"namespace": report.namespace})
             else:
-                self.auth.require_capability(auth_context, "memory:admin")
+                OperationAccess(self, auth_context).scope("memory:admin", None)
             return asdict(report)
         raise not_found(endpoint)
 
@@ -1417,16 +1561,22 @@ class AletheiaService:
             if method == "GET" and endpoint == "/v1/federation/status":
                 return self.memory.federation_status()
             if method == "GET" and endpoint == "/v1/federation/identity":
-                identity = self.memory.active_federation_identity(none_if_missing=True)
-                return asdict(identity) if identity else {"identity": None}
+                return self.memory.public_federation_identity() or {"identity": None}
             if method == "POST" and endpoint == "/v1/federation/identity":
-                return asdict(self.memory.create_federation_identity(
+                self.memory.create_federation_identity(
                     display_name=self._required(payload, "display_name"),
                     key_algorithm=payload.get("key_algorithm", "default"),
                     protected=bool(payload.get("protected", True)),
-                ))
+                )
+                return self.memory.public_federation_identity()
             if method == "POST" and endpoint == "/v1/federation/identity/rotate":
-                return asdict(self.memory.rotate_federation_key(reason=self._required(payload, "reason"), actor=payload.get("actor", "api")))
+                self.auth.require_capability(auth_context, "memory:admin")
+                self.memory.rotate_federation_key(
+                    reason=self._required(payload, "reason"), actor=payload.get("actor", "api"),
+                    expected_fingerprint=self._required(payload, "expected_fingerprint"),
+                    recovery_path=self._required_safe_admin_path(payload, "recovery_path"),
+                )
+                return self.memory.public_federation_identity()
             if method == "POST" and endpoint == "/v1/federation/conformance":
                 return self.memory.federation_conformance()
 
@@ -1452,6 +1602,14 @@ class AletheiaService:
                 peer_id = parts[3]
                 if method == "GET" and len(parts) == 4:
                     return asdict(self.memory.get_peer(peer_id))
+                if method == "POST" and len(parts) == 5 and parts[4] == "replace-key":
+                    self.auth.require_capability(auth_context, "memory:admin")
+                    return asdict(self.memory.replace_peer_key(
+                        peer_id, peer_identity=self._required(payload, "peer_identity"),
+                        expected_fingerprint=self._required(payload, "expected_fingerprint"),
+                        confirmed_fingerprint=self._required(payload, "confirmed_fingerprint"),
+                        reason=self._required(payload, "reason"), actor=payload.get("actor", "api"),
+                    ))
                 if method == "POST" and len(parts) == 5 and parts[4] == "trust":
                     return asdict(self.memory.trust_peer(
                         peer_id,
@@ -1474,6 +1632,8 @@ class AletheiaService:
                 namespace = self._query_value(query, "namespace", none_if_missing=True)
                 if namespace:
                     self.auth.require_namespace(auth_context, namespace=namespace)
+                elif "*" not in auth_context.namespace_grants:
+                    raise validation_error("An explicit authorized namespace is required.")
                 return [
                     asdict(share)
                     for share in self.memory.list_share_grants(
@@ -1505,7 +1665,8 @@ class AletheiaService:
                     allow_secret=bool(payload.get("allow_secret", False)),
                 ))
             if method == "GET" and endpoint == "/v1/grants/consent":
-                return [asdict(record) for record in self.memory.list_consent_records()]
+                namespace = OperationAccess(self, auth_context).scope("memory:share", self._query_value(query, "namespace", none_if_missing=True))
+                return [asdict(record) for record in self.memory.list_consent_records(namespace=namespace)]
             if method == "POST" and endpoint == "/v1/shares/import":
                 if payload.get("trust_policy") in {"trusted_device", "active_if_trusted", "active_for_project_state"}:
                     self.auth.require_capability(auth_context, "memory:remote_active_write")
@@ -1515,6 +1676,7 @@ class AletheiaService:
                     trust_policy=payload.get("trust_policy", "candidate_only"),
                     actor=payload.get("actor", "api"),
                     dry_run=bool(payload.get("dry_run", False)),
+                    authorize_scope=lambda namespace, project: self.auth.require_namespace(auth_context, namespace=namespace, project_id=project),
                 ))
             parts = endpoint.split("/")
             if len(parts) >= 4:
@@ -1542,8 +1704,11 @@ class AletheiaService:
         if endpoint.startswith("/v1/sync"):
             self.auth.require_capability(auth_context, "memory:sync")
             if method == "GET" and endpoint == "/v1/sync/collections":
-                return [asdict(collection) for collection in self.memory.list_sync_collections(status=self._query_value(query, "status", none_if_missing=True))]
+                namespace = OperationAccess(self, auth_context).scope("memory:sync", self._query_value(query, "namespace", none_if_missing=True))
+                return [asdict(collection) for collection in self.memory.list_sync_collections(namespace=namespace, status=self._query_value(query, "status", none_if_missing=True))]
             if method == "POST" and endpoint == "/v1/sync/run":
+                collection = self.memory.get_sync_collection(self._required(payload, "collection_id"))
+                self.auth.require_namespace(auth_context, namespace=collection.namespace, project_id=collection.project_id)
                 if payload.get("trust_policy") in {"trusted_device", "active_if_trusted", "active_for_project_state"}:
                     self.auth.require_capability(auth_context, "memory:remote_active_write")
                 return asdict(self.memory.sync(
@@ -1554,28 +1719,45 @@ class AletheiaService:
                     input_path=self._optional_safe_admin_path(payload, "input_path"),
                     output_path=self._optional_safe_admin_path(payload, "output_path"),
                     dry_run=bool(payload.get("dry_run", False)),
+                    authorize_scope=lambda namespace, project: self.auth.require_namespace(auth_context, namespace=namespace, project_id=project),
                 ))
             if method == "GET" and endpoint == "/v1/sync/runs":
-                return [asdict(run) for run in self.memory.list_sync_runs(limit=self._limit(query))]
+                namespace = OperationAccess(self, auth_context).scope("memory:sync", self._query_value(query, "namespace", none_if_missing=True))
+                return [asdict(run) for run in self.memory.list_sync_runs(namespace=namespace, limit=self._limit(query))]
             if method == "GET" and endpoint == "/v1/sync/conflicts":
                 namespace = self._query_value(query, "namespace", none_if_missing=True)
                 if namespace:
                     self.auth.require_namespace(auth_context, namespace=namespace)
-                return [asdict(conflict) for conflict in self.memory.list_sync_conflicts(namespace=namespace, status=self._query_value(query, "status", none_if_missing=True))]
+                elif "*" not in auth_context.namespace_grants:
+                    raise validation_error("An explicit authorized namespace is required.")
+                access = ReadAccess(self, auth_context)
+                return [access.sync_conflict(conflict) for conflict in self.memory.list_sync_conflicts(namespace=namespace, status=self._query_value(query, "status", none_if_missing=True))]
             if method == "POST" and endpoint.startswith("/v1/sync/conflicts/") and endpoint.endswith("/resolve"):
                 conflict_id = endpoint.split("/")[4]
                 conflict = self.memory.get_sync_conflict(conflict_id)
                 self.auth.require_namespace(auth_context, namespace=conflict.namespace)
+                self.auth.require_capability(auth_context, "memory:review")
+                strategy = self._required(payload, "strategy")
+                if strategy == "accept_remote_active":
+                    self.auth.require_capability(auth_context, "memory:write_active")
+                    self.auth.require_capability(auth_context, "memory:remote_active_write")
+                def authorize_resolution_target(kind, value):
+                    item = OperationAccess(self, auth_context).target(kind, value, namespace=conflict.namespace)
+                    if kind == "claim" and (value != conflict.local_object_id or item.status == "disputed") and strategy != "defer":
+                        self.auth.require_capability(auth_context, "memory:write_active")
                 return asdict(self.memory.resolve_sync_conflict(
                     conflict_id,
-                    strategy=self._required(payload, "strategy"),
+                    strategy=strategy,
                     reason=self._required(payload, "reason"),
                     actor=payload.get("actor", "api"),
+                    authorize_target=authorize_resolution_target,
                 ))
             if method == "GET" and endpoint == "/v1/sync/cursors":
-                return [asdict(cursor) for cursor in self.memory.list_replication_cursors()]
+                namespace = OperationAccess(self, auth_context).scope("memory:sync", self._query_value(query, "namespace", none_if_missing=True))
+                return [asdict(cursor) for cursor in self.memory.list_replication_cursors(namespace=namespace)]
             if method == "GET" and endpoint == "/v1/sync/remote-sources":
-                return [asdict(source) for source in self.memory.list_remote_sources(local_object_id=self._query_value(query, "local_object_id", none_if_missing=True))]
+                namespace = OperationAccess(self, auth_context).scope("memory:sync", self._query_value(query, "namespace", none_if_missing=True))
+                return [asdict(source) for source in self.memory.list_remote_sources(namespace=namespace, local_object_id=self._query_value(query, "local_object_id", none_if_missing=True))]
             if method == "GET" and endpoint == "/v1/sync/trust-policies":
                 return [asdict(policy) for policy in self.memory.list_import_trust_policies()]
 
@@ -1585,6 +1767,8 @@ class AletheiaService:
                 namespace = self._query_value(query, "namespace", none_if_missing=True)
                 if namespace:
                     self.auth.require_namespace(auth_context, namespace=namespace)
+                elif "*" not in auth_context.namespace_grants:
+                    raise validation_error("An explicit authorized namespace is required.")
                 return [asdict(workspace) for workspace in self.memory.list_workspaces(namespace=namespace)]
             if method == "POST" and endpoint == "/v1/workspaces":
                 namespace = self._required(payload, "namespace")
@@ -1600,6 +1784,8 @@ class AletheiaService:
                 namespace = self._query_value(query, "namespace", none_if_missing=True)
                 if namespace:
                     self.auth.require_namespace(auth_context, namespace=namespace)
+                elif "*" not in auth_context.namespace_grants:
+                    raise validation_error("An explicit authorized namespace is required.")
                 return [asdict(group) for group in self.memory.list_agent_groups(namespace=namespace)]
             if method == "POST" and endpoint == "/v1/workspaces/agent-groups":
                 namespace = self._required(payload, "namespace")
@@ -1635,7 +1821,8 @@ class AletheiaService:
         if endpoint.startswith("/v1/revocations"):
             self.auth.require_capability(auth_context, "memory:sync")
             if method == "GET" and endpoint == "/v1/revocations":
-                return [asdict(record) for record in self.memory.list_revocations()]
+                namespace = OperationAccess(self, auth_context).scope("memory:sync", self._query_value(query, "namespace", none_if_missing=True))
+                return [asdict(record) for record in self.memory.list_revocations(namespace=namespace)]
             if method == "POST" and endpoint == "/v1/revocations/propagate":
                 return self.memory.propagate_revocations(peer_id=payload.get("peer_id"))
 
@@ -2200,11 +2387,19 @@ class AletheiaService:
         attributes = "HttpOnly; SameSite=Strict; Path=/"
         return attributes + ("; Secure" if self.config.allow_remote else "")
 
-    def _console_session_for_token(self, raw_session: str):
+    def _console_session_for_token(self, raw_session: str, *, previous: AuthContext | None = None):
         rows = self._console_session_rows(raw_session)
         for row in rows:
             metadata = json.loads(row["metadata_json"] or "{}")
-            if not AuthService.verify_secret_hash(raw_session, metadata.get("session_token_hash")):
+            # Reuse only this request's proof of the exact credential, never its
+            # old grants or lifecycle state. The row is freshly read on replay.
+            verified = (previous is not None and previous.token is not None
+                        and previous.token.metadata.get("console_session")
+                        and previous.token.id == row["id"]
+                        and metadata.get("session_token_lookup") == content_hash(raw_session)
+                        and metadata.get("session_token_hash")
+                        and metadata["session_token_hash"] == previous.token.metadata.get("session_token_hash"))
+            if not verified and not AuthService.verify_secret_hash(raw_session, metadata.get("session_token_hash")):
                 continue
             expires_at = parse_iso(row["expires_at"])
             if expires_at and expires_at <= utc_now():
@@ -2383,14 +2578,14 @@ class AletheiaService:
         if namespace:
             self.auth.require_namespace(auth_context, namespace=namespace, project_id=payload.get("project_id"))
 
-    def _authenticate(self, method: str, endpoint: str, headers: Mapping[str, str]) -> AuthContext:
+    def _authenticate(self, method: str, endpoint: str, headers: Mapping[str, str], *, previous: AuthContext | None = None) -> AuthContext:
         if endpoint == "/v1/auth/me":
             raw_auth = self._header(headers, "Authorization")
             # Supplied credentials must be validated even in local tokenless mode.
             if raw_auth is not None:
                 return self.auth.authenticate(raw_auth, auth_required=True)
             if self._header(headers, "X-Console-Session") or self._cookie(headers, "aletheia_console"):
-                return self._authenticate_console_or_api(method, endpoint, headers)
+                return self._authenticate_console_or_api(method, endpoint, headers, previous=previous)
             protected = self.memory.store.connection.execute(
                 "SELECT enabled FROM protected_mode_config WHERE id = 'protected_default'"
             ).fetchone()
@@ -2404,7 +2599,7 @@ class AletheiaService:
         if endpoint == "/v1/console/login":
             return AuthContext(token=None, client=None, auth_required=False)
         if self._is_console_api(endpoint):
-            return self._authenticate_console_or_api(method, endpoint, headers)
+            return self._authenticate_console_or_api(method, endpoint, headers, previous=previous)
         auth_required = self.config.auth_required and (method, endpoint) not in PUBLIC_ENDPOINTS
         return self.auth.authenticate(
             self._header(headers, "Authorization"),
@@ -2417,14 +2612,14 @@ class AletheiaService:
     def _is_console_api(self, endpoint: str) -> bool:
         return any(endpoint.startswith(prefix) for prefix in CONSOLE_API_PREFIXES)
 
-    def _authenticate_console_or_api(self, method: str, endpoint: str, headers: Mapping[str, str]) -> AuthContext:
+    def _authenticate_console_or_api(self, method: str, endpoint: str, headers: Mapping[str, str], *, previous: AuthContext | None = None) -> AuthContext:
         raw_auth = self._header(headers, "Authorization")
         if raw_auth:
             return self.auth.authenticate(raw_auth, auth_required=True)
         raw_session = self._header(headers, "X-Console-Session") or self._cookie(headers, "aletheia_console")
         if not raw_session:
             raise unauthorized("Console authentication required.")
-        session = self._console_session_for_token(raw_session)
+        session = self._console_session_for_token(raw_session, previous=previous)
         token = ApiToken(
             id=session["id"],
             client_id=session["client_id"] or "console",
@@ -2521,11 +2716,17 @@ class AletheiaService:
             if row:
                 if row["request_hash"] != request_hash:
                     raise idempotency_conflict()
+                if row["status"] == "redacted":
+                    raise forbidden("Cached result was removed; the operation was not repeated.")
                 if row["status"] != "completed" or not row["response_json"]:
                     raise idempotency_conflict(
                         "An operation with this idempotency key is still in progress; inspect state before retrying."
                     )
-                return json.loads(row["response_json"])
+                response = json.loads(row["response_json"])
+                receipt = response.pop("_authorization", None)
+                if endpoint != "/v1/remember":
+                    validate_receipt(self, self._authenticate(method, endpoint, headers), receipt)
+                return response
             self.memory.store.connection.execute(
                 """
                 INSERT INTO idempotency_records (
@@ -2550,6 +2751,7 @@ class AletheiaService:
         client_id: str | None,
         status_code: int,
         response: dict,
+        receipt_access: dict | None = None,
     ) -> None:
         if method not in STATE_CHANGING_METHODS or endpoint in READ_POST_PATHS or status_code >= 400:
             return
@@ -2560,16 +2762,25 @@ class AletheiaService:
 
         stored = dict(response)
         stored["_status_code"] = status_code
+        if receipt_access is not None:
+            stored["_authorization"] = receipt_access
+        denied = None
         with self.memory.store.transaction(immediate=True):
+            if receipt_access is not None:
+                try:
+                    validate_receipt(self, self._authenticate(method, endpoint, headers), receipt_access)
+                except (ServiceError, NotFoundError) as exc:
+                    denied = exc
             updated = self.memory.store.connection.execute(
                 """
                 UPDATE idempotency_records
-                SET response_json=?, status='completed', expires_at=?
+                SET response_json=?, status=?, expires_at=?
                 WHERE id=? AND request_hash=? AND status='in_progress'
                 """,
                 (
-                    json.dumps(stored, sort_keys=True),
-                    (utc_now() + timedelta(hours=24)).isoformat(),
+                    None if denied else json.dumps(stored, sort_keys=True),
+                    "redacted" if denied else "completed",
+                    None if denied else (utc_now() + timedelta(hours=24)).isoformat(),
                     record_id,
                     request_hash,
                 ),
@@ -2578,6 +2789,9 @@ class AletheiaService:
                 raise idempotency_conflict(
                     "The idempotency reservation changed before its result was stored; inspect state before retrying."
                 )
+        # The first response was authorized in the committing route snapshot.
+        # A later access change removes its stored content, without turning a
+        # successfully committed mutation into an apparent failure to retry.
 
     def _idempotency_record_id(
         self,
@@ -3318,15 +3532,16 @@ class AletheiaDaemon:
         def run() -> None:
             while not self._worker_stop.is_set():
                 try:
-                    with self.service.lock:
-                        self.service.memory.run_jobs(max_jobs=self.config.max_jobs_per_tick)
+                    self.service.run_background_jobs(max_jobs=self.config.max_jobs_per_tick)
                 except Exception as exc:  # noqa: BLE001 - daemon worker keeps serving.
-                    self.service.log_service_instance(
-                        instance_id=self.instance_id,
-                        status="worker_error",
-                        port=self.config.port,
-                        metadata={"error": str(exc)},
-                    )
+                    with self.service.lock:
+                        if not self.service._closed:
+                            self.service.log_service_instance(
+                                instance_id=self.instance_id,
+                                status="worker_error",
+                                port=self.config.port,
+                                metadata={"error": str(exc)},
+                            )
                 self._worker_stop.wait(1.0)
 
         self._worker_thread = threading.Thread(target=run, name="aletheia-worker", daemon=True)
@@ -3652,7 +3867,7 @@ def openapi_schema() -> dict:
         ("GET", "/v1/v1-gate/runs/{run_id}", "memory:read"),
         ("GET", "/v1/federation/identity", "memory:federation"),
         ("POST", "/v1/federation/identity", "memory:federation"),
-        ("POST", "/v1/federation/identity/rotate", "memory:federation"),
+        ("POST", "/v1/federation/identity/rotate", "memory:admin"),
         ("GET", "/v1/federation/status", "memory:federation"),
         ("POST", "/v1/federation/conformance", "memory:federation"),
         ("GET", "/v1/peers", "memory:peers"),
@@ -3660,6 +3875,7 @@ def openapi_schema() -> dict:
         ("GET", "/v1/peers/trust-domains", "memory:peers"),
         ("GET", "/v1/peers/{peer_id}", "memory:peers"),
         ("POST", "/v1/peers/{peer_id}/trust", "memory:peers"),
+        ("POST", "/v1/peers/{peer_id}/replace-key", "memory:admin"),
         ("POST", "/v1/peers/{peer_id}/revoke", "memory:revoke_peer"),
         ("GET", "/v1/shares", "memory:share"),
         ("POST", "/v1/shares", "memory:share"),

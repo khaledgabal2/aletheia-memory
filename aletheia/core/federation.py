@@ -6,9 +6,9 @@ import base64
 import json
 import os
 import zipfile
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aletheia.core.crypto import (
     aes_gcm_decrypt,
@@ -192,61 +192,49 @@ def export_federation_identity(memory, *, output_path: str | None = None) -> dic
     return payload
 
 
-def rotate_federation_key(memory, *, reason: str, actor: str = "user") -> FederationIdentity:
-    _require_reason(reason)
-    identity = active_federation_identity(memory)
-    public_key, private_ref, fingerprint = _new_key_material(
-        identity.display_name,
-        identity.key_algorithm,
-        protected=bool(identity.metadata.get("protected_private_key", True)),
-    )
-    metadata = dict(identity.metadata)
-    old_keys = list(metadata.get("old_public_keys") or [])
-    old_keys.append(
-        {
-            "public_key": identity.public_key,
-            "key_fingerprint": identity.key_fingerprint,
-            "rotated_at": utc_now_iso(),
-            "reason": reason,
-        }
-    )
-    metadata.update(
-        {
-            "old_public_keys": old_keys,
-            "private_key_ref": private_ref,
-            "private_key_exported": False,
-            "last_rotation_reason": reason,
-        }
-    )
-    now = utc_now_iso()
-    with memory.store.transaction():
-        memory.store.connection.execute(
-            """
-            UPDATE federation_identities
-            SET public_key = ?, key_fingerprint = ?, rotated_at = ?, metadata_json = ?
-            WHERE id = ?
-            """,
-            (public_key, fingerprint, now, json.dumps(metadata, sort_keys=True), identity.id),
-        )
-        _write_revocation_record(
-            memory,
-            revocation_type="key_revocation",
-            target_id=identity.id,
-            target_type="federation_identity",
-            peer_id=None,
-            reason=reason,
-            actor=actor,
-            metadata={"old_fingerprint": identity.key_fingerprint, "new_fingerprint": fingerprint},
-        )
-        _write_federation_audit(memory, event_type="identity.key_rotated", target_id=identity.id, target_type="federation_identity", actor=actor, reason=reason)
-    return get_federation_identity(memory, identity.id)
+def rotate_federation_key(memory, **kwargs) -> FederationIdentity:
+    from aletheia.core.federation_recovery import rotate_federation_key as rotate
+
+    return rotate(memory, **kwargs)
+
+
+def replace_peer_key(memory, peer_id: str, **kwargs) -> PeerDevice:
+    from aletheia.core.federation_recovery import replace_peer_key as replace_key
+
+    return replace_key(memory, peer_id, **kwargs)
+
+
+def recover_share_bundle_for_review(memory, **kwargs) -> dict:
+    from aletheia.core.federation_recovery import recover_share_bundle_for_review as recover
+
+    return recover(memory, **kwargs)
+
+
+def read_federation_recovery_review(memory, **kwargs) -> dict:
+    from aletheia.core.federation_recovery import read_federation_recovery_review as read_review
+
+    return read_review(**kwargs)
+
+
+def _public_identity_record(identity: FederationIdentity) -> dict:
+    result = {field: getattr(identity, field) for field in (
+        "id", "instance_id", "display_name", "public_key", "key_fingerprint", "key_algorithm", "status", "created_at", "rotated_at"
+    )}
+    result["metadata"] = {"private_key_exported": False, "key_material_version": 2,
+                          "protected_private_key": bool(identity.metadata.get("protected_private_key"))}
+    return result
+
+
+def public_federation_identity(memory) -> dict | None:
+    identity = active_federation_identity(memory, none_if_missing=True)
+    return _public_identity_record(identity) if identity else None
 
 
 def federation_status(memory) -> dict:
     identity = active_federation_identity(memory, none_if_missing=True)
     return {
         "schema_version": SCHEMA_VERSION,
-        "identity": asdict(identity) if identity else None,
+        "identity": _public_identity_record(identity) if identity else None,
         "peer_count": len(list_peers(memory, include_revoked=True)),
         "trusted_peer_count": len([peer for peer in list_peers(memory) if peer.trust_status in {"trusted_device", "trusted_user", "trusted_team"}]),
         "active_share_count": len(list_share_grants(memory, status="active")),
@@ -285,7 +273,7 @@ def add_peer(
             existing = PeerDevice.from_row(existing_row)
             if existing.public_key != public_key or existing.key_fingerprint != fingerprint:
                 raise ValidationError(
-                    "Peer identity key changed; revoke and re-add the peer or use a signed key rotation flow."
+                    "Peer identity key changed; use replace_peer_key with independently confirmed fingerprints."
                 )
         memory.store.connection.execute(
             """
@@ -339,7 +327,7 @@ def trust_peer(memory, peer_id: str, *, trust_status: str, trust_domain_id: str 
         raise ValidationError(f"Unsupported trust status: {trust_status}")
     peer = get_peer(memory, peer_id)
     if peer.trust_status == "revoked":
-        raise ValidationError("Revoked peers cannot be trusted again; add the peer identity again.")
+        raise ValidationError("Revoked peers require a new key and explicit replace_peer_key approval before trust can be restored.")
     if trust_domain_id:
         get_trust_domain(memory, trust_domain_id)
     elif trust_status == "trusted_device":
@@ -350,10 +338,15 @@ def trust_peer(memory, peer_id: str, *, trust_status: str, trust_domain_id: str 
         trust_domain_id = "trust_untrusted_imports"
     now = utc_now_iso()
     with memory.store.transaction():
-        memory.store.connection.execute(
-            "UPDATE peer_devices SET trust_status = ?, trust_domain_id = ?, trusted_at = ? WHERE id = ?",
-            (trust_status, trust_domain_id, now if trust_status.startswith("trusted_") else None, peer.id),
+        updated = memory.store.connection.execute(
+            """UPDATE peer_devices SET trust_status = ?, trust_domain_id = ?, trusted_at = ?
+               WHERE id = ? AND public_key = ? AND key_fingerprint = ?
+               AND trust_status != 'revoked' AND revoked_at IS NULL""",
+            (trust_status, trust_domain_id, now if trust_status.startswith("trusted_") else None,
+             peer.id, peer.public_key, peer.key_fingerprint),
         )
+        if updated.rowcount != 1:
+            raise ValidationError("Peer key changed or was revoked during approval; inspect the peer before approving again.")
         _write_federation_audit(memory, event_type="peer.trusted", peer_id=peer.id, target_id=peer.id, target_type="peer_device", actor=actor, reason=reason, metadata={"trust_status": trust_status, "trust_domain_id": trust_domain_id})
     if trust_status in {"trusted_team"}:
         memory.create_review_task(
@@ -440,9 +433,9 @@ def create_share_grant(
     if not recipient_peer_ids:
         raise ValidationError("At least one recipient peer is required.")
     peers = [get_peer(memory, peer_id) for peer_id in recipient_peer_ids]
-    revoked = [peer.id for peer in peers if peer.trust_status == "revoked"]
+    revoked = [peer.id for peer in peers if peer.trust_status in {"revoked", "blocked"} or peer.revoked_at]
     if revoked:
-        raise ValidationError("Cannot create share for revoked peers: " + ", ".join(revoked))
+        raise ValidationError("Cannot create share for revoked or blocked peers: " + ", ".join(revoked))
     now = utc_now_iso()
     share_id = new_id("share")
     collection_id = "sync_" + content_hash(share_id)[:24]
@@ -594,7 +587,7 @@ def _revoke_share_grant(memory, share_id: str, *, reason: str, actor: str, peer_
 
 
 def _require_active_share(memory, share: ShareGrant, *, action: str) -> None:
-    if share.status != "active":
+    if share.status != "active" or share.revoked_at:
         raise ValidationError(f"Cannot {action} revoked or inactive share grant.")
     expires_at = parse_iso(share.expires_at) if share.expires_at else None
     if expires_at and expires_at <= utc_now():
@@ -621,12 +614,15 @@ def get_sync_collection(memory, collection_id_or_share: str) -> SyncCollection:
     return SyncCollection.from_row(row)
 
 
-def list_sync_collections(memory, *, status: str | None = None) -> list[SyncCollection]:
-    params: list[Any] = []
-    where = ""
+def list_sync_collections(memory, *, status: str | None = None, namespace: str | None = None) -> list[SyncCollection]:
+    clauses, params = [], []
     if status:
-        where = "WHERE status = ?"
+        clauses.append("status = ?")
         params.append(status)
+    if namespace:
+        clauses.append("namespace = ?")
+        params.append(namespace)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
     rows = memory.store.connection.execute(f"SELECT * FROM sync_collections {where} ORDER BY created_at DESC", params).fetchall()
     return [SyncCollection.from_row(row) for row in rows]
 
@@ -647,9 +643,18 @@ def export_share_bundle(
     if not encrypt and share.privacy_ceiling != "public" and not redacted:
         raise ValidationError("Unencrypted sync exports require public or redacted mode.")
     collection = get_sync_collection(memory, share.id)
-    recipients = list_share_recipients(memory, share.id)
+    if collection.status != "active":
+        raise ValidationError("Cannot export revoked or inactive collection.")
+    recipients = []
+    for recipient in list_share_recipients(memory, share.id):
+        peer = get_peer(memory, recipient.peer_id)
+        if recipient.status != "active" or recipient.revoked_at or peer.trust_status in {"revoked", "blocked"} or peer.revoked_at:
+            continue
+        if recipient.recipient_public_key != peer.public_key:
+            raise ValidationError("Share recipient key does not match pinned peer identity.")
+        recipients.append(recipient)
     if not recipients:
-        raise ValidationError("Share has no recipients.")
+        raise ValidationError("Share has no active recipients.")
     identity = active_federation_identity(memory)
     payload = _build_share_payload(memory, identity=identity, share=share, collection=collection, redacted=redacted)
     changeset, items = _record_changeset(memory, identity=identity, collection=collection, target_peer_id=recipients[0].peer_id, encrypted=encrypt, payload=payload)
@@ -695,34 +700,60 @@ def export_share_bundle(
     return run
 
 
-def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candidate_only", actor: str = "user", dry_run: bool = False) -> SyncRun:
+def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candidate_only", actor: str = "user", dry_run: bool = False,
+                        authorize_scope: Callable[[str, str | None], None] | None = None) -> SyncRun:
+    if trust_policy not in IMPORT_MODES | {"trusted_device"}:
+        raise ValidationError(f"Unknown import trust policy: {trust_policy}")
+    if trust_policy == "reject_by_default":
+        raise ValidationError("Import trust policy rejects remote bundles.")
     manifest, payload = _read_bundle(memory, input_path)
     if manifest.get("format") != "aletsync":
         raise ValidationError("Not an Aletheia sync bundle.")
     origin_identity = payload["peer_identity"]
     share_payload = payload["share_grant"]
     collection_payload = payload["collection"]
+    local_collection_id = collection_payload["id"]
+    # Check local trust and revocation under the same transaction as the import
+    # so another connection cannot revoke a grant between validation and use.
+    with memory.store.transaction(immediate=True):
+        _validate_import_grant(memory, share_payload, collection_payload, origin_identity)
+        for items in payload.get("payloads", {}).values():
+            if any(item.get("namespace") != share_payload["namespace"] for item in items):
+                raise ValidationError("Bundle content must belong to the share grant namespace.")
+        if authorize_scope is not None:
+            authorize_scope(share_payload["namespace"], share_payload.get("project_id"))
+        peer = _peer_for_import(memory, origin_identity, trust_policy=trust_policy)
+        policy = _policy_for_import(memory, peer, trust_policy=trust_policy, namespace=share_payload["namespace"])
+        if dry_run:
+            return SyncRun(
+                id=new_id("sync"),
+                collection_id=local_collection_id,
+                peer_id="peer_" + content_hash(origin_identity["instance_id"])[:24],
+                direction="pull",
+                transport="file_bundle",
+                status="planned",
+                started_at=utc_now_iso(),
+                finished_at=None,
+                sent_count=0,
+                received_count=sum(payload.get("item_counts", {}).values()),
+                applied_count=0,
+                conflict_count=0,
+                redaction_count=payload.get("item_counts", {}).get("tombstones", 0),
+                warnings=["dry_run_no_mutation"],
+                metadata={"input_path": input_path, "dry_run": True},
+            )
+        if peer is None:
+            peer = add_peer(memory, peer_identity=origin_identity, trust_status="unknown", reason=f"Imported bundle {Path(input_path).name}")
+        return _import_verified_share_bundle(memory, input_path=input_path, trust_policy=trust_policy,
+                                             actor=actor, manifest=manifest, payload=payload, peer=peer, policy=policy)
+
+
+def _import_verified_share_bundle(memory, *, input_path: str, trust_policy: str, actor: str,
+                                  manifest: dict, payload: dict, peer: PeerDevice, policy: ImportTrustPolicy) -> SyncRun:
+    share_payload = payload["share_grant"]
+    collection_payload = payload["collection"]
     local_share_id = share_payload["id"]
     local_collection_id = collection_payload["id"]
-    if dry_run:
-        return SyncRun(
-            id=new_id("sync"),
-            collection_id=local_collection_id,
-            peer_id="peer_" + content_hash(origin_identity["instance_id"])[:24],
-            direction="pull",
-            transport="file_bundle",
-            status="planned",
-            started_at=utc_now_iso(),
-            finished_at=None,
-            sent_count=0,
-            received_count=sum(payload.get("item_counts", {}).values()),
-            applied_count=0,
-            conflict_count=0,
-            redaction_count=payload.get("item_counts", {}).get("tombstones", 0),
-            warnings=["dry_run_no_mutation"],
-            metadata={"input_path": input_path, "dry_run": True},
-        )
-    peer = _peer_for_import(memory, origin_identity, trust_policy=trust_policy, reason=f"Imported bundle {Path(input_path).name}")
     _ensure_imported_share_and_collection(memory, share_payload, collection_payload, peer)
     run_id = new_id("sync")
     started_at = utc_now_iso()
@@ -730,7 +761,7 @@ def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candida
     conflicts = 0
     redactions = 0
     warnings: list[str] = []
-    remote_to_local_evidence: dict[str, str] = {}
+    remote_to_local_evidence: dict[str, str | None] = {}
     with memory.store.transaction():
         memory.store.connection.execute(
             """
@@ -751,20 +782,21 @@ def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candida
                 json.dumps({"input_path": input_path, "manifest": manifest}, sort_keys=True),
             ),
         )
-    policy = _policy_for_import(memory, peer, trust_policy=trust_policy, namespace=share_payload["namespace"])
-    for evidence in payload.get("payloads", {}).get("evidence", []):
-        local_event = _import_evidence(memory, evidence, peer=peer, share_id=local_share_id, sync_run_id=run_id, trust_domain_id=policy.trust_domain_id)
-        remote_to_local_evidence[evidence["id"]] = local_event.id
-        applied += 1
-    for claim in payload.get("payloads", {}).get("claims", []):
-        local_evidence_ids = [remote_to_local_evidence[eid] for eid in claim.get("evidence_ids", []) if eid in remote_to_local_evidence]
-        result = _import_claim(memory, claim, peer=peer, share_id=local_share_id, collection_id=local_collection_id, sync_run_id=run_id, policy=policy, evidence_ids=local_evidence_ids)
-        applied += int(result["applied"])
-        conflicts += int(result["conflict"])
     for tombstone in payload.get("payloads", {}).get("tombstones", []):
         if _apply_remote_tombstone(memory, tombstone, peer=peer, share_id=local_share_id, sync_run_id=run_id):
             applied += 1
             redactions += 1
+    for evidence in payload.get("payloads", {}).get("evidence", []):
+        local_event, created = _import_evidence(memory, evidence, peer=peer, share_id=local_share_id, sync_run_id=run_id, trust_domain_id=policy.trust_domain_id)
+        remote_to_local_evidence[evidence["id"]] = local_event.id if local_event else None
+        applied += int(created)
+    for claim in payload.get("payloads", {}).get("claims", []):
+        if any(eid in remote_to_local_evidence and remote_to_local_evidence[eid] is None for eid in claim.get("evidence_ids", [])):
+            continue
+        local_evidence_ids = [remote_to_local_evidence[eid] for eid in claim.get("evidence_ids", []) if eid in remote_to_local_evidence]
+        result = _import_claim(memory, claim, peer=peer, share_id=local_share_id, collection_id=local_collection_id, sync_run_id=run_id, policy=policy, evidence_ids=local_evidence_ids)
+        applied += int(result["applied"])
+        conflicts += int(result["conflict"])
     status = "completed_with_conflicts" if conflicts else "completed"
     with memory.store.transaction():
         memory.store.connection.execute(
@@ -791,6 +823,7 @@ def sync(
     input_path: str | None = None,
     output_path: str | None = None,
     dry_run: bool = False,
+    authorize_scope: Callable[[str, str | None], None] | None = None,
 ) -> SyncRun:
     collection = get_sync_collection(memory, collection_id)
     share = get_share_grant(memory, collection.share_grant_id)
@@ -820,7 +853,7 @@ def sync(
     if output_path:
         return export_share_bundle(memory, share_id=share.id, output_path=output_path, encrypt=True)
     if input_path:
-        return import_share_bundle(memory, input_path=input_path)
+        return import_share_bundle(memory, input_path=input_path, authorize_scope=authorize_scope)
     return _insert_sync_run(
         memory,
         collection_id=collection.id,
@@ -845,22 +878,28 @@ def get_sync_run(memory, sync_run_id: str) -> SyncRun:
     return SyncRun.from_row(row)
 
 
-def list_sync_runs(memory, *, limit: int = 50) -> list[SyncRun]:
-    rows = memory.store.connection.execute("SELECT * FROM sync_runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
+def list_sync_runs(memory, *, limit: int = 50, namespace: str | None = None) -> list[SyncRun]:
+    where = "WHERE collection_id IN (SELECT id FROM sync_collections WHERE namespace = ?)" if namespace else ""
+    params = [namespace, limit] if namespace else [limit]
+    rows = memory.store.connection.execute(f"SELECT * FROM sync_runs {where} ORDER BY started_at DESC LIMIT ?", params).fetchall()
     return [SyncRun.from_row(row) for row in rows]
 
 
-def list_replication_cursors(memory) -> list[ReplicationCursor]:
-    rows = memory.store.connection.execute("SELECT * FROM replication_cursors ORDER BY last_synced_at DESC").fetchall()
+def list_replication_cursors(memory, *, namespace: str | None = None) -> list[ReplicationCursor]:
+    where = "WHERE collection_id IN (SELECT id FROM sync_collections WHERE namespace = ?)" if namespace else ""
+    rows = memory.store.connection.execute(f"SELECT * FROM replication_cursors {where} ORDER BY last_synced_at DESC", [namespace] if namespace else []).fetchall()
     return [ReplicationCursor.from_row(row) for row in rows]
 
 
-def list_remote_sources(memory, *, local_object_id: str | None = None) -> list[RemoteMemorySource]:
-    params: list[Any] = []
-    where = ""
+def list_remote_sources(memory, *, local_object_id: str | None = None, namespace: str | None = None) -> list[RemoteMemorySource]:
+    clauses, params = [], []
     if local_object_id:
-        where = "WHERE local_object_id = ?"
+        clauses.append("local_object_id = ?")
         params.append(local_object_id)
+    if namespace:
+        clauses.append("share_grant_id IN (SELECT id FROM share_grants WHERE namespace = ?)")
+        params.append(namespace)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
     rows = memory.store.connection.execute(f"SELECT * FROM remote_memory_sources {where} ORDER BY imported_at DESC", params).fetchall()
     return [RemoteMemorySource.from_row(row) for row in rows]
 
@@ -891,17 +930,128 @@ def get_sync_conflict(memory, conflict_id: str) -> SyncConflict:
     return SyncConflict.from_row(row)
 
 
-def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: str, actor: str = "user") -> SyncConflictResolution:
+def _sync_resolution_targets(memory, conflict, authorize_target):
+    """Resolve current local identities, never materialize the old bundle snapshot."""
+    if conflict.conflict_type != "claim_value_conflict" or conflict.local_object_type != "claim" or conflict.remote_object_type != "claim":
+        raise ValidationError("This sync conflict type is not supported for resolution.")
+    sources = memory.store.connection.execute(
+        "SELECT * FROM remote_memory_sources WHERE origin_instance_id = ? AND remote_object_type = 'claim' AND remote_object_id = ?",
+        (conflict.origin_instance_id, conflict.remote_object_id)).fetchall()
+    if len(sources) != 1:
+        raise ValidationError("Resolution requires one current remote source mapping.")
+    source = sources[0]
+    kind = source["local_object_type"]
+    if kind not in {"claim", "candidate_claim"}:
+        raise ValidationError("Remote source is not a resolvable claim.")
+    local = memory.read_claim(conflict.local_object_id)
+    remote = (memory.read_claim if kind == "claim" else memory.read_candidate)(source["local_object_id"])
+    snapshot = conflict.metadata.get("remote_claim") or {}
+    if (local.namespace != conflict.namespace or remote.namespace != conflict.namespace
+        or local.id == remote.id or local.status not in {"active", "core", "disputed"}
+        or local.object != conflict.metadata.get("local_object")
+        or any(getattr(local, field) != snapshot.get(field) for field in ("subject", "predicate"))
+        or any(getattr(remote, field) != snapshot.get(field) for field in ("subject", "predicate", "object", "memory_type"))):
+        raise ValidationError("Conflict sources changed since detection; review a fresh conflict.")
+    if (kind == "claim" and remote.status not in {"active", "core", "disputed"}) or (kind == "candidate_claim" and remote.candidate_status not in {"pending_review", "validated", "needs_conflict_resolution"}):
+        raise ValidationError("Remote source has already been reviewed or is unavailable.")
+    if memory.store.connection.execute(
+        "SELECT 1 FROM sync_tombstones WHERE origin_instance_id = ? AND object_id = ?",
+        (conflict.origin_instance_id, conflict.remote_object_id)).fetchone():
+        raise ValidationError("Remote source has been deleted or redacted.")
+    for target_kind, item in (("claim", local), (kind, remote)):
+        if not item.evidence_ids:
+            raise ValidationError("Conflict sources require current evidence.")
+        for value in [item.id, *item.evidence_ids]:
+            if memory.store.connection.execute("SELECT 1 FROM deletion_tombstones WHERE target_id = ?", (value,)).fetchone():
+                raise ValidationError("Conflict source has been deleted or redacted.")
+        for value in item.evidence_ids:
+            if memory.read_event(value).namespace != conflict.namespace:
+                raise ValidationError("Conflict evidence belongs to another namespace.")
+        if authorize_target:
+            authorize_target(target_kind, item.id)
+    return local, remote, source
+
+
+def _resolve_sync_claim_families(memory, local_id, remote_id, *, winner, reason):
+    """Resolve only the reviewed pair; broader families require their own review."""
+    ids = set(memory._conflict_ids_for_claim(local_id) + memory._conflict_ids_for_claim(remote_id))
+    for value in ids:
+        family = memory.read_conflict_family(value)
+        if family.status != "unresolved":
+            continue
+        if set(family.claim_ids) != {local_id, remote_id}:
+            raise ValidationError("Conflict family includes additional claims; review the family before sync resolution.")
+        memory.resolve_conflict(value, strategy="manual", active_claim_id=winner,
+            superseded_claim_ids=[remote_id if winner == local_id else local_id], note=reason)
+
+
+def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: str, actor: str = "user",
+                          authorize_target: Callable | None = None) -> SyncConflictResolution:
     _require_reason(reason)
     if strategy not in CONFLICT_RESOLUTION_STRATEGIES:
         raise ValidationError(f"Unknown sync conflict resolution strategy: {strategy}")
-    conflict = get_sync_conflict(memory, conflict_id)
+    if strategy in {"merge_as_conflict_family", "scope_both", "time_scope", "manual_merge"}:
+        raise ValidationError(f"Sync resolution strategy is not supported without explicit merge or scope inputs: {strategy}")
     resolution_id = new_id("sres")
     now = utc_now_iso()
-    with memory.store.transaction():
+    with memory.store.transaction(immediate=True):
+        conflict = get_sync_conflict(memory, conflict_id)
+        if conflict.status not in {"unresolved", "deferred"}:
+            raise ValidationError("Sync conflict is already resolved.")
+        local, remote, source = _sync_resolution_targets(memory, conflict, authorize_target)
+        kind, remote_id = source["local_object_type"], remote.id
+        if kind == "claim" and strategy not in {"defer", "accept_remote_active"}:
+            _resolve_sync_claim_families(memory, local.id, remote.id, winner=local.id, reason=reason)
+        if strategy in {"keep_local", "reject_remote"}:
+            if kind == "candidate_claim":
+                memory.reject_candidate(remote.id, reason=reason, reviewer=actor)
+            else:
+                memory._set_claim_status(claim_id=remote.id, status="rejected", action="sync.reject_remote",
+                                         details={"reason": reason, "conflict_id": conflict.id})
+        elif strategy == "accept_remote_active":
+            if kind == "candidate_claim":
+                remote_id = memory.promote_candidate(remote.id, reason=reason, reviewer=actor).id
+                kind = "claim"
+            _resolve_sync_claim_families(memory, local.id, remote_id, winner=remote_id, reason=reason)
+            memory.supersede_claim(local.id, remote_id, reason=reason)
+        elif strategy == "accept_remote_as_candidate":
+            if kind == "claim":
+                remote_id = _store_remote_candidate(memory, conflict.metadata["remote_claim"], evidence_ids=remote.evidence_ids,
+                    peer=get_peer(memory, source["peer_id"]), sync_run_id=conflict.sync_run_id)
+                memory._set_claim_status(claim_id=remote.id, status="archived", action="sync.demote_remote",
+                                         details={"reason": reason, "candidate_id": remote_id, "conflict_id": conflict.id})
+                kind = "candidate_claim"
+            memory.review_candidate(remote_id, decision="defer", reason=reason, reviewer=actor)
+            if not memory.store.connection.execute("SELECT 1 FROM review_tasks WHERE target_id = ? AND status IN ('open', 'in_progress')", (remote_id,)).fetchone():
+                memory.create_review_task(conflict.namespace, task_type="candidate_review", title="Review remote conflict candidate",
+                    description="The local claim remains active while this remote candidate awaits review.",
+                    target_id=remote_id, target_type="candidate_claim", metadata={"sync_conflict_id": conflict.id})
+
+        if kind != source["local_object_type"] or remote_id != source["local_object_id"]:
+            memory.store.connection.execute("UPDATE remote_memory_sources SET local_object_type = ?, local_object_id = ? WHERE id = ?",
+                                            (kind, remote_id, source["id"]))
+        current_local = memory.read_claim(local.id)
+        current_remote = (memory.read_claim if kind == "claim" else memory.read_candidate)(remote_id)
+        remote_status = current_remote.status if kind == "claim" else current_remote.candidate_status
+        if strategy in {"keep_local", "reject_remote"}:
+            verified = current_local.status in {"active", "core"} and remote_status == "rejected"
+        elif strategy == "accept_remote_active":
+            verified = (current_local.status == "superseded" and remote_status in {"active", "core"}
+                        and set(current_remote.evidence_ids) == set(remote.evidence_ids))
+        elif strategy == "accept_remote_as_candidate":
+            verified = (current_local.status in {"active", "core"} and kind == "candidate_claim"
+                        and remote_status in {"pending_review", "validated", "needs_conflict_resolution"}
+                        and set(current_remote.evidence_ids) == set(remote.evidence_ids))
+        else:
+            verified = current_local.status == local.status
+        if not verified:
+            raise ValidationError("Sync resolution postconditions failed; all effects were rolled back.")
+        details = {"remote_object_id": conflict.remote_object_id, "remote_local_id": remote_id, "remote_local_type": kind,
+                   "local_claim_id": local.id, "local_status": current_local.status, "remote_status": remote_status,
+                   "postconditions_verified": True}
         memory.store.connection.execute(
             "UPDATE sync_conflicts SET status = ?, resolved_at = ? WHERE id = ?",
-            ("deferred" if strategy == "defer" else "resolved", now, conflict.id),
+            ("deferred" if strategy == "defer" else "resolved", None if strategy == "defer" else now, conflict.id),
         )
         memory.store.connection.execute(
             """
@@ -911,9 +1061,13 @@ def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: st
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (resolution_id, conflict.id, strategy, reason, actor, now, json.dumps({"remote_object_id": conflict.remote_object_id}, sort_keys=True)),
+            (resolution_id, conflict.id, strategy, reason, actor, now, json.dumps(details, sort_keys=True)),
         )
-        _write_federation_audit(memory, event_type="conflict.resolved", namespace=conflict.namespace, sync_run_id=conflict.sync_run_id, target_id=conflict.id, target_type="sync_conflict", actor=actor, reason=reason, metadata={"strategy": strategy})
+        decision_status = "deferred" if strategy == "defer" else "resolved"
+        for task in memory.store.connection.execute("SELECT id FROM review_tasks WHERE target_type = 'sync_conflict' AND target_id = ? AND status NOT IN ('resolved', 'dismissed')", (conflict.id,)).fetchall():
+            memory._transition_review_task(task["id"], status=decision_status, event_type=decision_status,
+                note=reason, actor=actor, metadata={"resolution_id": resolution_id, "strategy": strategy})
+        _write_federation_audit(memory, event_type="conflict." + decision_status, namespace=conflict.namespace, sync_run_id=conflict.sync_run_id, target_id=conflict.id, target_type="sync_conflict", actor=actor, reason=reason, metadata={"strategy": strategy, **details})
     row = memory.store.connection.execute("SELECT * FROM sync_conflict_resolutions WHERE id = ?", (resolution_id,)).fetchone()
     return SyncConflictResolution.from_row(row)
 
@@ -928,8 +1082,9 @@ def list_sync_conflict_resolutions(memory, conflict_id: str | None = None) -> li
     return [SyncConflictResolution.from_row(row) for row in rows]
 
 
-def list_revocations(memory) -> list[RevocationRecord]:
-    rows = memory.store.connection.execute("SELECT * FROM revocation_records ORDER BY created_at DESC").fetchall()
+def list_revocations(memory, *, namespace: str | None = None) -> list[RevocationRecord]:
+    where = "WHERE target_type = 'share_grant' AND target_id IN (SELECT id FROM share_grants WHERE namespace = ?)" if namespace else ""
+    rows = memory.store.connection.execute(f"SELECT * FROM revocation_records {where} ORDER BY created_at DESC", [namespace] if namespace else []).fetchall()
     return [RevocationRecord.from_row(row) for row in rows]
 
 
@@ -945,8 +1100,9 @@ def propagate_revocations(memory, *, peer_id: str | None = None) -> dict:
     return {"status": "completed", "propagated_at": now, "peer_id": peer_id}
 
 
-def list_consent_records(memory) -> list[ConsentRecord]:
-    rows = memory.store.connection.execute("SELECT * FROM consent_records ORDER BY created_at DESC").fetchall()
+def list_consent_records(memory, *, namespace: str | None = None) -> list[ConsentRecord]:
+    where = "WHERE namespace = ?" if namespace else ""
+    rows = memory.store.connection.execute(f"SELECT * FROM consent_records {where} ORDER BY created_at DESC", [namespace] if namespace else []).fetchall()
     return [ConsentRecord.from_row(row) for row in rows]
 
 
@@ -1159,7 +1315,8 @@ def federation_conformance(memory) -> dict:
     contract_ok = "Federation protocol v1" in contracts and "Aletheia sync bundle format" in contracts
     no_auto_identity = not list_federation_identities(memory)
     return {
-        "status": "passed" if not missing and contract_ok else "failed",
+        "status": "structural_passed" if not missing and contract_ok else "failed",
+        "assurance": "structural",
         "missing_tables": missing,
         "contract_registered": contract_ok,
         "no_auto_identity": no_auto_identity,
@@ -1349,9 +1506,13 @@ def _validated_private_key_doc(doc: dict) -> dict:
 
 def _validate_peer_identity_payload(payload: dict) -> None:
     required = {"instance_id", "display_name", "public_key", "key_fingerprint", "key_algorithm"}
+    if not isinstance(payload, dict):
+        raise ValidationError("Peer identity must be a public identity object.")
     missing = sorted(required - set(payload))
     if missing:
         raise ValidationError("Peer identity missing fields: " + ", ".join(missing))
+    if any(not isinstance(payload[field], str) or not payload[field].strip() for field in required):
+        raise ValidationError("Peer identity fields must be nonempty strings.")
     expected = sha256_hex(payload["public_key"])[:32]
     if payload["key_fingerprint"] != expected:
         raise ValidationError("Peer identity fingerprint does not match public key.")
@@ -1443,11 +1604,15 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
     claims = []
     evidence_by_id: dict[str, dict] = {}
     warnings: list[str] = []
-    for row in _eligible_claim_rows(memory, share):
+    permissions = set(_normalize_permissions(share.permissions)) if share.grant_type != "feedback_only" else set()
+    read_claims = "read_claims" in permissions
+    read_evidence = "read_evidence" in permissions and share.include_evidence
+    rows = _eligible_claim_rows(memory, share) if read_claims or read_evidence else []
+    for row in rows:
         claim = memory.read_claim(row["id"])
-        evidence_ids = list(claim.evidence_ids) if share.include_evidence else []
-        claims.append(
-            {
+        evidence_ids = list(claim.evidence_ids) if read_evidence else []
+        if read_claims:
+            claims.append({
                 "id": claim.id,
                 "namespace": claim.namespace,
                 "subject": claim.subject,
@@ -1459,9 +1624,11 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
                 "importance": claim.importance,
                 "half_life_days": claim.half_life_days,
                 "evidence_ids": evidence_ids,
+                # The claim's label travels even when source text is withheld.
+                "privacy_level": max((memory.read_event(value).privacy_level for value in claim.evidence_ids),
+                                     key=lambda level: PRIVACY_ORDER.get(level, PRIVACY_ORDER["secret"]), default="personal"),
                 "created_at": claim.created_at,
-            }
-        )
+            })
         for evidence_id in evidence_ids:
             event = memory.read_event(evidence_id)
             if PRIVACY_ORDER.get(event.privacy_level, 1) > PRIVACY_ORDER[share.privacy_ceiling]:
@@ -1479,12 +1646,12 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
                 "trust_level": event.trust_level,
                 "privacy_level": event.privacy_level,
             }
-    tombstones = _exportable_tombstones(memory, share)
+    tombstones = _exportable_tombstones(memory, share, collection) if "receive_redactions" in permissions else []
     payloads = {"claims": claims, "evidence": list(evidence_by_id.values()), "tombstones": tombstones}
     return {
         "schema_version": SCHEMA_VERSION,
         "peer_identity": _public_identity_payload(identity),
-        "origin_identity": asdict(identity),
+        "origin_identity": _public_identity_payload(identity),
         "share_grant": asdict(share),
         "collection": asdict(collection),
         "payloads": payloads,
@@ -1493,7 +1660,13 @@ def _build_share_payload(memory, *, identity: FederationIdentity, share: ShareGr
     }
 
 
-def _exportable_tombstones(memory, share: ShareGrant) -> list[dict]:
+def _exportable_tombstones(memory, share: ShareGrant, collection: SyncCollection) -> list[dict]:
+    # Notices apply to previously disclosed objects, including evidence-only
+    # shares and objects that no longer match the grant's current filters.
+    disclosed = {(row["object_type"], row["object_id"]) for row in memory.store.connection.execute(
+        """SELECT i.object_type, i.object_id FROM sync_change_items i
+           JOIN sync_changesets c ON c.id=i.changeset_id WHERE c.collection_id=?
+           AND i.object_type IN ('claim', 'evidence_event')""", (collection.id,))}
     rows = memory.store.connection.execute(
         "SELECT * FROM deletion_tombstones WHERE namespace = ? ORDER BY created_at",
         (share.namespace,),
@@ -1509,6 +1682,8 @@ def _exportable_tombstones(memory, share: ShareGrant) -> list[dict]:
             "created_at": row["created_at"],
         }
         for row in rows
+        if ({"evidence": "evidence_event", "event": "evidence_event"}.get(row["target_type"], row["target_type"]),
+            row["target_id"]) in disclosed
     ]
 
 
@@ -1645,23 +1820,27 @@ def _write_bundle(
         archive.writestr("signature.json", json.dumps(signature_doc, indent=2, sort_keys=True) + "\n")
 
 
-def _read_bundle(memory, input_path: str) -> tuple[dict, dict]:
+def _read_bundle(memory, input_path: str, *, recovery_key: tuple[str, x25519.X25519PrivateKey] | None = None) -> tuple[dict, dict]:
     with zipfile.ZipFile(input_path, "r") as archive:
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         if manifest.get("crypto_version") != BUNDLE_CRYPTO_VERSION:
             raise ValidationError("Legacy unsigned sync bundles are not accepted.")
         origin_identity = json.loads(archive.read("origin_identity.json").decode("utf-8"))
+        _validate_peer_identity_payload(origin_identity)
         _verify_bundle_checksums(archive)
         _verify_bundle_signature(archive, manifest=manifest, origin_identity=origin_identity)
         if manifest.get("encrypted"):
             metadata = json.loads(archive.read("encryption_metadata.json").decode("utf-8"))
-            payload = json.loads(_decrypt_payload(memory, archive.read("encrypted_payload.bin"), manifest, metadata).decode("utf-8"))
+            payload = json.loads(_decrypt_payload(memory, archive.read("encrypted_payload.bin"), manifest, metadata,
+                                                  recovery_key=recovery_key).decode("utf-8"))
         else:
             payload = json.loads(archive.read("payloads/payload.json").decode("utf-8"))
-    if payload.get("peer_identity", {}).get("instance_id") != origin_identity.get("instance_id"):
+    peer_identity = payload.get("peer_identity", {})
+    _validate_peer_identity_payload(peer_identity)
+    if any(peer_identity.get(field) != origin_identity.get(field) for field in ("instance_id", "public_key", "key_fingerprint")):
         raise ValidationError("Sync bundle origin identity does not match signed identity.")
-    if payload.get("peer_identity", {}).get("key_fingerprint") != origin_identity.get("key_fingerprint"):
-        raise ValidationError("Sync bundle origin key does not match signed identity.")
+    if manifest.get("origin_instance_id") != origin_identity["instance_id"]:
+        raise ValidationError("Sync bundle manifest origin identity does not match signed identity.")
     return manifest, payload
 
 
@@ -1701,16 +1880,20 @@ def _encrypt_payload(payload: bytes, manifest: dict, recipients: list[ShareRecip
     }
 
 
-def _decrypt_payload(memory, cipher: bytes, manifest: dict, metadata: dict) -> bytes:
+def _decrypt_payload(memory, cipher: bytes, manifest: dict, metadata: dict,
+                     *, recovery_key: tuple[str, x25519.X25519PrivateKey] | None = None) -> bytes:
     if metadata.get("algorithm") != ENCRYPTION_ALGORITHM:
         raise ValidationError("Unsupported sync bundle encryption algorithm.")
-    identity = active_federation_identity(memory)
-    identity_private = _encryption_private_key(identity)
+    if recovery_key is None:
+        identity = active_federation_identity(memory)
+        fingerprint, identity_private = identity.key_fingerprint, _encryption_private_key(identity)
+    else:
+        fingerprint, identity_private = recovery_key
     ephemeral_public = x25519.X25519PublicKey.from_public_bytes(_unb64(metadata["ephemeral_public_key"]))
     shared = identity_private.exchange(ephemeral_public)
     aad = _bundle_encryption_aad(manifest)
     for recipient in metadata.get("recipients", []):
-        if recipient.get("key_fingerprint") != identity.key_fingerprint:
+        if recipient.get("key_fingerprint") != fingerprint:
             continue
         wrap_key = _derive_recipient_wrap_key(shared, _unb64(recipient["salt"]))
         try:
@@ -1789,16 +1972,53 @@ def _verify_bundle_signature(archive: zipfile.ZipFile, *, manifest: dict, origin
         raise ValidationError("Sync bundle signature verification failed.") from exc
 
 
-def _peer_for_import(memory, identity_payload: dict, *, trust_policy: str, reason: str) -> PeerDevice:
-    try:
-        peer = get_peer(memory, identity_payload["instance_id"])
-    except NotFoundError:
+def _peer_for_import(memory, identity_payload: dict, *, trust_policy: str) -> PeerDevice | None:
+    _validate_peer_identity_payload(identity_payload)
+    # A display name is not an identity. Use the exact instance ID, then pin
+    # both the complete signing/encryption key document and its fingerprint.
+    row = memory.store.connection.execute(
+        "SELECT * FROM peer_devices WHERE peer_instance_id = ?", (identity_payload["instance_id"],)
+    ).fetchone()
+    if not row:
         if trust_policy == "trusted_device":
             raise ValidationError("Trusted-device imports require a previously added and trusted peer.")
-        peer = add_peer(memory, peer_identity=identity_payload, trust_status="unknown", reason=reason)
+        return None
+    peer = PeerDevice.from_row(row)
+    if peer.public_key != identity_payload["public_key"] or peer.key_fingerprint != identity_payload["key_fingerprint"]:
+        raise ValidationError("Peer identity key does not match pinned key; an authorized key rotation is required.")
+    if peer.trust_status in {"revoked", "blocked"} or peer.revoked_at:
+        raise ValidationError("Cannot import from a revoked or blocked peer.")
     if trust_policy == "trusted_device" and peer.trust_status != "trusted_device":
         raise ValidationError("Trusted-device imports require a previously trusted peer.")
     return peer
+
+
+def _validate_import_grant(memory, share: dict, collection: dict, identity: dict) -> None:
+    def require_active(value: dict, kind: str) -> None:
+        if value.get("status") != "active" or value.get("revoked_at"):
+            raise ValidationError(f"Cannot import revoked or inactive {kind}.")
+        expires_at = parse_iso(value["expires_at"]) if value.get("expires_at") else None
+        if expires_at and expires_at <= utc_now():
+            raise ValidationError(f"Cannot import expired {kind}.")
+
+    require_active(share, "share grant")
+    require_active(collection, "collection")
+    if collection.get("share_grant_id") != share["id"] or collection.get("namespace") != share["namespace"]:
+        raise ValidationError("Sync collection does not match share grant.")
+    # Do not let replay of an old, validly signed grant reset local revocation.
+    row = memory.store.connection.execute("SELECT * FROM share_grants WHERE id = ?", (share["id"],)).fetchone()
+    if row:
+        require_active(dict(row), "share grant")
+    row = memory.store.connection.execute("SELECT * FROM sync_collections WHERE id = ?", (collection["id"],)).fetchone()
+    if row:
+        require_active(dict(row), "collection")
+    recipient = memory.store.connection.execute(
+        """SELECT sr.* FROM share_recipients sr JOIN peer_devices pd ON pd.id = sr.peer_id
+           WHERE sr.share_grant_id = ? AND pd.peer_instance_id = ?""",
+        (share["id"], identity["instance_id"]),
+    ).fetchone()
+    if recipient:
+        require_active(dict(recipient), "share recipient")
 
 
 def _ensure_imported_share_and_collection(memory, share_payload: dict, collection_payload: dict, peer: PeerDevice) -> None:
@@ -1881,8 +2101,13 @@ def _ensure_imported_share_and_collection(memory, share_payload: dict, collectio
         )
 
 
-def _policy_for_import(memory, peer: PeerDevice, *, trust_policy: str, namespace: str) -> ImportTrustPolicy:
-    if trust_policy == "trusted_device":
+def _policy_for_import(memory, peer: PeerDevice | None, *, trust_policy: str, namespace: str) -> ImportTrustPolicy:
+    candidate_only = trust_policy in {"candidate_only", "manual_review", "remote_claim_only"}
+    if candidate_only or peer is None:
+        policy_id = "itp_candidate_only"
+    elif trust_policy == "trusted_device" and peer.trust_domain_id is None:
+        # add_peer(trust_status="trusted_device") is also an explicit local
+        # trust decision, even before a domain is assigned by trust_peer().
         policy_id = "itp_trusted_device"
     elif peer.trust_domain_id == "trust_personal_trusted_devices":
         policy_id = "itp_trusted_device"
@@ -1893,18 +2118,65 @@ def _policy_for_import(memory, peer: PeerDevice, *, trust_policy: str, namespace
     row = memory.store.connection.execute("SELECT * FROM import_trust_policies WHERE id = ?", (policy_id,)).fetchone()
     if not row:
         raise NotFoundError(f"Import trust policy not found: {policy_id}")
-    return ImportTrustPolicy.from_row(row)
+    policy = ImportTrustPolicy.from_row(row)
+    if candidate_only:
+        # Caller intent is a ceiling even if a stored policy later changes.
+        return replace(policy, import_mode=trust_policy, allow_active_claims=False)
+    if trust_policy in {"trusted_device", "active_for_project_state"} and policy.import_mode == "active_if_trusted":
+        return replace(policy, import_mode="active_for_project_state")
+    return policy
+
+
+def _previous_remote_object(memory, payload: dict, *, peer: PeerDevice, kind: str):
+    kinds = ("evidence_event", "evidence", "event") if kind == "evidence_event" else (kind,)
+    if memory.store.connection.execute(
+        "SELECT 1 FROM sync_tombstones WHERE origin_instance_id = ? AND object_id = ? AND namespace = ?"
+        + " AND object_type IN (" + ",".join("?" for _ in kinds) + ")",
+        (peer.peer_instance_id, payload["id"], payload["namespace"], *kinds)).fetchone():
+        return None, True
+    rows = memory.store.connection.execute(
+        "SELECT * FROM remote_memory_sources WHERE peer_id = ? AND remote_object_type = ? AND remote_object_id = ?",
+        (peer.id, kind, payload["id"])).fetchall()
+    if len(rows) > 1:
+        raise ValidationError("Remote source has multiple historical local copies; review duplicates before syncing.")
+    if not rows:
+        return None, False
+    source = rows[0]
+    if memory.store.connection.execute("SELECT 1 FROM deletion_tombstones WHERE target_id = ?", (source["local_object_id"],)).fetchone():
+        return None, True
+    reader = {"evidence_event": memory.read_event, "claim": memory.read_claim, "candidate_claim": memory.read_candidate}[source["local_object_type"]]
+    item = reader(source["local_object_id"])
+    if item.namespace != payload["namespace"]:
+        raise ValidationError("Remote source identity changed namespace.")
+    digest = json.loads(source["metadata_json"] or "{}").get("remote_payload_hash")
+    if digest is not None and digest != content_hash(json.dumps(payload, sort_keys=True)):
+        raise ValidationError("Previously imported remote source changed; review a replacement before syncing.")
+    # Older mappings lack a payload hash. Verify the materialized content before
+    # treating them as a repeat; never infer identity from equal text alone.
+    fields = ("content", "privacy_level") if kind == "evidence_event" else ("subject", "predicate", "object", "memory_type")
+    if digest is None and any(getattr(item, field) != payload.get(field) for field in fields):
+        raise ValidationError("Historical remote source differs from this bundle; review it before syncing.")
+    return item, True
 
 
 def _import_evidence(memory, evidence: dict, *, peer: PeerDevice, share_id: str, sync_run_id: str, trust_domain_id: str | None):
-    event = memory.write_event(
-        namespace=evidence["namespace"],
-        source_type="remote_sync:" + evidence.get("source_type", "unknown"),
-        source_uri=evidence.get("source_uri"),
-        content=evidence.get("content", ""),
-        trust_level="remote:" + peer.trust_status,
-        privacy_level=evidence.get("privacy_level", "personal"),
-    )
+    previous, found = _previous_remote_object(memory, evidence, peer=peer, kind="evidence_event")
+    if found:
+        return previous, False
+    from aletheia.core.hardening import PRIVACY_ORDER, protect_content_for_storage
+    privacy = evidence.get("privacy_level")
+    if privacy not in PRIVACY_ORDER:
+        raise ValidationError("Remote evidence requires a valid privacy label.")
+    value = new_id("evt")
+    content = evidence.get("content", "")
+    memory.store.connection.execute(
+        """INSERT INTO evidence_events (id, namespace, session_id, source_type, source_uri,
+           content, content_hash, created_at, observed_at, trust_level, privacy_level, retention_policy)
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (value, evidence["namespace"], "remote_sync:" + evidence.get("source_type", "unknown"), evidence.get("source_uri"),
+         protect_content_for_storage(memory, content, privacy_level=privacy), content_hash(content), utc_now_iso(),
+         evidence.get("observed_at"), "remote:" + peer.trust_status, privacy, evidence.get("retention_policy", "default")))
+    event = memory.read_event(value)
     _write_remote_source(
         memory,
         local_object_id=event.id,
@@ -1916,12 +2188,43 @@ def _import_evidence(memory, evidence: dict, *, peer: PeerDevice, share_id: str,
         share_grant_id=share_id,
         sync_run_id=sync_run_id,
         trust_domain_id=trust_domain_id,
-        metadata={"remote_content_hash": evidence.get("content_hash")},
+        metadata={"remote_content_hash": evidence.get("content_hash"), "remote_payload_hash": content_hash(json.dumps(evidence, sort_keys=True))},
     )
-    return event
+    return event, True
 
 
 def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, collection_id: str, sync_run_id: str, policy: ImportTrustPolicy, evidence_ids: list[str]) -> dict:
+    source_levels = [memory.read_event(value).privacy_level for value in evidence_ids]
+    privacy = claim.get("privacy_level")
+    if privacy is None and source_levels:
+        # Older full-evidence bundles can recover the label from their sources.
+        privacy = max(source_levels, key=PRIVACY_ORDER.__getitem__)
+    if not isinstance(privacy, str) or privacy not in PRIVACY_ORDER:
+        raise ValidationError("Remote claims require a valid privacy label or labeled source evidence.")
+    privacy = max([privacy, *source_levels], key=PRIVACY_ORDER.__getitem__)
+    previous, found = _previous_remote_object(memory, claim, peer=peer, kind="claim")
+    if found:
+        conflict = _local_claim_conflict(memory, claim) if previous else None
+        if conflict:
+            existing = memory.store.connection.execute(
+                "SELECT status FROM sync_conflicts WHERE origin_instance_id = ? AND remote_object_id = ? AND local_object_id = ?",
+                (peer.peer_instance_id, claim["id"], conflict["id"])).fetchone()
+            if existing:
+                return {"applied": 0, "conflict": int(existing[0] in {"unresolved", "deferred"})}
+            conflict_id = _create_sync_conflict(memory, namespace=claim["namespace"], collection_id=collection_id,
+                sync_run_id=sync_run_id, conflict_type="claim_value_conflict", local_object_id=conflict["id"],
+                local_object_type="claim", remote_object_id=claim["id"], remote_object_type="claim",
+                origin_instance_id=peer.peer_instance_id,
+                metadata={"local_object": conflict["object"], "remote_object": claim["object"], "remote_claim": claim,
+                          "existing_remote_local_id": previous.id})
+            _create_conflict_review_task(memory, namespace=claim["namespace"], conflict_id=conflict_id)
+            return {"applied": 0, "conflict": 1}
+        return {"applied": 0, "conflict": 0}
+    if not evidence_ids or max(PRIVACY_ORDER[level] for level in source_levels) < PRIVACY_ORDER[privacy]:
+        evidence_ids = [*evidence_ids, memory.write_event(
+            namespace=claim["namespace"], source_type="remote_sync", content=_claim_text(claim),
+            source_uri=f"aletheia-peer:{peer.peer_instance_id}/claim/{claim['id']}",
+            trust_level="remote:" + peer.trust_status, privacy_level=privacy).id]
     conflict = _local_claim_conflict(memory, claim)
     if conflict:
         conflict_id = _create_sync_conflict(
@@ -1939,7 +2242,7 @@ def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, colle
         )
         _create_conflict_review_task(memory, namespace=claim["namespace"], conflict_id=conflict_id)
         local_id = _store_remote_candidate(memory, claim, evidence_ids=evidence_ids, peer=peer, sync_run_id=sync_run_id)
-        _write_remote_source(memory, local_object_id=local_id, local_object_type="candidate_claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"conflict_id": conflict_id})
+        _write_remote_source(memory, local_object_id=local_id, local_object_type="candidate_claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"conflict_id": conflict_id, "remote_payload_hash": content_hash(json.dumps(claim, sort_keys=True))})
         return {"applied": 1, "conflict": 1}
     if _claim_imports_active(claim, policy, peer):
         status = "active" if claim.get("status") == "core" else claim.get("status", "active")
@@ -1951,16 +2254,16 @@ def _import_claim(memory, claim: dict, *, peer: PeerDevice, share_id: str, colle
             predicate=claim["predicate"],
             object=claim["object"],
             memory_type=claim["memory_type"],
-            evidence_ids=evidence_ids or [memory.write_event(namespace=claim["namespace"], source_type="remote_sync", content=_claim_text(claim), trust_level="remote:" + peer.trust_status).id],
+            evidence_ids=evidence_ids,
             confidence=claim.get("confidence_base", 0.65),
             status=status,
             half_life_days=claim.get("half_life_days"),
             importance=claim.get("importance", 0.5),
         )
-        _write_remote_source(memory, local_object_id=active.id, local_object_type="claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"import_mode": policy.import_mode})
+        _write_remote_source(memory, local_object_id=active.id, local_object_type="claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"import_mode": policy.import_mode, "remote_payload_hash": content_hash(json.dumps(claim, sort_keys=True))})
     else:
         local_id = _store_remote_candidate(memory, claim, evidence_ids=evidence_ids, peer=peer, sync_run_id=sync_run_id)
-        _write_remote_source(memory, local_object_id=local_id, local_object_type="candidate_claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"import_mode": policy.import_mode})
+        _write_remote_source(memory, local_object_id=local_id, local_object_type="candidate_claim", remote_object_id=claim["id"], remote_object_type="claim", origin_instance_id=peer.peer_instance_id, peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, trust_domain_id=policy.trust_domain_id, metadata={"import_mode": policy.import_mode, "remote_payload_hash": content_hash(json.dumps(claim, sort_keys=True))})
         memory.create_review_task(
             claim["namespace"],
             task_type="candidate_review",
@@ -1980,8 +2283,6 @@ def _claim_imports_active(claim: dict, policy: ImportTrustPolicy, peer: PeerDevi
         return False
     if peer.trust_status not in {"trusted_device", "trusted_user", "trusted_team"}:
         return False
-    if claim.get("status") == "core":
-        return policy.import_mode in {"active_if_trusted", "active_for_project_state"}
     if policy.import_mode == "active_for_project_state":
         return claim.get("memory_type") in {"project", "decision", "procedure"}
     return policy.import_mode == "active_if_trusted"
@@ -1990,15 +2291,8 @@ def _claim_imports_active(claim: dict, policy: ImportTrustPolicy, peer: PeerDevi
 def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], peer: PeerDevice, sync_run_id: str) -> str:
     namespace = claim["namespace"]
     if not evidence_ids:
-        evidence_ids = [
-            memory.write_event(
-                namespace=namespace,
-                source_type="remote_sync",
-                content=_claim_text(claim),
-                trust_level="remote:" + peer.trust_status,
-                privacy_level="personal",
-            ).id
-        ]
+        raise ValidationError("Remote candidates require labeled source evidence.")
+    privacy = max((memory.read_event(value).privacy_level for value in evidence_ids), key=PRIVACY_ORDER.__getitem__)
     run_id = new_id("run")
     candidate_id = new_id("cand")
     now = utc_now_iso()
@@ -2017,6 +2311,7 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
         )
         span_links: list[tuple[str, str]] = []
         for evidence_id in evidence_ids:
+            evidence_text = memory.read_event(evidence_id).content
             span_id = new_id("span")
             memory.store.connection.execute("INSERT INTO extraction_run_evidence_links (extraction_run_id, evidence_id) VALUES (?, ?)", (run_id, evidence_id))
             memory.store.connection.execute(
@@ -2027,7 +2322,7 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
                 )
                 VALUES (?, ?, ?, 0, ?, ?, 'supporting', ?)
                 """,
-                (span_id, namespace, evidence_id, len(evidence_text), evidence_text, now),
+                (span_id, namespace, evidence_id, len(evidence_text), memory._stored_evidence_span_text(evidence_id, evidence_text), now),
             )
             span_links.append((evidence_id, span_id))
         memory.store.connection.execute(
@@ -2039,7 +2334,7 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
                 suggested_scope_json, contradiction_risk, duplicate_risk,
                 privacy_level, created_at, metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, NULL, 0.0, 0.0, 'personal', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, NULL, 0.0, 0.0, ?, ?, ?)
             """,
             (
                 candidate_id,
@@ -2052,6 +2347,7 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
                 float(claim.get("confidence_base", 0.65)),
                 float(claim.get("importance", 0.5)),
                 claim.get("half_life_days"),
+                privacy,
                 now,
                 json.dumps({"remote_candidate": True, "peer_id": peer.id, "sync_run_id": sync_run_id}, sort_keys=True),
             ),
@@ -2138,9 +2434,16 @@ def _create_conflict_review_task(memory, *, namespace: str, conflict_id: str) ->
 
 
 def _apply_remote_tombstone(memory, tombstone: dict, *, peer: PeerDevice, share_id: str, sync_run_id: str) -> bool:
+    kind = {"evidence": "evidence_event", "event": "evidence_event"}.get(tombstone["object_type"], tombstone["object_type"])
+    if memory.store.connection.execute(
+        """SELECT 1 FROM sync_tombstones WHERE origin_instance_id = ? AND object_id = ?
+           AND object_type = ? AND namespace = ? AND tombstone_type = ?""",
+        (peer.peer_instance_id, tombstone["object_id"], kind, tombstone["namespace"], tombstone["tombstone_type"])
+    ).fetchone():
+        return False
     local_sources = memory.store.connection.execute(
-        "SELECT * FROM remote_memory_sources WHERE remote_object_id = ? AND peer_id = ?",
-        (tombstone["object_id"], peer.id),
+        "SELECT * FROM remote_memory_sources WHERE remote_object_id = ? AND peer_id = ? AND remote_object_type = ?",
+        (tombstone["object_id"], peer.id, kind),
     ).fetchall()
     now = utc_now_iso()
     with memory.store.transaction():
@@ -2153,40 +2456,30 @@ def _apply_remote_tombstone(memory, tombstone: dict, *, peer: PeerDevice, share_
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "stomb_" + content_hash(f"{peer.peer_instance_id}\0{tombstone['object_id']}\0{tombstone['tombstone_type']}")[:24],
+                "stomb_" + content_hash(f"{peer.peer_instance_id}\0{tombstone['namespace']}\0{kind}\0{tombstone['object_id']}\0{tombstone['tombstone_type']}")[:24],
                 tombstone["namespace"],
                 peer.peer_instance_id,
                 tombstone["object_id"],
-                tombstone["object_type"],
+                kind,
                 tombstone["tombstone_type"],
                 tombstone["reason"],
                 now,
                 json.dumps({"peer_id": peer.id, "sync_run_id": sync_run_id, "share_grant_id": share_id}, sort_keys=True),
             ),
         )
+        from aletheia.core import deletion
         for source in local_sources:
-            if source["local_object_type"] == "evidence_event":
-                memory.store.connection.execute(
-                    "UPDATE evidence_events SET content = '[REDACTED]', content_hash = ? WHERE id = ?",
-                    (content_hash("[REDACTED]"), source["local_object_id"]),
-                )
-            elif source["local_object_type"] == "claim":
-                memory.store.connection.execute("UPDATE claims SET status = 'archived' WHERE id = ?", (source["local_object_id"],))
-                memory.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (source["local_object_id"],))
-            elif source["local_object_type"] == "candidate_claim":
-                memory.store.connection.execute(
-                    "UPDATE candidate_claims SET candidate_status = 'rejected' WHERE id = ?",
-                    (source["local_object_id"],),
-                )
-                linked = memory.store.connection.execute(
-                    "SELECT evidence_id FROM candidate_evidence_links WHERE candidate_id = ?",
-                    (source["local_object_id"],),
-                ).fetchall()
-                for row in linked:
-                    memory.store.connection.execute(
-                        "UPDATE evidence_events SET content = '[REDACTED]', content_hash = ? WHERE id = ?",
-                        (content_hash("[REDACTED]"), row["evidence_id"]),
-                    )
+            kind = "evidence" if source["local_object_type"] == "evidence_event" else source["local_object_type"]
+            local = memory.store.connection.execute(
+                "SELECT namespace FROM " + deletion.TABLES[kind] + " WHERE id = ?", (source["local_object_id"],)
+            ).fetchone()
+            if local is not None and local["namespace"] != tombstone["namespace"]:
+                raise ValidationError("Remote tombstone does not match the imported source namespace.")
+            roots = [(kind, source["local_object_id"])]
+            if kind == "candidate_claim":
+                roots.extend(("evidence", row[0]) for row in memory.store.connection.execute(
+                    "SELECT evidence_id FROM candidate_evidence_links WHERE candidate_id = ?", (source["local_object_id"],)))
+            deletion.apply(memory, roots, reason="remote.redacted", actor="federation", scrub=True)
         _write_federation_audit(memory, event_type="redaction.propagated", namespace=tombstone["namespace"], peer_id=peer.id, share_grant_id=share_id, sync_run_id=sync_run_id, target_id=tombstone["object_id"], target_type=tombstone["object_type"], reason=tombstone["reason"])
     return True
 

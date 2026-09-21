@@ -32,12 +32,15 @@ RETRIEVE_INPUT = _object({**COMMON_INPUT, "mode": MODES,
     "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 10},
     "memory_types": {"anyOf": [_strings(), {"type": "null"}]},
     "include_disputed": {**BOOL, "default": False}, "include_archived": {**BOOL, "default": False},
+    "policy_version_id": NULL_STRING,
 }, required=["namespace"], additional=True)
 CONTEXT_INPUT = _object({**COMMON_INPUT, "retrieval_mode": MODES,
-    "token_budget": {"type": "integer", "minimum": 1, "maximum": 12000, "default": 1500},
-    "include_reflections": {**BOOL, "default": True}, "include_inferences": {**BOOL, "default": False},
-    "include_derivation_metadata": {**BOOL, "default": False}, "record_usage": {**BOOL, "default": False},
-    "policy_version_id": NULL_STRING,
+    "token_budget": {"type": "integer", "minimum": 1, "maximum": 12000, "description": "Defaults to the selected context policy's budget (initially 1500)."},
+    "include_reflections": {**BOOL, "description": "Defaults to the selected context policy."},
+    "include_inferences": {**BOOL, "description": "Defaults to the selected context policy."},
+    "include_derivation_metadata": {**BOOL, "description": "Defaults to the selected context policy."},
+    "record_usage": {**BOOL, "default": False},
+    "policy_version_id": NULL_STRING, "context_policy_version_id": NULL_STRING,
 }, required=["namespace"], additional=True)
 
 

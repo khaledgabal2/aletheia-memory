@@ -11,6 +11,14 @@ import urllib.request
 from typing import Any
 from urllib.parse import urlencode, quote
 
+from aletheia.provider_http import NoRedirect
+
+
+def _open_request(request, *, timeout):
+    # A service response cannot redirect credentials or a mutation body to
+    # another URL. Same-origin redirects are rejected as well.
+    return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
+
 
 class AletheiaClientError(Exception):
     def __init__(self, message: str, *, code: str | None = None, status_code: int | None = None, details: dict | None = None):
@@ -313,8 +321,13 @@ class AletheiaClient:
             "protected": protected,
         })
 
-    def rotate_federation_key(self, *, reason: str, actor: str = "sdk") -> dict:
-        return self._request("POST", "/v1/federation/identity/rotate", {"reason": reason, "actor": actor})
+    def rotate_federation_key(self, *, reason: str, expected_fingerprint: str, recovery_path: str, actor: str = "sdk") -> dict:
+        return self._request("POST", "/v1/federation/identity/rotate", {
+            "reason": reason, "actor": actor, "expected_fingerprint": expected_fingerprint, "recovery_path": recovery_path,
+        })
+
+    def replace_peer_key(self, peer_id: str, **payload) -> dict:
+        return self._request("POST", f"/v1/peers/{peer_id}/replace-key", payload)
 
     def list_peers(self, *, include_revoked: bool = False) -> list[dict]:
         suffix = "?" + urlencode({"include_revoked": str(include_revoked).lower()})
@@ -362,12 +375,14 @@ class AletheiaClient:
     def sync_run(self, **payload) -> dict:
         return self._request("POST", "/v1/sync/run", payload)
 
-    def sync_collections(self, *, status: str | None = None) -> list[dict]:
-        suffix = "?" + urlencode({"status": status}) if status else ""
+    def sync_collections(self, *, status: str | None = None, namespace: str | None = None) -> list[dict]:
+        query = {key: value for key, value in {"status": status, "namespace": namespace}.items() if value is not None}
+        suffix = "?" + urlencode(query) if query else ""
         return self._request("GET", "/v1/sync/collections" + suffix)
 
-    def sync_runs(self, *, limit: int = 50) -> list[dict]:
-        return self._request("GET", "/v1/sync/runs?" + urlencode({"limit": limit}))
+    def sync_runs(self, *, limit: int = 50, namespace: str | None = None) -> list[dict]:
+        query = {"limit": limit, **({"namespace": namespace} if namespace else {})}
+        return self._request("GET", "/v1/sync/runs?" + urlencode(query))
 
     def sync_conflicts(self, *, namespace: str | None = None, status: str | None = None) -> list[dict]:
         query = {}
@@ -381,8 +396,9 @@ class AletheiaClient:
     def resolve_sync_conflict(self, conflict_id: str, **payload) -> dict:
         return self._request("POST", f"/v1/sync/conflicts/{conflict_id}/resolve", payload)
 
-    def remote_sources(self, *, local_object_id: str | None = None) -> list[dict]:
-        suffix = "?" + urlencode({"local_object_id": local_object_id}) if local_object_id else ""
+    def remote_sources(self, *, local_object_id: str | None = None, namespace: str | None = None) -> list[dict]:
+        query = {key: value for key, value in {"local_object_id": local_object_id, "namespace": namespace}.items() if value is not None}
+        suffix = "?" + urlencode(query) if query else ""
         return self._request("GET", "/v1/sync/remote-sources" + suffix)
 
     def import_trust_policies(self) -> list[dict]:
@@ -404,8 +420,9 @@ class AletheiaClient:
     def remove_workspace_member(self, workspace_id: str, member_id: str) -> dict:
         return self._request("DELETE", f"/v1/workspaces/{workspace_id}/members/{member_id}", {})
 
-    def list_revocations(self) -> list[dict]:
-        return self._request("GET", "/v1/revocations")
+    def list_revocations(self, *, namespace: str | None = None) -> list[dict]:
+        suffix = "?" + urlencode({"namespace": namespace}) if namespace else ""
+        return self._request("GET", "/v1/revocations" + suffix)
 
     def propagate_revocations(self, *, peer_id: str | None = None) -> dict:
         return self._request("POST", "/v1/revocations/propagate", {"peer_id": peer_id})
@@ -471,7 +488,7 @@ class AletheiaClient:
             method=method,
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local SDK.
+            with _open_request(request, timeout=self.timeout) as response:
                 body = response.read().decode("utf-8", errors="replace")
                 try:
                     envelope = json.loads(body)
@@ -488,6 +505,12 @@ class AletheiaClient:
                         status_code=response.status,
                     )
         except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                exc.close()
+                raise AletheiaClientError(
+                    "Aletheia service redirects are not allowed. Configure the final service URL explicitly.",
+                    code="redirect_blocked", status_code=exc.code,
+                ) from None
             body = exc.read().decode("utf-8", errors="replace")
             try:
                 envelope = json.loads(body)
@@ -670,6 +693,9 @@ class AsyncAletheiaClient:
     async def rotate_federation_key(self, **payload) -> dict:
         return await asyncio.to_thread(self._sync.rotate_federation_key, **payload)
 
+    async def replace_peer_key(self, peer_id: str, **payload) -> dict:
+        return await asyncio.to_thread(self._sync.replace_peer_key, peer_id, **payload)
+
     async def list_peers(self, **payload) -> list[dict]:
         return await asyncio.to_thread(self._sync.list_peers, **payload)
 
@@ -742,8 +768,8 @@ class AsyncAletheiaClient:
     async def remove_workspace_member(self, workspace_id: str, member_id: str) -> dict:
         return await asyncio.to_thread(self._sync.remove_workspace_member, workspace_id, member_id)
 
-    async def list_revocations(self) -> list[dict]:
-        return await asyncio.to_thread(self._sync.list_revocations)
+    async def list_revocations(self, **payload) -> list[dict]:
+        return await asyncio.to_thread(self._sync.list_revocations, **payload)
 
     async def propagate_revocations(self, **payload) -> dict:
         return await asyncio.to_thread(self._sync.propagate_revocations, **payload)

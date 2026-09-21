@@ -629,17 +629,25 @@ def rotate_federation_key(
     self,
     *,
     reason: str,
+    expected_fingerprint: str,
+    recovery_path: str,
+    recovery_passphrase: str | None = None,
     actor: str = "user",
 ) -> FederationIdentity:
     ...
 
 Required behavior:
 
-- Create new key pair.
-- Mark previous key as rotated.
-- Create revocation/update notice for peers.
-- Preserve old key metadata for verifying old signed records.
-- Write audit event.
+- Confirm the current fingerprint and create and verify a new encrypted recovery file.
+- Preserve only the old decryption private key in that file, never its signing private key.
+- Create new signing and encryption keys while retaining the instance ID.
+- Revoke existing share grants, collections, and recipients atomically with rotation.
+- Preserve retired public-key metadata and write revocation/audit records.
+- Require explicit peer-side `replace_peer_key()` approval with independently confirmed
+  old and new fingerprints; reset trust and revoke grants instead of inheriting them.
+
+See [Federation key recovery](federation_key_recovery.md) for the complete procedure,
+admin HTTP requirements, safe failure behavior, and encrypted historical-bundle review.
 
 ⸻
 
@@ -1499,6 +1507,7 @@ POST /v1/peers
 GET  /v1/peers/{peer_id}
 POST /v1/peers/{peer_id}/trust
 POST /v1/peers/{peer_id}/revoke
+POST /v1/peers/{peer_id}/replace-key
 
 ⸻
 
@@ -1572,6 +1581,8 @@ aletheia federation export-identity \
   --output ./default-laptop.identity.json
 aletheia federation rotate-key \
   --db ./aletheia.db \
+  --expected-fingerprint "$LOCAL_OLD_FINGERPRINT" \
+  --recovery-output ./private-recovery/device-old.key \
   --reason "Routine federation key rotation."
 
 ⸻
