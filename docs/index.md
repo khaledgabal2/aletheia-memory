@@ -1,8 +1,8 @@
 # Aletheia Documentation Index
 
-This help map covers Aletheia 1.5.0 and the compatible public v1.3.1 APIs.
+This help map covers Aletheia 1.6.0 beta and the compatible public v1.3.1 APIs.
 The primary Python quickstart works on both.
-Aletheia is a local, auditable memory system for AI agents. The production
+Aletheia is a local, auditable memory system for AI agents. The project
 baseline is intentionally generic: product-specific integration layers belong
 on their own branches or forks.
 
@@ -33,6 +33,9 @@ New users should read:
 5. `integration_guide.md`: optional semantic/LLM paths and other interfaces
 6. `security_privacy_guide.md` and `operations_guide.md` when operating a service
 
+Existing beta users should first read the [1.6.0 upgrade guide](v1_6_0_upgrade.md)
+for compatibility changes and fresh-start or data-preserving options.
+
 Agent and tool integrators should read:
 
 1. `integration_guide.md`
@@ -62,6 +65,8 @@ Plugin authors should read:
 | Document | Purpose |
 | --- | --- |
 | `installation.md` | Install Aletheia, verify the CLI, initialize a database, and locate installed docs. |
+| [`v1_6_0_upgrade.md`](v1_6_0_upgrade.md) | Upgrade the beta, handle stricter access/privacy behavior, or start with disposable data. |
+| [`v1_6_0_release_verification.md`](v1_6_0_release_verification.md) | Inspect the release's behavioral, package, and CI evidence. |
 | `quickstart.md` | Complete the model-free, explicitly reviewed Python lifecycle and verify persistence. |
 | `introduction.md` | Explain what Aletheia is, what it is not, and the trust boundaries. |
 | `architecture.md` | Describe the implemented layers, core modules, storage schema, and data flow. |
@@ -82,7 +87,7 @@ Plugin authors should read:
 | `plugin_developer_guide.md` | Explain governed plugin manifests, permissions, compatibility, and conformance. |
 | `adapter_developer_guide.md` | Explain how to build and certify agent adapters. |
 | `examples.md` | Show example scaffolding and docs validation commands. |
-| `near_future_changes.md` | Summarize current v1.4.0 status and likely next changes. |
+| `near_future_changes.md` | Summarize current 1.6.0 beta status and likely next changes. |
 | `v1_public_contracts.md` | Document stable public contracts and compatibility expectations. |
 
 ## Repository Community Files
@@ -117,8 +122,11 @@ Aletheia is easiest to understand as layers:
 
 ## Contracts And Historical Design Docs
 
+The 1.6.0 audit repairs, dependency updates and package/CI checks are recorded in
+[release verification](v1_6_0_release_verification.md).
+
 The 1.5.0 installation, startup, pairing, and recovery gates are recorded in
-[release verification](v1_5_0_release_verification.md).
+[historical release verification](v1_5_0_release_verification.md).
 
 The 1.4.0 design, prerelease evidence and final verification are recorded here:
 
@@ -166,5 +174,5 @@ starting point for normal usage.
 - `M12_LLM_Integration_contract.md`
 
 Release-remediation and postmortem files are retained as maintenance evidence.
-They are useful when preparing another production gate, but they are not core
+They are useful when preparing another release gate, but they are not core
 user help.

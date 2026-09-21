@@ -1,6 +1,6 @@
 # Installation
 
-This guide covers Aletheia 1.5.0, verifying the command line,
+This guide covers Aletheia 1.6.0 beta, verifying the command line,
 initializing a local database, and finding installed help. Follow the
 [zero-model quickstart](quickstart.md) for the primary first-run journey:
 evidence, candidate, explicit review, lexical context, provenance and reopen.
@@ -31,21 +31,24 @@ aletheia --help
 aletheia docs list
 ```
 
-## 1.5.0 Upgrade And Packaged Starters
+## 1.6.0 Upgrade And Packaged Starters
 
-Use `python -m pip install aletheia-memory==1.5.0` for this release. For
-pre-publication review, install the reviewed `aletheia_memory-1.5.0-py3-none-any.whl`
-or matching source archive by local path.
+Use `python -m pip install aletheia-memory==1.6.0` for this release, or install
+the reviewed `aletheia_memory-1.6.0-py3-none-any.whl` or matching source archive
+by local path. All releases so far are beta, for development and evaluation.
 
-Upgrading from Memory 1.4.0 or 1.4.1 adds no database migration or dependency
-upgrades; storage remains 1.3.1. Preserve your database backups and local identity
+Upgrading from Memory 1.5.0 adds no database migration; storage remains 1.3.1.
+The cryptography dependency is upgraded to at least 50.0.1. Follow the
+[1.6.0 beta upgrade guide](v1_6_0_upgrade.md) for stricter access/privacy behavior
+and a choice between disposable data and preserving existing data.
+Preserve your database backups and local identity
 directory. A normal service restart preserves paired credentials; a restored or
 relocated database needs fresh pairing because identity binds to its file.
 
 When upgrading from Memory 1.3.x, first read the
 [migration/backup guide](v1_4_0_migration_guide.md). Storage moves from 1.3.0 to
 1.3.1; older software cannot open the upgraded database. Keep the pre-upgrade
-backup and old binary for recovery. From the installed 1.5.0 environment:
+backup and old binary for recovery. From the installed 1.6.0 environment:
 
 ```bash
 aletheia examples create --type embedded --output ./memory-demo
@@ -73,7 +76,7 @@ the published version.
 Install a downloaded release artifact into your environment:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.5.0-py3-none-any.whl
+python -m pip install ./dist/aletheia_memory-1.6.0-py3-none-any.whl
 ```
 
 Then verify the CLI:
@@ -209,11 +212,14 @@ Run the generic release gate:
 python scripts/release_gate.py --branch main
 ```
 
-Run production readiness checks against a local database:
+Run configuration readiness checks against a local database:
 
 ```bash
 aletheia readiness check --db ./aletheia.db
 ```
+
+These checks inspect the selected database and configuration; they do not
+certify the beta release for production use.
 
 ## Uninstall
 

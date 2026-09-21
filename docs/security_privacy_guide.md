@@ -34,7 +34,7 @@ upgrade behavior, see [HTTP access boundaries](service_access_boundaries.md).
 
 Deployment limits:
 
-- The v1.3.0 production baseline on `main` is Aletheia-generic. Product-specific integrations, including sample adapter compatibility code, must stay on a branch or fork.
+- The baseline on `main` is Aletheia-generic. Product-specific integrations, including sample adapter compatibility code, must stay on a branch or fork.
 - Non-loopback HTTP deployments must run with `auth_required=True`, scoped API tokens, namespace grants, and an external TLS/reverse-proxy boundary.
 - Protected mode requires configured key material through `ALETHEIA_PROTECTED_KEY` or `ALETHEIA_KEY_<key_id>` before sensitive content can be written.
 - Full physical backups can include raw SQLite and auth metadata; use encrypted backups for protected deployments and logical redacted backups for support or sharing.
