@@ -8,7 +8,7 @@ import os
 import re
 import sqlite3
 from dataclasses import asdict, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from time import perf_counter
@@ -922,6 +922,7 @@ class Memory:
     def federation_conformance(self):
         return federation.federation_conformance(self)
 
+    @_atomic_review
     def write_event(
         self,
         *,
@@ -939,6 +940,8 @@ class Memory:
         self._require_text(namespace, "namespace")
         self._require_text(source_type, "source_type")
         self._require_text(content, "content")
+        if content.startswith("enc:"):
+            raise ValidationError("The enc: prefix is reserved for encrypted storage content.")
         if not isinstance(privacy_level, str) or privacy_level not in PRIVACY_LEVELS:
             raise ValidationError(
                 "privacy_level must be public, personal, private, sensitive, or secret."
@@ -956,6 +959,13 @@ class Memory:
             (event_id,),
         ).fetchone()
         if existing:
+            order = {level: index for index, level in enumerate(("public", "personal", "private", "sensitive", "secret"))}
+            if order[privacy_level] > order[existing["privacy_level"]]:
+                stored = production.protect_content_for_storage(self, content, privacy_level=privacy_level)
+                self.store.connection.execute("UPDATE evidence_events SET content=?, privacy_level=? WHERE id=?",
+                                              (stored, privacy_level, event_id))
+                self._write_audit(namespace=namespace, target_type="evidence", target_id=event_id,
+                                  action="evidence.privacy_escalated", details={"privacy_level": privacy_level})
             return self.read_event(event_id)
 
         now = utc_now_iso()
@@ -1007,7 +1017,7 @@ class Memory:
         if not row:
             raise NotFoundError(f"Evidence event not found: {event_id}")
         event = EvidenceEvent.from_row(row)
-        revealed = production.reveal_content_from_storage(self, event.content)
+        revealed = production.reveal_content_from_storage(self, event.content, content_digest=event.content_hash)
         if revealed != event.content:
             return replace(event, content=revealed)
         return event
@@ -1029,10 +1039,11 @@ class Memory:
         events: list[EvidenceEvent] = []
         for row in rows:
             event = EvidenceEvent.from_row(row)
-            revealed = production.reveal_content_from_storage(self, event.content)
+            revealed = production.reveal_content_from_storage(self, event.content, content_digest=event.content_hash)
             events.append(replace(event, content=revealed) if revealed != event.content else event)
         return events
 
+    @_atomic_review
     def ingest(
         self,
         namespace: str,
@@ -1600,6 +1611,7 @@ class Memory:
             metadata={},
         )
 
+    @_atomic_review
     def draft_reflection_with_llm(
         self,
         *,
@@ -2173,6 +2185,7 @@ class Memory:
         ).fetchall()
         return [self.read_inference(row["id"]) for row in rows]
 
+    @_atomic_review
     def review_inference(
         self,
         inference_id: str,
@@ -2186,6 +2199,8 @@ class Memory:
             raise ValidationError(f"Unknown inference review decision: {decision}")
         self._require_text(reason, "reason")
         inference = self.read_inference(inference_id)
+        if inference.status in {"promoted", "rejected"}:
+            raise ValidationError("Terminal inferences cannot be reviewed again.")
         new_status = {
             "validate": "validated",
             "reject": "rejected",
@@ -2241,6 +2256,7 @@ class Memory:
         ).fetchone()
         return InferenceDecision.from_row(row)
 
+    @_atomic_review
     def promote_inference(
         self,
         inference_id: str,
@@ -2252,6 +2268,8 @@ class Memory:
         force: bool = False,
     ):
         inference = self.read_inference(inference_id)
+        if inference.status in {"promoted", "rejected"}:
+            raise ValidationError("Terminal inferences cannot be promoted again.")
         failures = self._inference_promotion_failures(inference, target_type, target_status)
         if failures and not force:
             raise ValidationError("Cannot promote inference: " + "; ".join(failures))
@@ -3797,6 +3815,7 @@ class Memory:
         ).fetchall()
         return [EvaluationRun.from_row(row) for row in rows]
 
+    @_atomic_review
     def optimize_retrieval(
         self,
         namespace: str,
@@ -4012,6 +4031,7 @@ class Memory:
         ).fetchall()
         return [PolicyProposal.from_row(row) for row in rows]
 
+    @_atomic_review
     def review_policy_proposal(
         self,
         proposal_id: str,
@@ -4023,6 +4043,8 @@ class Memory:
         if decision not in POLICY_REVIEW_DECISIONS:
             raise ValidationError(f"Unknown policy proposal decision: {decision}")
         proposal = self.get_policy_proposal(proposal_id)
+        if proposal.status not in {"pending_review", "draft"}:
+            raise ValidationError("Only pending proposals can be reviewed.")
         status = {
             "approve": "approved",
             "reject": "rejected",
@@ -4428,6 +4450,7 @@ class Memory:
         ).fetchall()
         return [ProcedureUpdateProposal.from_row(row) for row in rows]
 
+    @_atomic_review
     def review_procedure_update(
         self,
         proposal_id: str,
@@ -4439,6 +4462,8 @@ class Memory:
         if decision not in POLICY_REVIEW_DECISIONS:
             raise ValidationError(f"Unknown procedure proposal decision: {decision}")
         proposal = self.get_procedure_update_proposal(proposal_id)
+        if proposal.status not in {"pending_review", "draft"}:
+            raise ValidationError("Only pending proposals can be reviewed.")
         status = {
             "approve": "approved",
             "reject": "rejected",
@@ -4463,6 +4488,7 @@ class Memory:
             )
         return self.get_procedure_update_proposal(proposal_id)
 
+    @_atomic_review
     def apply_procedure_update(
         self,
         proposal_id: str,
@@ -4478,11 +4504,11 @@ class Memory:
             SELECT version
             FROM procedure_versions
             WHERE namespace = ?
-              AND (procedure_claim_id IS ? OR title = ?)
+              AND ((? IS NOT NULL AND procedure_claim_id = ?) OR (? IS NULL AND procedure_claim_id IS NULL AND title = ?))
             ORDER BY version DESC
             LIMIT 1
             """,
-            (proposal.namespace, proposal.procedure_claim_id, proposal.title),
+            (proposal.namespace, proposal.procedure_claim_id, proposal.procedure_claim_id, proposal.procedure_claim_id, proposal.title),
         ).fetchone()
         next_version = (rows["version"] + 1) if rows else 1
         version_id = new_id("pver")
@@ -4493,9 +4519,9 @@ class Memory:
                 SET status = 'superseded'
                 WHERE namespace = ?
                   AND status = 'active'
-                  AND (procedure_claim_id IS ? OR title = ?)
+                  AND ((? IS NOT NULL AND procedure_claim_id = ?) OR (? IS NULL AND procedure_claim_id IS NULL AND title = ?))
                 """,
-                (proposal.namespace, proposal.procedure_claim_id, proposal.title),
+                (proposal.namespace, proposal.procedure_claim_id, proposal.procedure_claim_id, proposal.procedure_claim_id, proposal.title),
             )
             self.store.connection.execute(
                 """
@@ -4541,6 +4567,9 @@ class Memory:
                     """,
                     (proposal.proposed_text, utc_now_iso(), proposal.procedure_claim_id),
                 )
+                self.store.connection.execute("DELETE FROM claims_fts WHERE claim_id = ?", (claim.id,))
+                self._index_claim(claim_id=claim.id, namespace=claim.namespace, subject=claim.subject,
+                                  predicate=claim.predicate, object=proposal.proposed_text, memory_type=claim.memory_type)
                 self._write_audit(
                     namespace=proposal.namespace,
                     target_type="claim",
@@ -4593,6 +4622,7 @@ class Memory:
         ).fetchall()
         return [ProcedureVersion.from_row(row) for row in rows]
 
+    @_atomic_review
     def rollback_procedure(
         self,
         namespace: str,
@@ -4605,16 +4635,18 @@ class Memory:
         target = self.get_procedure_version(target_version_id)
         if target.namespace != namespace:
             raise ValidationError("Procedure version belongs to a different namespace.")
+        if target.procedure_claim_id != procedure_claim_id:
+            raise ValidationError("Rollback target belongs to another procedure.")
         current = self.store.connection.execute(
             """
             SELECT id
             FROM procedure_versions
             WHERE namespace = ?
               AND status = 'active'
-              AND (procedure_claim_id IS ? OR title = ?)
+              AND ((? IS NOT NULL AND procedure_claim_id = ?) OR (? IS NULL AND procedure_claim_id IS NULL AND title = ?))
             LIMIT 1
             """,
-            (namespace, procedure_claim_id, target.title),
+            (namespace, procedure_claim_id, procedure_claim_id, procedure_claim_id, target.title),
         ).fetchone()
         rollback_id = new_id("roll")
         with self.store.transaction():
@@ -4627,6 +4659,15 @@ class Memory:
                 "UPDATE procedure_versions SET status = 'active' WHERE id = ?",
                 (target_version_id,),
             )
+            if procedure_claim_id:
+                claim = self.read_claim(procedure_claim_id)
+                if claim.namespace != namespace:
+                    raise ValidationError("Procedure claim belongs to another namespace.")
+                self.store.connection.execute("UPDATE claims SET object=?, last_verified_at=? WHERE id=?", (target.text, utc_now_iso(), claim.id))
+                self.store.connection.execute("DELETE FROM claims_fts WHERE claim_id=?", (claim.id,))
+                self._index_claim(claim_id=claim.id, namespace=claim.namespace, subject=claim.subject,
+                                  predicate=claim.predicate, object=target.text, memory_type=claim.memory_type)
+                self.recompute_confidence(claim_id=claim.id)
             self.store.connection.execute(
                 """
                 INSERT INTO rollback_records (
@@ -4787,6 +4828,16 @@ class Memory:
     ) -> LocalJob:
         if job_type not in JOB_TYPES:
             raise ValidationError(f"Unknown job_type: {job_type}")
+        if not isinstance(payload, dict):
+            raise ValidationError("Job payload must be an object.")
+        try:
+            attempts = payload.get("max_attempts", 3)
+            if isinstance(attempts, bool) or int(attempts) != float(attempts) or not 1 <= int(attempts) <= 100:
+                raise ValueError
+            attempts = int(attempts)
+            run_after = self._coerce_time(run_after)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValidationError("Job max_attempts and run_after must be valid.") from exc
         job_id = new_id("job")
         now = utc_now_iso()
         with self.store.transaction():
@@ -4806,7 +4857,7 @@ class Memory:
                     json.dumps(payload, sort_keys=True),
                     self._clamp(priority),
                     run_after.isoformat() if run_after else None,
-                    int(payload.get("max_attempts", 3)),
+                    attempts,
                     now,
                     now,
                 ),
@@ -4875,7 +4926,47 @@ class Memory:
             completed.append(self.get_job(job.id))
         return completed
 
+    def _worker_is_alive(self, owner):
+        import platform
+        if not isinstance(owner, dict) or owner.get("host") != platform.node():
+            return None
+        pid = owner.get("pid")
+        if not isinstance(pid, int) or pid <= 0:
+            return None
+        if pid == os.getpid():
+            return True
+        if os.name != "posix":
+            # Conservatively retain ownership where signal-zero is not a portable liveness probe.
+            return None
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @_atomic_review
+    def recover_job(self, job_id, *, reason, confirm_abandoned=False):
+        self._require_text(reason, "reason")
+        job = self.get_job(job_id)
+        if job.status != "running":
+            raise ValidationError("Only running jobs require recovery.")
+        alive = self._worker_is_alive(job.payload.get("_worker_identity"))
+        if alive or alive is None and not confirm_abandoned:
+            raise ValidationError("Job ownership is live or unknown; recovery is refused.")
+        self._fail_running_job(job_id, reason)
+        return self.get_job(job_id)
+
+    def _recover_abandoned_jobs(self, *, namespace=None):
+        rows = self.store.connection.execute("SELECT * FROM local_jobs WHERE status='running' AND (? IS NULL OR namespace=?)", (namespace, namespace)).fetchall()
+        for row in rows:
+            owner = json.loads(row["payload_json"] or "{}").get("_worker_identity")
+            if self._worker_is_alive(owner) is False:
+                self.recover_job(row["id"], reason="Worker process exited before completing its job.")
+
     def _pending_jobs(self, *, namespace=None, job_type=None, max_jobs=10) -> list[LocalJob]:
+        self._recover_abandoned_jobs(namespace=namespace)
         params: list[object] = [utc_now_iso()]
         clauses = ["status = 'pending'", "(run_after IS NULL OR run_after <= ?)"]
         if namespace:
@@ -5270,6 +5361,8 @@ class Memory:
             """,
             (namespace, limit),
         ).fetchall():
+            if self.store.connection.execute("SELECT 1 FROM review_tasks WHERE target_id=? AND task_type='risk_flag_review' AND status IN ('resolved', 'dismissed')", (row["id"],)).fetchone():
+                continue
             generated.append(
                 self.create_review_task(
                     namespace,
@@ -6317,6 +6410,7 @@ class Memory:
             warnings=warnings,
         )
 
+    @_atomic_review
     def write_claim(
         self,
         *,
@@ -6347,6 +6441,12 @@ class Memory:
         )
         if not evidence_ids:
             raise ValidationError("Claims must link to at least one evidence event.")
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValidationError("Evidence IDs must be unique.")
+        if not isinstance(importance, (int, float)) or not math.isfinite(importance) or not 0 <= importance <= 1:
+            raise ValidationError("importance must be between 0 and 1.")
+        if half_life_days is not None and (not isinstance(half_life_days, (int, float)) or not math.isfinite(half_life_days) or half_life_days <= 0):
+            raise ValidationError("half_life_days must be positive.")
         for evidence_id in evidence_ids:
             event = self.read_event(evidence_id)
             if event.namespace != namespace:
@@ -6455,7 +6555,7 @@ class Memory:
             self.detect_conflicts(namespace=namespace, claim_id=claim_id)
             claim = self.read_claim(claim_id)
         self.recompute_confidence(claim_id=claim_id)
-        return claim
+        return self.read_claim(claim_id)
 
     def read_claim(self, claim_id: str) -> Claim:
         row = self.store.connection.execute(
@@ -6493,6 +6593,7 @@ class Memory:
         evidence = self._evidence_ids_for_claims([row["id"] for row in rows])
         return [Claim.from_row(row, evidence.get(row["id"], [])) for row in rows]
 
+    @_atomic_review
     def remember(
         self,
         *,
@@ -6756,21 +6857,23 @@ class Memory:
                         namespace=namespace,
                         project_id=project_id,
                         query=query,
+                        read_access=_read_access,
                     )
                 )
             warnings.extend(
                 self._derived_context_warnings(
                     namespace=namespace,
                     project_id=project_id,
+                    read_access=_read_access,
                 )
             )
 
         if _read_access is not None:
             warnings = [
                 warning for warning in warnings
-                if warning.warning_type == "unresolved_conflict" and warning.claim_ids
+                if warning.warning_type != "unresolved_conflict" or (warning.claim_ids
                 and all(_read_access("claim", value) for value in warning.claim_ids)
-                and all(_read_access("conflict", value) for value in warning.conflict_ids)
+                and all(_read_access("conflict", value) for value in warning.conflict_ids))
             ]
         used_tokens = self._estimate_warning_tokens(warnings)
         if include_reflections:
@@ -6988,7 +7091,6 @@ class Memory:
         predicate: str,
     ) -> Claim | None:
         namespace = namespace or self.namespace
-        self.recompute_confidence(namespace=namespace)
         row = self.store.connection.execute(
             """
             SELECT *
@@ -7006,6 +7108,7 @@ class Memory:
             return None
         return Claim.from_row(row, self._evidence_ids_for_claim(row["id"]))
 
+    @_atomic_review
     def create_project(
         self,
         namespace: str,
@@ -7153,6 +7256,7 @@ class Memory:
             )
         return self.get_session(session_id)
 
+    @_atomic_review
     def end_session(
         self,
         session_id: str,
@@ -7232,6 +7336,7 @@ class Memory:
         ).fetchall()
         return [Session.from_row(row) for row in rows]
 
+    @_atomic_review
     def promote_claim(
         self,
         claim_id: str,
@@ -7279,6 +7384,7 @@ class Memory:
             metadata={"overrides": failures, "old_status": claim.status},
         )
 
+    @_atomic_review
     def demote_claim(
         self,
         claim_id: str,
@@ -7316,6 +7422,7 @@ class Memory:
             metadata={"old_status": claim.status},
         )
 
+    @_atomic_review
     def feedback(
         self,
         target_id: str | None = None,
@@ -7333,12 +7440,15 @@ class Memory:
         if signal not in FEEDBACK_SIGNALS:
             raise ValidationError(f"Unknown feedback signal: {signal}")
         namespace = namespace or self.namespace
+        if target_type == "claim" and self.read_claim(target_id).namespace != namespace:
+            raise ValidationError("Feedback target belongs to another namespace.")
         strength = max(0.0, min(float(strength), 1.0))
         if source == "assistant" and signal == "confirmed" and not evidence_id:
             strength = min(strength, 0.05)
             note = (note + " " if note else "") + "Assistant repetition downweighted by M2."
         if evidence_id:
-            self.read_event(evidence_id)
+            if self.read_event(evidence_id).namespace != namespace:
+                raise ValidationError("Feedback evidence belongs to another namespace.")
         feedback_id = new_id("fbk")
         now = utc_now_iso()
         with self.store.transaction():
@@ -7471,17 +7581,18 @@ class Memory:
         *,
         at_time: datetime | str | None = None,
         explain: bool = False,
+        _batch: dict | None = None,
     ) -> ConfidenceSnapshot:
-        claim = self.read_claim(claim_id)
+        claim = _batch["claims"][claim_id] if _batch is not None else self.read_claim(claim_id)
         computed_at = self._coerce_time(at_time) or utc_now()
-        half_life_days = self._half_life_for_claim(claim)
+        half_life_days = self._half_life_for_claim(claim, _batch=_batch)
         start = parse_iso(claim.last_verified_at) or parse_iso(claim.created_at)
         age_days = max((computed_at - start).total_seconds() / 86400.0, 0.0) if start else 0.0
         decay_factor = 1.0 if half_life_days <= 0 else 2 ** (-age_days / half_life_days)
-        source_reliability_factor = self._source_reliability_factor(claim)
-        feedback_factor = self._feedback_factor(claim.id)
-        contradiction_factor = self._contradiction_factor(claim)
-        verification_factor = self._verification_factor(claim)
+        source_reliability_factor = self._source_reliability_factor(claim, _batch=_batch)
+        feedback_factor = self._feedback_factor(claim.id, _batch=_batch)
+        contradiction_factor = self._contradiction_factor(claim, _batch=_batch)
+        verification_factor = self._verification_factor(claim, _batch=_batch)
         effective = self._clamp(
             claim.confidence_base
             * decay_factor
@@ -7492,8 +7603,9 @@ class Memory:
         )
         retrieval_salience = self._retrieval_salience(
             claim=claim,
+            _batch=_batch,
             age_days=age_days,
-            usefulness_factor=self._usefulness_factor(claim.id),
+            usefulness_factor=self._usefulness_factor(claim.id, _batch=_batch),
         )
         explanation = None
         if explain:
@@ -7524,6 +7636,33 @@ class Memory:
             explanation=explanation,
         )
 
+    def _confidence_batch(self, rows):
+        batch = {key: {} for key in ("sources", "feedback", "conflicts", "scopes", "links", "claims")}
+        batch["snapshotted"] = set()
+        batch["latest_snapshots"] = {}
+        batch["policies"] = self.store.connection.execute("SELECT * FROM half_life_policies ORDER BY namespace IS NULL ASC, predicate IS NULL ASC, memory_type IS NULL ASC, updated_at DESC").fetchall()
+        ids = [row["id"] for row in rows]
+        queries = {
+            "sources": "SELECT l.claim_id AS batch_id, e.trust_level, e.source_type FROM claim_evidence_links l JOIN evidence_events e ON e.id=l.evidence_id WHERE l.claim_id IN ({})",
+            "links": "SELECT claim_id AS batch_id, evidence_id FROM claim_evidence_links WHERE claim_id IN ({}) ORDER BY evidence_id ASC",
+            "feedback": "SELECT target_id AS batch_id, * FROM feedback WHERE target_type='claim' AND target_id IN ({})",
+            "conflicts": "SELECT l.claim_id AS batch_id, f.* FROM conflict_family_claims l JOIN conflict_families f ON f.id=l.conflict_id WHERE l.claim_id IN ({})",
+            "scopes": "SELECT claim_id AS batch_id, * FROM claim_scopes WHERE claim_id IN ({})",
+        }
+        for offset in range(0, len(ids), 500):
+            chunk = ids[offset:offset+500]
+            slots = ",".join("?" for _ in chunk)
+            for key, sql in queries.items():
+                for row in self.store.connection.execute(sql.format(slots), chunk):
+                    batch[key].setdefault(row["batch_id"], []).append(row)
+            for previous in self.store.connection.execute(f"SELECT * FROM confidence_snapshots WHERE rowid IN (SELECT max(rowid) FROM confidence_snapshots WHERE claim_id IN ({slots}) GROUP BY claim_id)", chunk):
+                batch["snapshotted"].add(previous["claim_id"])
+                batch["latest_snapshots"][previous["claim_id"]] = previous
+        for row in rows:
+            batch["claims"][row["id"]] = Claim.from_row(row, [link["evidence_id"] for link in batch["links"].get(row["id"], [])])
+        return batch
+
+    @_atomic_review
     def recompute_confidence(
         self,
         *,
@@ -7545,17 +7684,22 @@ class Memory:
             clauses.append(f"memory_type IN ({','.join('?' for _ in memory_types)})")
             params.extend(memory_types)
         rows = self.store.connection.execute(
-            f"SELECT id, namespace, confidence_effective, importance FROM claims WHERE {' AND '.join(clauses)}",
+            f"SELECT * FROM claims WHERE {' AND '.join(clauses)}",
             params,
         ).fetchall()
         snapshots: list[ConfidenceSnapshot] = []
         with self.store.transaction():
+            batch = self._confidence_batch(rows)
+            computed_at = utc_now()
             for row in rows:
                 old_truth = row["confidence_effective"]
                 old_salience = row["importance"]
-                snapshot = self.compute_confidence(row["id"], explain=False)
+                snapshot = self.compute_confidence(row["id"], explain=False, at_time=computed_at, _batch=batch)
                 snapshots.append(snapshot)
-                if persist:
+                previous = batch["latest_snapshots"].get(row["id"])
+                changed = previous is None or any(not math.isclose(float(previous[field]), getattr(snapshot, field), rel_tol=1e-8, abs_tol=1e-8)
+                    for field in ("truth_confidence", "retrieval_salience", "base_confidence", "effective_confidence", "source_reliability_factor", "feedback_factor", "contradiction_factor", "verification_factor", "half_life_days"))
+                if persist and changed:
                     self._persist_confidence_snapshot(
                         namespace=row["namespace"],
                         snapshot=snapshot,
@@ -7772,6 +7916,7 @@ class Memory:
             for row in rows
         ]
 
+    @_atomic_review
     def resolve_conflict(
         self,
         conflict_id: str | None = None,
@@ -7896,7 +8041,7 @@ class Memory:
             if selected_active:
                 self._set_claim_status(
                     claim_id=selected_active,
-                    status="active",
+                    status="core" if self.read_claim(selected_active).status == "core" else "active",
                     action="conflict.resolve",
                     details={
                         "conflict_id": conflict_id,
@@ -8063,6 +8208,7 @@ class Memory:
             raise NotFoundError(f"Half-life policy not found: {policy_id}")
         return HalfLifePolicy.from_row(row)
 
+    @_atomic_review
     def supersede_claim(
         self,
         old_claim_id: str,
@@ -8099,6 +8245,7 @@ class Memory:
         self.recompute_confidence(claim_id=new_claim_id)
         return relationship
 
+    @_atomic_review
     def scope_claim(
         self,
         claim_id: str,
@@ -8143,9 +8290,20 @@ class Memory:
             persist=not dry_run,
         )
         snapshot_by_claim = {snapshot.claim_id: snapshot for snapshot in snapshots}
-        claims = self.list_claims(namespace=namespace, limit=1000)
-        if memory_types:
-            claims = [claim for claim in claims if claim.memory_type in memory_types]
+        def iter_claims():
+            cursor = ""
+            while True:
+                rows = self.store.connection.execute(
+                    "SELECT * FROM claims WHERE namespace = ? AND id > ? ORDER BY id LIMIT 500",
+                    (namespace, cursor),
+                ).fetchall()
+                if not rows:
+                    return
+                evidence = self._evidence_ids_for_claims([row["id"] for row in rows])
+                for row in rows:
+                    if not memory_types or row["memory_type"] in memory_types:
+                        yield Claim.from_row(row, evidence.get(row["id"], []))
+                cursor = rows[-1]["id"]
         decisions: list[CurationDecision] = []
         duplicate_families = [
             family
@@ -8153,7 +8311,7 @@ class Memory:
             if family.conflict_type == "duplicate_claim"
         ]
         duplicate_claim_ids = {claim_id for family in duplicate_families for claim_id in family.claim_ids}
-        for claim in sorted(claims, key=lambda item: item.id):
+        for claim in iter_claims():
             snapshot = snapshot_by_claim.get(claim.id) or self.compute_confidence(claim.id)
             decision_type: str | None = None
             target_status: str | None = None
@@ -8389,6 +8547,7 @@ class Memory:
         *,
         namespace: str,
         project_id: str | None = None,
+        read_access=None,
     ) -> list[ContextWarning]:
         warnings: list[ContextWarning] = []
         reflections = [
@@ -8396,6 +8555,8 @@ class Memory:
             *self.list_reflections(namespace=namespace, status="invalidated", project_id=project_id),
         ]
         for reflection in reflections:
+            if read_access and not read_access("reflection", reflection.id):
+                continue
             warnings.append(
                 ContextWarning(
                     text=(
@@ -8418,6 +8579,8 @@ class Memory:
             (namespace,),
         ).fetchall()
         for row in stale_inference_rows:
+            if read_access and not read_access("inference", row["id"]):
+                continue
             warnings.append(
                 ContextWarning(
                     text=(
@@ -8436,6 +8599,7 @@ class Memory:
         namespace: str,
         project_id: str | None,
         query: str,
+        read_access=None,
     ) -> list[ContextWarning]:
         candidates = self.list_candidates(
             namespace,
@@ -8446,6 +8610,8 @@ class Memory:
         query_terms = set(query.lower().split())
         warnings = []
         for candidate in candidates:
+            if read_access and not read_access("candidate_claim", candidate.id):
+                continue
             text = claim_text(candidate.subject, candidate.predicate, candidate.object)
             if query_terms and not (query_terms & set(text.lower().split())):
                 continue
@@ -10322,12 +10488,10 @@ class Memory:
                 "SELECT memory_type, status FROM claims WHERE id = ?",
                 (affected_id,),
             ).fetchone()
-            if row and row["memory_type"] == "inference":
+            if row and row["memory_type"] == "inference" and row["status"] not in {"core", "rejected", "superseded", "archived"}:
                 new_status = "rejected" if mode == "invalidate" else "disputed"
-                self.store.connection.execute(
-                    "UPDATE claims SET status = ? WHERE id = ?",
-                    (new_status, affected_id),
-                )
+                self._set_claim_status(claim_id=affected_id, status=new_status, action="derived.invalidate",
+                                       details={"reason": reason})
                 action = "invalidated" if new_status == "rejected" else "marked_stale"
         if mode in {"mark_stale", "queue_refresh", "recompute"}:
             refresh_id = self._stable_id("refq", namespace, affected_type, affected_id, reason)
@@ -11288,8 +11452,8 @@ class Memory:
                 return
             status = "failed" if job.attempts >= job.max_attempts else "pending"
             self.store.connection.execute(
-                "UPDATE local_jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?",
-                (status, error, utc_now_iso(), job.id),
+                "UPDATE local_jobs SET status = ?, last_error = ?, updated_at = ?, run_after = ? WHERE id = ?",
+                (status, error, utc_now_iso(), (utc_now() + timedelta(seconds=min(60, 2 ** min(job.attempts, 6)))).isoformat() if status == "pending" else None, job.id),
             )
             self._write_audit(
                 namespace=job.namespace or "global", target_type="local_job", target_id=job.id,
@@ -11298,17 +11462,19 @@ class Memory:
 
     def _claim_pending_job(self, job: LocalJob) -> bool:
         now = utc_now_iso()
+        import platform
+        payload = {**job.payload, "_worker_identity": {"pid": os.getpid(), "host": platform.node()}}
         with self.store.transaction():
             cursor = self.store.connection.execute(
                 """
                 UPDATE local_jobs
-                SET status = 'running', attempts = attempts + 1, updated_at = ?
+                SET status = 'running', attempts = attempts + 1, updated_at = ?, payload_json = ?
                 WHERE id = ?
                   AND status = 'pending'
                   AND attempts < max_attempts
                   AND (run_after IS NULL OR run_after <= ?)
                 """,
-                (now, job.id, now),
+                (now, json.dumps(payload, sort_keys=True), job.id, now),
             )
         return cursor.rowcount == 1
 
@@ -12725,21 +12891,14 @@ class Memory:
             """
             UPDATE claims
             SET confidence_base = ?,
-                status = ?,
                 last_verified_at = ?
             WHERE id = ?
             """,
-            (new_confidence, new_status, last_verified_at, claim_id),
+            (new_confidence, last_verified_at, claim_id),
         )
-        if claim.status != new_status:
-            self._write_status_history(
-                namespace=claim.namespace,
-                claim_id=claim_id,
-                old_status=claim.status,
-                new_status=new_status,
-                reason=f"feedback.{signal}",
-                actor=source,
-            )
+        if claim.status != "core" and claim.status != new_status:
+            self._set_claim_status(claim_id=claim_id, status=new_status, action=f"feedback.{signal}",
+                                   details={"reason": f"feedback.{signal}", "actor": source})
 
     def _promotion_failures(
         self,
@@ -12797,8 +12956,11 @@ class Memory:
         parsed = self._coerce_time(value)
         return parsed.isoformat() if parsed else str(value)
 
-    def _half_life_for_claim(self, claim: Claim) -> float:
-        row = self.store.connection.execute(
+    def _half_life_for_claim(self, claim: Claim, *, _batch=None) -> float:
+        row = (next((row for row in _batch["policies"]
+            if row["namespace"] in {None, claim.namespace} and row["memory_type"] in {None, claim.memory_type}
+            and row["predicate"] in {None, claim.predicate}), None) if _batch is not None else
+            self.store.connection.execute(
             """
             SELECT *
             FROM half_life_policies
@@ -12813,7 +12975,7 @@ class Memory:
             LIMIT 1
             """,
             (claim.namespace, claim.memory_type, claim.predicate),
-        ).fetchone()
+        ).fetchone())
         default_half_life = float(DEFAULT_HALF_LIVES.get(claim.memory_type, 180.0))
         if row and not str(row["id"]).startswith("hlp_default_"):
             return float(row["half_life_days"])
@@ -12823,8 +12985,9 @@ class Memory:
             return float(row["half_life_days"])
         return default_half_life
 
-    def _source_reliability_factor(self, claim: Claim) -> float:
-        rows = self.store.connection.execute(
+    def _source_reliability_factor(self, claim: Claim, *, _batch=None) -> float:
+        rows = (_batch["sources"].get(claim.id, []) if _batch is not None else
+                self.store.connection.execute(
             """
             SELECT e.trust_level, e.source_type
             FROM claim_evidence_links l
@@ -12832,7 +12995,7 @@ class Memory:
             WHERE l.claim_id = ?
             """,
             (claim.id,),
-        ).fetchall()
+        ).fetchall())
         if not rows:
             return 0.85
         factors = []
@@ -12853,11 +13016,12 @@ class Memory:
             factors.append(factor)
         return max(0.50, min(sum(factors) / len(factors), 1.15))
 
-    def _feedback_factor(self, claim_id: str) -> float:
-        rows = self.store.connection.execute(
+    def _feedback_factor(self, claim_id: str, *, _batch=None) -> float:
+        rows = (_batch["feedback"].get(claim_id, []) if _batch is not None else
+                self.store.connection.execute(
             "SELECT * FROM feedback WHERE target_type = 'claim' AND target_id = ?",
             (claim_id,),
-        ).fetchall()
+        ).fetchall())
         factor = 1.0
         for row in rows:
             strength = float(row["strength"] or 1.0)
@@ -12878,11 +13042,12 @@ class Memory:
                 factor *= max(0.70, 1.0 - 0.10 * strength)
         return max(0.05, min(factor, 1.40))
 
-    def _usefulness_factor(self, claim_id: str) -> float:
-        rows = self.store.connection.execute(
+    def _usefulness_factor(self, claim_id: str, *, _batch=None) -> float:
+        rows = (_batch["feedback"].get(claim_id, []) if _batch is not None else
+                self.store.connection.execute(
             "SELECT signal, strength FROM feedback WHERE target_type = 'claim' AND target_id = ?",
             (claim_id,),
-        ).fetchall()
+        ).fetchall())
         factor = 1.0
         for row in rows:
             strength = float(row["strength"] or 1.0)
@@ -12901,14 +13066,15 @@ class Memory:
                 factor *= max(0.40, 1.0 - 0.30 * strength)
         return max(0.05, min(factor, 1.60))
 
-    def _contradiction_factor(self, claim: Claim) -> float:
+    def _contradiction_factor(self, claim: Claim, *, _batch=None) -> float:
         if claim.status == "rejected":
             return 0.05
         if claim.status == "superseded":
             return 0.10
         if claim.status == "archived":
             return 0.25
-        rows = self.store.connection.execute(
+        rows = (_batch["conflicts"].get(claim.id, []) if _batch is not None else
+                self.store.connection.execute(
             """
             SELECT cf.*
             FROM conflict_families cf
@@ -12916,7 +13082,7 @@ class Memory:
             WHERE cfc.claim_id = ?
             """,
             (claim.id,),
-        ).fetchall()
+        ).fetchall())
         if any(row["status"] == "unresolved" for row in rows):
             return 0.40
         if claim.status == "disputed":
@@ -12924,12 +13090,13 @@ class Memory:
         if any(row["active_claim_id"] == claim.id for row in rows):
             return 1.0
         if any(row["status"] in {"context_scoped", "time_scoped"} for row in rows):
-            return 1.0 if self.list_claim_scopes(claim.id) else 0.65
+            return 1.0 if (_batch["scopes"].get(claim.id, []) if _batch is not None else self.list_claim_scopes(claim.id)) else 0.65
         return 1.0
 
-    def _verification_factor(self, claim: Claim) -> float:
+    def _verification_factor(self, claim: Claim, *, _batch=None) -> float:
         factor = 1.05 if claim.last_verified_at else 1.0
-        rows = self.store.connection.execute(
+        rows = ([row for row in _batch["feedback"].get(claim.id, []) if row["signal"] == "verified"] if _batch is not None else
+                self.store.connection.execute(
             """
             SELECT strength
             FROM feedback
@@ -12938,7 +13105,7 @@ class Memory:
               AND signal = 'verified'
             """,
             (claim.id,),
-        ).fetchall()
+        ).fetchall())
         for row in rows:
             factor += 0.05 * float(row["strength"] or 1.0)
         return max(1.0, min(factor, 1.20))
@@ -12947,6 +13114,7 @@ class Memory:
         self,
         *,
         claim: Claim,
+        _batch=None,
         age_days: float,
         usefulness_factor: float,
     ) -> float:
@@ -12960,7 +13128,7 @@ class Memory:
             "superseded": 0.0,
             "rejected": 0.0,
         }.get(claim.status, 0.20)
-        scope_factor = 0.65 if self.list_claim_scopes(claim.id) else 1.0
+        scope_factor = 0.65 if (_batch["scopes"].get(claim.id, []) if _batch is not None else self.list_claim_scopes(claim.id)) else 1.0
         return self._clamp(
             claim.importance
             * recency_salience

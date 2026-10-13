@@ -1,3 +1,7 @@
+The next release is **1.6.1**, currently prepared for publication. Until it is
+published, use the reviewed 1.6.1 wheel or source archive from this release
+preparation. See [the upgrade guide](v1_6_1_upgrade.md).
+
 # Installation
 
 This guide covers Aletheia 1.6.0 beta, verifying the command line,

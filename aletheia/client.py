@@ -215,7 +215,7 @@ class AletheiaClient:
         return self._request("GET", "/v1/candidates?" + urlencode(query))
 
     def promote_candidate(self, candidate_id: str, *, reason: str) -> dict:
-        return self._request("POST", f"/v1/candidates/{candidate_id}/promote", {"reason": reason})
+        return self._request("POST", f"/v1/candidates/{quote(str(candidate_id), safe='')}/promote", {"reason": reason})
 
     def _require_review_profile(self):
         if "memory-review-v1" not in self.current_principal().get("supported_profiles", []):
@@ -243,22 +243,22 @@ class AletheiaClient:
             request_id=request_id, contract="memory-review-v1")
 
     def audit(self, target_type: str, target_id: str, *, request_id: str | None = None) -> dict:
-        return self._request("GET", f"/v1/audit/{target_type}/{target_id}", request_id=request_id)
+        return self._request("GET", f"/v1/audit/{quote(str(target_type), safe='')}/{quote(str(target_id), safe='')}", request_id=request_id)
 
     def explain_claim(self, claim_id: str) -> dict:
-        return self._request("GET", f"/v1/claims/{claim_id}/explain")
+        return self._request("GET", f"/v1/claims/{quote(str(claim_id), safe='')}/explain")
 
     def start_session(self, **payload) -> dict:
         return self._request("POST", "/v1/sessions/start", payload)
 
     def end_session(self, session_id: str, **payload) -> dict:
-        return self._request("POST", f"/v1/sessions/{session_id}/end", payload)
+        return self._request("POST", f"/v1/sessions/{quote(str(session_id), safe='')}/end", payload)
 
     def create_project(self, **payload) -> dict:
         return self._request("POST", "/v1/projects", payload)
 
     def list_jobs(self, namespace: str | None = None) -> list[dict]:
-        suffix = f"?namespace={namespace}" if namespace else ""
+        suffix = "?" + urlencode({"namespace": namespace}) if namespace else ""
         return self._request("GET", f"/v1/jobs{suffix}")
 
     def run_jobs(self, **payload) -> list[dict]:
@@ -327,7 +327,7 @@ class AletheiaClient:
         })
 
     def replace_peer_key(self, peer_id: str, **payload) -> dict:
-        return self._request("POST", f"/v1/peers/{peer_id}/replace-key", payload)
+        return self._request("POST", f"/v1/peers/{quote(str(peer_id), safe='')}/replace-key", payload)
 
     def list_peers(self, *, include_revoked: bool = False) -> list[dict]:
         suffix = "?" + urlencode({"include_revoked": str(include_revoked).lower()})
@@ -337,10 +337,10 @@ class AletheiaClient:
         return self._request("POST", "/v1/peers", payload)
 
     def trust_peer(self, peer_id: str, **payload) -> dict:
-        return self._request("POST", f"/v1/peers/{peer_id}/trust", payload)
+        return self._request("POST", f"/v1/peers/{quote(str(peer_id), safe='')}/trust", payload)
 
     def revoke_peer(self, peer_id: str, **payload) -> dict:
-        return self._request("POST", f"/v1/peers/{peer_id}/revoke", payload)
+        return self._request("POST", f"/v1/peers/{quote(str(peer_id), safe='')}/revoke", payload)
 
     def trust_domains(self) -> list[dict]:
         return self._request("GET", "/v1/peers/trust-domains")
@@ -358,19 +358,19 @@ class AletheiaClient:
         return self._request("POST", "/v1/shares", payload)
 
     def get_share(self, share_id: str) -> dict:
-        return self._request("GET", f"/v1/shares/{share_id}")
+        return self._request("GET", f"/v1/shares/{quote(str(share_id), safe='')}")
 
     def share_recipients(self, share_id: str) -> list[dict]:
-        return self._request("GET", f"/v1/shares/{share_id}/recipients")
+        return self._request("GET", f"/v1/shares/{quote(str(share_id), safe='')}/recipients")
 
     def export_share(self, share_id: str, **payload) -> dict:
-        return self._request("POST", f"/v1/shares/{share_id}/export", payload)
+        return self._request("POST", f"/v1/shares/{quote(str(share_id), safe='')}/export", payload)
 
     def import_share(self, **payload) -> dict:
         return self._request("POST", "/v1/shares/import", payload)
 
     def revoke_share(self, share_id: str, **payload) -> dict:
-        return self._request("POST", f"/v1/shares/{share_id}/revoke", payload)
+        return self._request("POST", f"/v1/shares/{quote(str(share_id), safe='')}/revoke", payload)
 
     def sync_run(self, **payload) -> dict:
         return self._request("POST", "/v1/sync/run", payload)
@@ -394,7 +394,7 @@ class AletheiaClient:
         return self._request("GET", "/v1/sync/conflicts" + suffix)
 
     def resolve_sync_conflict(self, conflict_id: str, **payload) -> dict:
-        return self._request("POST", f"/v1/sync/conflicts/{conflict_id}/resolve", payload)
+        return self._request("POST", f"/v1/sync/conflicts/{quote(str(conflict_id), safe='')}/resolve", payload)
 
     def remote_sources(self, *, local_object_id: str | None = None, namespace: str | None = None) -> list[dict]:
         query = {key: value for key, value in {"local_object_id": local_object_id, "namespace": namespace}.items() if value is not None}
@@ -412,13 +412,13 @@ class AletheiaClient:
         return self._request("POST", "/v1/workspaces", payload)
 
     def workspace_members(self, workspace_id: str) -> list[dict]:
-        return self._request("GET", f"/v1/workspaces/{workspace_id}/members")
+        return self._request("GET", f"/v1/workspaces/{quote(str(workspace_id), safe='')}/members")
 
     def add_workspace_member(self, workspace_id: str, **payload) -> dict:
-        return self._request("POST", f"/v1/workspaces/{workspace_id}/members", payload)
+        return self._request("POST", f"/v1/workspaces/{quote(str(workspace_id), safe='')}/members", payload)
 
     def remove_workspace_member(self, workspace_id: str, member_id: str) -> dict:
-        return self._request("DELETE", f"/v1/workspaces/{workspace_id}/members/{member_id}", {})
+        return self._request("DELETE", f"/v1/workspaces/{quote(str(workspace_id), safe='')}/members/{quote(str(member_id), safe='')}", {})
 
     def list_revocations(self, *, namespace: str | None = None) -> list[dict]:
         suffix = "?" + urlencode({"namespace": namespace}) if namespace else ""
@@ -511,7 +511,7 @@ class AletheiaClient:
                     "Aletheia service redirects are not allowed. Configure the final service URL explicitly.",
                     code="redirect_blocked", status_code=exc.code,
                 ) from None
-            body = exc.read().decode("utf-8", errors="replace")
+            body = _bounded_response(exc).decode("utf-8", errors="replace")
             try:
                 envelope = json.loads(body)
             except json.JSONDecodeError:
@@ -773,3 +773,10 @@ class AsyncAletheiaClient:
 
     async def propagate_revocations(self, **payload) -> dict:
         return await asyncio.to_thread(self._sync.propagate_revocations, **payload)
+
+
+def _bounded_response(response, limit=8 * 1024 * 1024):
+    data = response.read(limit + 1)
+    if len(data) > limit:
+        raise AletheiaTransportError("HTTP response exceeds the supported size limit.", code="invalid_response")
+    return data

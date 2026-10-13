@@ -66,3 +66,10 @@ def validate(service, context, receipt):
             raise forbidden("Cached result scope changed; the operation was not repeated.")
     for requested, source_task, privacy_level in receipt["providers"]:
         access.provider(requested, source_task=source_task, privacy_level=privacy_level)
+
+
+def claim_identity(value):
+    """Stable content and lifecycle projection for creation receipts."""
+    fields = ("id", "namespace", "subject", "predicate", "object", "memory_type",
+              "status", "evidence_ids", "valid_from", "valid_to", "scope", "canonical_key")
+    return {name: value.get(name) for name in fields}

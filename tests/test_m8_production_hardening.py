@@ -37,7 +37,7 @@ def _service(tmp_path, *, capabilities: list[str] | None = None) -> tuple[Alethe
     client = auth.create_client(name="m8-admin", client_type="agent")
     _token, raw = auth.create_token(
         client_id=client.id,
-        namespace_grants=[NAMESPACE],
+        namespace_grants=["*"],
         capabilities=capabilities or ["memory:admin"],
         privacy_ceiling="secret",
     )
@@ -483,7 +483,7 @@ def test_redaction_forget_retention_integrity_and_migration_runs(tmp_path):
             """
             SELECT old_status, new_status
             FROM claim_status_history
-            WHERE claim_id = ? AND reason = 'evidence.redacted'
+            WHERE claim_id = ? AND new_status = 'archived'
             """,
             (claim.id,),
         ).fetchone()

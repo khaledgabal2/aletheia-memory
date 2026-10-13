@@ -41,7 +41,8 @@ def review_schemas():
 
 def apply_review_contracts(schema):
     schema["components"]["schemas"].update(review_schemas())
-    schema["components"]["schemas"]["ErrorEnvelope"]["properties"]["error"]["properties"]["code"]["enum"] += ERRORS
+    from aletheia.service.errors import ERROR_CODES
+    schema["components"]["schemas"]["ErrorEnvelope"]["properties"]["error"]["properties"]["code"]["enum"] = sorted(set(ERROR_CODES) | set(ERRORS))
     for path, (method, operation_id, result) in REVIEW_PATHS.items():
         operation = schema["paths"][path][method]
         operation.update(operationId=operation_id, security=[{"bearerAuth": []}])

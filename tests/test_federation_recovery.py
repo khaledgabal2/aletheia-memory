@@ -263,9 +263,9 @@ def test_in_flight_trust_approval_cannot_outlive_key_replacement_or_revocation(p
     changed = False
     after_change = None
 
-    def read_then_change(memory, peer_id):
+    def read_then_change(memory, peer_id, **options):
         nonlocal changed, after_change
-        peer = original(memory, peer_id)
+        peer = original(memory, peer_id, **options)
         if memory is right and not changed:
             changed = True
             # Commit the other operator's action between this approval's

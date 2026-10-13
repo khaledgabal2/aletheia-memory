@@ -4,6 +4,35 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+## 1.6.1 — release preparation
+
+Security and correctness repairs from the independent 1.6.0 review. Python
+remains 3.11+, the API remains v1, and storage remains 1.3.1.
+
+- Bind existing federation grants and collections to their authorized origins;
+  preserve recipient ownership and resolve exact IDs before remote-controlled names.
+- Enforce administrative namespace bounds, privacy ceilings, reviewed lifecycle
+  states and current credential authority throughout HTTP writes and lists.
+- Commit database mutations with their receipts, preserve provider I/O outside
+  transactions, and compare replay content rather than transient scoring/usage.
+- Protect core claims, inference/proposal terminal states, procedure lineage,
+  derived invalidation, FTS updates and redaction of associated labels/history.
+- Authenticate encrypted backup manifests; require an explicit import namespace
+  and trust acknowledgement for unauthenticated archives. Reject foreign content
+  ciphertext and reserved plaintext markers. Create archives privately and
+  exclusively, bound decompression and keep benchmarks in temporary scratch stores.
+- Serialize SQLite writers, support Unicode queries, block provider redirects,
+  bound HTTP responses and protect extraction metadata from model control.
+- Batch confidence inputs and avoid unchanged history growth. Persist job ownership,
+  recover proven abandoned workers conservatively and apply retry backoff.
+- Add standard-input passphrases, encoded SDK identifiers, consistent unavailable
+  object errors and complete error contracts. Pin CI actions and require a matching
+  release tag for manual publication too.
+
+See [review resolution](docs/v1_6_0_review_resolution.md) and the
+[1.6.1 upgrade guide](docs/v1_6_1_upgrade.md) for acceptance evidence and security
+behavior changes. Publication remains pending.
+
 ## 1.6.0 — 2026-09-21
 
 Beta audit-remediation release. Includes all 29 original audit repairs and the

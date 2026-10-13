@@ -41,7 +41,7 @@ class OperationAccess(ReadAccess):
         item = readers[kind](target_id)
         if namespace is not None and item.namespace != namespace:
             raise forbidden("Target does not belong to the requested namespace.")
-        if kind in {"claim", "candidate_claim", "evidence", "conflict", "conflict_family", "inference", "reflection"}:
+        if kind in {"claim", "candidate_claim", "evidence", "conflict", "conflict_family", "inference", "reflection", "session"}:
             if not self.allowed(kind, target_id):
                 raise forbidden("Target is unavailable under the current access policy.")
         else:

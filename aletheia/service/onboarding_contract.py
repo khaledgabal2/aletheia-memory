@@ -1,4 +1,5 @@
 """Typed candidate-first creation and an opt-in atomic agent workflow."""
+from aletheia.service.replay import claim_identity
 from copy import deepcopy
 from dataclasses import asdict
 import re
@@ -75,7 +76,7 @@ def remember_response(service, payload, headers, request_id, request_hash):
                 unchanged = asdict(current) == data["candidate"]
             else:
                 access.require("claim", data["claim"]["id"])
-                unchanged = asdict(service.memory.read_claim(data["claim"]["id"])) == data["claim"]
+                unchanged = claim_identity(asdict(service.memory.read_claim(data["claim"]["id"]))) == claim_identity(data["claim"])
             if not unchanged:
                 raise ServiceError("replay_result_changed", "The created memory changed; ask the operator to inspect it before continuing.", status_code=409)
             if negotiated:

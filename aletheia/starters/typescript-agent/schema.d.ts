@@ -587,7 +587,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "unauthorized" | "forbidden" | "not_found" | "validation_error" | "conflict" | "integrity_gate_failed" | "stale_schema" | "rate_limited" | "idempotency_conflict" | "payload_too_large" | "unsupported_operation" | "internal_error" | "precondition_required" | "stale_revision" | "review_conflict" | "stale_cursor" | "invalid_cursor" | "unsupported_contract" | "review_scan_limit" | "database_busy" | "replay_result_changed";
+                code: "database_busy" | "forbidden" | "idempotency_conflict" | "internal_error" | "invalid_cursor" | "not_found" | "pairing_failed" | "pairing_unavailable" | "payload_too_large" | "precondition_required" | "provider_input_changed" | "rate_limited" | "replay_result_changed" | "request_timeout" | "review_conflict" | "review_scan_limit" | "service_closed" | "stale_cursor" | "stale_revision" | "stale_schema" | "unauthorized" | "unsupported_contract" | "validation_error";
                 details: Record<string, never>;
                 message: string;
             };

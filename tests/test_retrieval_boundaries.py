@@ -451,6 +451,8 @@ def test_failed_provider_job_releases_its_claim_for_retry(memory, monkeypatch):
     assert failed.status == "pending" and failed.attempts == 1
     assert memory.store.connection.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 0
     monkeypatch.setattr(MockEmbeddingProvider, "embed_texts", original)
+    assert memory.get_job(job.id).run_after
+    memory.store.connection.execute("UPDATE local_jobs SET run_after=NULL WHERE id=?", (job.id,))
     assert run()[0] == 200
     completed = memory.get_job(job.id)
     assert completed.status == "completed" and completed.attempts == 2

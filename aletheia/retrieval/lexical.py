@@ -40,12 +40,12 @@ STATUS_PRIORITY = {
 
 
 def tokenize(text: str) -> list[str]:
-    return [term.lower() for term in re.findall(r"[A-Za-z0-9_]+", text)]
+    return [term.lower() for term in re.findall(r"\w+", text)]
 
 
 def fts_query(text: str) -> str:
     terms = tokenize(text)
-    return " OR ".join(terms)
+    return " OR ".join(f'"{term}"' for term in terms)
 
 
 def claim_text(subject: str, predicate: str, object: str) -> str:
@@ -263,6 +263,8 @@ class SQLiteFTSRetriever:
 
         clauses, params = governed_claim_filter(namespace, filters, alias="c")
         match = fts_query(query)
+        if query.strip() and not match:
+            return []
         if match:
             clauses.append("claims_fts MATCH ?")
             params.append(match)

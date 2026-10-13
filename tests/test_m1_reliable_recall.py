@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import pytest
 from pathlib import Path
 
 from aletheia import Memory
@@ -495,35 +496,16 @@ def test_cli_context_sessions_projects_and_migrate(tmp_path, capsys):
     assert session_id in capsys.readouterr().out
 
 
-def test_migration_from_m0_database_preserves_claims_and_audit(tmp_path):
+def test_unsupported_migration_preserves_claims_and_audit(tmp_path):
     db_path = tmp_path / "m0.db"
     _create_minimal_m0_database(db_path)
-
-    memory = Memory.open(str(db_path))
-    try:
-        assert memory.health()["schema_version"] == "1.3.1"
-        results = memory.retrieve(namespace="user/default", query="direct")
-        assert results
-        assert results[0].object == "direct"
-        audit = memory.audit("clm_m0")
-        assert audit["claim"]["id"] == "clm_m0"
-        table_names = {
-            row["name"]
-            for row in memory.store.connection.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual table')"
-            ).fetchall()
-        }
-        assert {
-            "sessions",
-            "projects",
-            "retrieval_log",
-            "context_pack_log",
-            "confidence_snapshots",
-            "claim_status_history",
-            "conflict_families",
-        }.issubset(table_names)
-    finally:
-        memory.close()
+    with sqlite3.connect(db_path) as connection:
+        before = list(connection.iterdump())
+    with pytest.raises(RuntimeError, match="supported migration range"):
+        Memory.open(str(db_path))
+    with sqlite3.connect(db_path) as connection:
+        assert list(connection.iterdump()) == before
+        assert connection.execute("SELECT object FROM claims WHERE id='clm_m0'").fetchone()[0] == "direct"
 
 
 def test_golden_context_section_membership(tmp_path):

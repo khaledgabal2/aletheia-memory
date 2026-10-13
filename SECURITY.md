@@ -3,7 +3,7 @@
 Aletheia is local-first software that can store sensitive user, project, and
 agent memory. Please report vulnerabilities responsibly.
 
-All releases through 1.6.0 are beta, intended for development and evaluation.
+The prepared 1.6.1 release and all earlier releases are beta, intended for development and evaluation.
 Use disposable or synthetic data where practical. Beta status does not establish
 that an older installation or previously shared data was unaffected by a bug.
 The [1.6.0 upgrade guide](docs/v1_6_0_upgrade.md) describes fresh-start and

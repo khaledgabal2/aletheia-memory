@@ -224,7 +224,7 @@ class AuthService:
         return self.get_token(token_id), raw_token
 
     def revoke_token(self, token_id: str, *, reason: str | None = None) -> ApiToken:
-        self.get_token(token_id)
+        token = self.get_token(token_id)
         with self.memory.store.transaction():
             self.connection.execute(
                 """
@@ -234,7 +234,7 @@ class AuthService:
                 """,
                 (
                     utc_now_iso(),
-                    json.dumps({"revoke_reason": reason} if reason else {}, sort_keys=True),
+                    json.dumps({**token.metadata, **({"revoke_reason": reason} if reason else {})}, sort_keys=True),
                     token_id,
                 ),
             )
@@ -273,7 +273,7 @@ class AuthService:
         default_namespace_grants: list[str] | None = None,
         default_privacy_ceiling: str = DEFAULT_TOKENLESS_PRIVACY_CEILING,
     ) -> AuthContext:
-        if not auth_required:
+        if not auth_required and raw_token is None:
             return AuthContext(
                 token=None,
                 client=None,
@@ -291,8 +291,21 @@ class AuthService:
             (prefix,),
         ).fetchall()
         for row in rows:
-            if not self.verify_secret_hash(raw_token, row["token_hash"]):
-                continue
+            import hashlib
+            from collections import OrderedDict
+            digest = hashlib.sha256(raw_token.encode()).digest()
+            cache = getattr(self, "_verified_secrets", None)
+            if cache is None:
+                cache = self._verified_secrets = OrderedDict()
+            cache_key = (digest, row["token_hash"])
+            if cache_key not in cache:
+                if not self.verify_secret_hash(raw_token, row["token_hash"]):
+                    continue
+                cache[cache_key] = True
+                if len(cache) > 128:
+                    cache.popitem(last=False)
+            else:
+                cache.move_to_end(cache_key)
             if len(row["token_hash"]) == 64 and "$" not in row["token_hash"]:
                 # Keep the supported 1.3 migration bridge read-only: once a
                 # legacy token proves possession, immediately replace its

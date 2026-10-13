@@ -4,17 +4,19 @@ Backups are part of the encryption layer. In protected mode, backups must be
 encrypted. Encrypted backup payloads use AES-256-GCM with PBKDF2-HMAC-SHA256
 key derivation and authenticated verification.
 
-Create and verify a local encrypted archive:
+Create and verify a local encrypted archive. Supply the passphrase on standard
+input from a secure prompt or use `ALETHEIA_BACKUP_PASSPHRASE`; do not put it in
+process arguments or shell history:
 
 ```bash
-aletheia backup create --db ./aletheia.db --output ./aletheia.alet --encrypt --passphrase "change-me"
-aletheia backup verify ./aletheia.alet --db ./aletheia.db --passphrase "change-me"
+aletheia backup create --db ./aletheia.db --output ./aletheia.alet --encrypt --passphrase-stdin
+aletheia backup verify ./aletheia.alet --db ./aletheia.db --passphrase-stdin
 ```
 
 Dry-run restore before applying:
 
 ```bash
-aletheia restore dry-run ./aletheia.alet --target-db ./restored.db --db ./aletheia.db --passphrase "change-me"
+aletheia restore dry-run ./aletheia.alet --target-db ./restored.db --db ./aletheia.db --passphrase-stdin
 ```
 
 Applied restores require an authenticated encrypted archive by default. A
@@ -28,7 +30,7 @@ The v1 release gate checks that backup and restore machinery is available. A cle
 
 Passphrase resolution order:
 
-- Explicit `--passphrase`.
+- `--passphrase-stdin` (preferred); the legacy `--passphrase` option is deprecated.
 - `ALETHEIA_KEY_<key_id>` when a key ID is provided.
 - `ALETHEIA_BACKUP_PASSPHRASE`.
 
