@@ -4,7 +4,7 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
-## 1.6.1 — release preparation
+## 1.6.1 — 2026-10-13
 
 Security and correctness repairs from the independent 1.6.0 review. Python
 remains 3.11+, the API remains v1, and storage remains 1.3.1.
@@ -31,7 +31,10 @@ remains 3.11+, the API remains v1, and storage remains 1.3.1.
 
 See [review resolution](docs/v1_6_0_review_resolution.md) and the
 [1.6.1 upgrade guide](docs/v1_6_1_upgrade.md) for acceptance evidence and security
-behavior changes. Publication remains pending.
+behavior changes. Published on [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.1)
+and [PyPI](https://pypi.org/project/aletheia-memory/1.6.1/). All 836 tests passed
+on Python 3.11/3.12/3.13; a fresh PyPI installation passed dependency, CLI and
+Python/TypeScript onboarding checks.
 
 ## 1.6.0 — 2026-09-21
 

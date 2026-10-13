@@ -25,14 +25,14 @@ clear audit trail.
 
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
-- Version: `1.6.1`
+- Latest published release: [1.6.1 on GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.1) and [PyPI](https://pypi.org/project/aletheia-memory/1.6.1/).
 - Maturity: beta; intended for development and evaluation, not production use.
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
 - Distribution: [PyPI](https://pypi.org/project/aletheia-memory/); source installs and release wheels are also supported.
 
-The 1.6.1 release candidate adds repairs from the independent 1.6.0 review.
+1.6.1 was published on October 13, 2026 and adds repairs from the independent 1.6.0 review.
 See the [review resolution](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_6_0_review_resolution.md) and
 [1.6.1 upgrade guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_6_1_upgrade.md).
 
