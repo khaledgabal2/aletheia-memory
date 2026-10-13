@@ -202,7 +202,8 @@ class HTTPLLMProvider:
         self.supports_no_log_mode = supports_no_log_mode
         self.structured_output, self.thinking = structured_output, thinking
         self.context_length, self.keep_alive = context_length, keep_alive
-        self.opener = None
+        from aletheia.provider_http import NoRedirect
+        self.opener = urllib.request.build_opener(NoRedirect())
         if local_only:
             from aletheia.provider_http import local_opener
             self.opener = local_opener(endpoint)
@@ -226,7 +227,7 @@ class HTTPLLMProvider:
         )
         try:
             with (self.opener.open if self.opener else urllib.request.urlopen)(request, timeout=self.timeout) as response:
-                body = json.loads(response.read().decode("utf-8"))
+                body = json.loads(_bounded_response(response).decode("utf-8"))
         except urllib.error.URLError as exc:
             raise ValueError(f"LLM provider {self.name!r} failed: {exc}") from exc
         return self._extract_json(body)
@@ -418,7 +419,7 @@ def _first_sentence(text: str) -> str:
 
 
 def _keywords(text: str) -> list[str]:
-    return [token for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", text) if len(token) > 2][:12]
+    return [token for token in re.findall(r"\w+", text) if len(token) > 2][:12]
 
 
 def _entities_from_text(text: str) -> list[str]:
@@ -478,3 +479,10 @@ def _loads_json(content: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("LLM provider returned JSON that is not an object.")
     return value
+
+
+def _bounded_response(response, limit=8 * 1024 * 1024):
+    data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("HTTP response exceeds the supported size limit.")
+    return data

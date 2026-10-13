@@ -200,7 +200,8 @@ def create_backup(
                 raise ValidationError("Encrypted backup requires passphrase or key material.")
             inner_checksums = _checksums(payload_files)
             inner_bytes = _zip_bytes({**payload_files, "checksums.sha256": _checksums_text(inner_checksums)})
-            encrypted_payload, enc_meta = _encrypt_bytes(inner_bytes, passphrase, key_id=key_id)
+            encrypted_payload, enc_meta = _encrypt_bytes(inner_bytes, passphrase, key_id=key_id, associated_data=_manifest_aad(manifest))
+            enc_meta["manifest_authenticated"] = True
             manifest["checksums"] = {"encrypted_payload.bin": _sha256(encrypted_payload)}
             archive_files = {
                 "manifest.json": _json_bytes(manifest),
@@ -347,6 +348,7 @@ def verify_backup_file(
         return "failed", [f"Backup not found: {backup_path}"], {}, {}
     try:
         with zipfile.ZipFile(path, "r") as archive:
+            _validate_zip_size(archive)
             names = set(archive.namelist())
             if "manifest.json" not in names or "checksums.sha256" not in names:
                 return "failed", ["Backup is missing manifest or checksums."], {}, {}
@@ -364,9 +366,13 @@ def verify_backup_file(
                     return "failed", ["Encrypted backup requires passphrase or key material."], manifest, {}
                 enc_meta = json.loads(archive.read("encryption_metadata.json").decode("utf-8"))
                 try:
-                    inner_bytes = _decrypt_bytes(encrypted_payload, passphrase, enc_meta)
+                    inner_bytes = _decrypt_bytes(encrypted_payload, passphrase, enc_meta,
+                        associated_data=_manifest_aad(manifest) if enc_meta.get("manifest_authenticated") else None)
                 except ValidationError as exc:
                     return "failed", [str(exc)], manifest, {}
+                manifest["_manifest_authenticated"] = bool(enc_meta.get("manifest_authenticated"))
+                if not manifest["_manifest_authenticated"]:
+                    warnings.append("Legacy encrypted archive does not authenticate its manifest.")
                 payload = _read_zip_bytes(inner_bytes)
                 inner_checksums = _parse_checksums(payload.get("checksums.sha256", b"").decode("utf-8"))
                 mismatch = _checksum_mismatches(payload, inner_checksums)
@@ -374,7 +380,8 @@ def verify_backup_file(
                     return "failed", mismatch, manifest, payload
                 if deep and manifest.get("backup_type") in {"physical", "hybrid"} and "database.sqlite" not in payload:
                     warnings.append("Backup has no database.sqlite payload.")
-                return "passed", warnings, manifest, payload
+                return ("passed_with_warnings" if warnings else "passed"), warnings, manifest, payload
+            manifest["_manifest_authenticated"] = False
             payload = {name: archive.read(name) for name in names if name not in {"manifest.json", "checksums.sha256"}}
             mismatch = _checksum_mismatches(payload, checksums)
             if mismatch:
@@ -382,8 +389,8 @@ def verify_backup_file(
             if deep and manifest.get("backup_type") in {"physical", "hybrid"} and "database.sqlite" not in payload:
                 warnings.append("Backup has no database.sqlite payload.")
             return ("passed_with_warnings" if warnings else "passed"), warnings, manifest, payload
-    except zipfile.BadZipFile:
-        return "failed", ["Backup archive is not readable."], {}, {}
+    except (zipfile.BadZipFile, KeyError, TypeError, ValueError, AttributeError):
+        return "failed", ["Backup archive is not readable or has malformed fields."], {}, {}
 
 
 def restore_backup(
@@ -401,6 +408,8 @@ def restore_backup(
 ) -> RestoreRun:
     if mode not in {"new_database", "overwrite_existing", "in_place"}:
         raise ValidationError("Restore mode must be new_database, overwrite_existing, or in_place.")
+    if not verify_before:
+        raise ValidationError("Restore requires verification; verify_before=False is unsupported.")
     started_at = utc_now_iso()
     warnings: list[str] = []
     status = "planned" if dry_run else "running"
@@ -415,10 +424,10 @@ def restore_backup(
             deep=True,
         )
         warnings.extend(verify_warnings)
-        verified = verification_status == "passed"
+        verified = verification_status in {"passed", "passed_with_warnings"}
         if not verified and not dry_run:
             raise ValidationError("Restore refused because backup verification failed: " + "; ".join(warnings))
-        if manifest and not manifest.get("encrypted"):
+        if manifest and not manifest.get("_manifest_authenticated"):
             warnings.append(
                 "The archive is checksum-verified but unauthenticated; an attacker who can replace it can also replace its checksums."
             )
@@ -718,7 +727,7 @@ def rotate_key(
             if affected:
                 rows = memory.store.connection.execute(
                     """
-                    SELECT id, content
+                    SELECT id, content, content_hash
                     FROM evidence_events
                     WHERE content LIKE ? OR content LIKE ? OR content LIKE ?
                     ORDER BY id
@@ -730,7 +739,7 @@ def rotate_key(
                     ),
                 ).fetchall()
                 for row in rows:
-                    plaintext = reveal_content_from_storage(memory, row["content"])
+                    plaintext = reveal_content_from_storage(memory, row["content"], content_digest=row["content_hash"])
                     memory.store.connection.execute(
                         "UPDATE evidence_events SET content = ? WHERE id = ? AND content = ?",
                         (
@@ -791,25 +800,28 @@ def rotate_key(
 
 
 def evidence_span_text_for_storage(memory, evidence_id: str, text: str) -> str:
-    row = memory.store.connection.execute("SELECT content FROM evidence_events WHERE id = ?", (evidence_id,)).fetchone()
+    row = memory.store.connection.execute("SELECT content, content_hash FROM evidence_events WHERE id = ?", (evidence_id,)).fetchone()
     if row is None:
         raise NotFoundError(f"Evidence event not found: {evidence_id}")
     # Offsets retain provenance; reconstruct the text from the encrypted source
     # on an authorized read, without storing a second plaintext copy.
-    return "" if row["content"].startswith(ENCRYPTION_PREFIX) else text
+    return "" if _is_encrypted_storage_content(row["content"], row["content_hash"]) else text
 
 
 def repair_protected_span_copies(memory) -> None:
     for table in ("evidence_spans", "content_risk_flags"):
         if not memory.store.connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone():
             continue
-        predicate = "span_text != '' AND evidence_id IN (SELECT id FROM evidence_events WHERE content LIKE 'enc:%')"
-        if memory.store.connection.execute(f"SELECT 1 FROM {table} WHERE {predicate} LIMIT 1").fetchone():
+        rows = memory.store.connection.execute(f"SELECT DISTINCT e.id, e.content, e.content_hash FROM evidence_events e JOIN {table} s ON s.evidence_id=e.id WHERE s.span_text != '' AND e.content LIKE 'enc:%'").fetchall()
+        encrypted_ids = [row["id"] for row in rows if _is_encrypted_storage_content(row["content"], row["content_hash"])]
+        if encrypted_ids:
             with memory.store.transaction(immediate=True):
-                memory.store.connection.execute(f"UPDATE {table} SET span_text = '' WHERE {predicate}")
+                memory.store.connection.executemany(f"UPDATE {table} SET span_text = '' WHERE evidence_id = ?", [(value,) for value in encrypted_ids])
 
 
 def protect_content_for_storage(memory, content: str, *, privacy_level: str) -> str:
+    if not isinstance(content, str) or content.startswith(ENCRYPTION_PREFIX):
+        raise ValidationError("Stored plaintext must be a string without the reserved enc: prefix.")
     status = protected_mode_status(memory)
     if not status.enabled or not status.content_encryption_enabled:
         return content
@@ -819,8 +831,14 @@ def protect_content_for_storage(memory, content: str, *, privacy_level: str) -> 
     return encrypt_content(content, key_id=key.id, passphrase=_content_passphrase(key.id))
 
 
-def reveal_content_from_storage(memory, content: str) -> str:
-    if not content.startswith(ENCRYPTION_PREFIX):
+def _is_encrypted_storage_content(content, content_digest=None):
+    # Legacy plaintext could use the reserved prefix. Its saved plaintext digest
+    # proves those bytes are content, rather than the encoding of ciphertext.
+    return content.startswith(ENCRYPTION_PREFIX) and (content_digest is None or content_digest != content_hash(content))
+
+
+def reveal_content_from_storage(memory, content: str, *, content_digest=None) -> str:
+    if not _is_encrypted_storage_content(content, content_digest):
         return content
     try:
         _prefix, version, key_id, *parts = content.split(":")
@@ -830,6 +848,8 @@ def reveal_content_from_storage(memory, content: str) -> str:
         if len(parts) != 4:
             raise ValidationError("Encrypted content marker is malformed.")
         iterations, salt_b64, nonce_b64, cipher_b64 = parts
+        if iterations != "600000":
+            raise ValidationError("Unsupported content KDF cost.")
         cipher = b64url_decode(cipher_b64)
         return decrypt_bytes_with_passphrase(
             cipher,
@@ -1596,7 +1616,9 @@ def export_archive(
     elif format == "jsonl":
         rows = _logical_payload(memory, namespace, privacy_mode)
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_bytes(b"\n".join(rows.values()))
+        descriptor = _create_private_output(output_path)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(b"\n".join(rows.values()))
         item_counts = _item_counts(memory, namespace)
     else:
         raise ValidationError("export format must be alet or jsonl.")
@@ -1643,9 +1665,13 @@ def import_archive(
     namespace: str | None = None,
     dry_run: bool = True,
     passphrase: str | None = None,
+    trust_unauthenticated: bool = False,
 ) -> ImportRun:
     from aletheia.core.archive_import import import_into
-    return import_into(memory, input_path=input_path, namespace=namespace, dry_run=dry_run, passphrase=passphrase)
+    try:
+        return import_into(memory, input_path=input_path, namespace=namespace, dry_run=dry_run, passphrase=passphrase, trust_unauthenticated=trust_unauthenticated)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ValidationError("Malformed archive source fields.") from exc
 
 
 def support_bundle(
@@ -1714,43 +1740,39 @@ def benchmark_run(memory, *, profile: str = "tiny") -> BenchmarkRun:
     item_count = counts[profile]
     run_id = new_id("bench")
     started_at = utc_now_iso()
-    protected = protected_mode_status(memory)
-    backup_passphrase = _content_passphrase(_active_content_key(memory).id) if protected.backup_encryption_required else None
     with memory.store.transaction():
         memory.store.connection.execute(
             "INSERT INTO benchmark_runs (id, profile, started_at, finished_at, status, metadata_json) VALUES (?, ?, ?, NULL, 'running', '{}')",
             (run_id, profile, started_at),
         )
-    operations = [
-        ("write_event", lambda: memory.write_event(namespace=memory.namespace, source_type="benchmark", content=f"benchmark event {new_id('x')}")),
-        ("remember", lambda: memory.remember(namespace=memory.namespace, memory_type="task", subject="benchmark", predicate="has_item", object=new_id("obj"))),
-        ("retrieve_lexical", lambda: memory.retrieve(memory.namespace, "benchmark", mode="lexical", limit=5)),
-        ("retrieve_hybrid", lambda: memory.retrieve(memory.namespace, "benchmark", mode="hybrid", limit=5)),
-        ("context_pack", lambda: memory.context_pack(memory.namespace, "benchmark", token_budget=600)),
-        ("integrity_check", lambda: integrity_check(memory, namespace=memory.namespace)),
-        ("backup_create", lambda: create_backup(
-            memory,
-            output_path=str(Path(tempfile.gettempdir()) / f"{run_id}.alet"),
-            encrypt=protected.backup_encryption_required,
-            passphrase=backup_passphrase,
-            verify_after=False,
-            created_by="benchmark",
-        )),
-        ("backup_verify", lambda: verify_backup(
-            memory,
-            backup_path=str(Path(tempfile.gettempdir()) / f"{run_id}.alet"),
-            passphrase=backup_passphrase,
-            deep=False,
-        )),
-    ]
-    for name, fn in operations:
-        samples: list[int] = []
-        loops = 1 if name.startswith("backup") or name == "integrity_check" else min(item_count, 5)
-        for _ in range(loops):
-            start = perf_counter()
-            fn()
-            samples.append(int((perf_counter() - start) * 1000))
-        _record_benchmark_result(memory, run_id, name, loops, samples)
+    from aletheia.core.memory import Memory
+    import secrets
+    with tempfile.TemporaryDirectory(prefix="aletheia-benchmark-") as directory:
+        scratch = Memory.open(str(Path(directory) / "scratch.db"), namespace="benchmark/scratch")
+        backup_path = str(Path(directory) / "scratch.alet")
+        backup_passphrase = secrets.token_hex(32)
+        try:
+            operations = [
+                ("write_event", lambda: scratch.write_event(source_type="benchmark", content=f"benchmark event {new_id('x')}")),
+                ("remember", lambda: scratch.remember(memory_type="task", subject="benchmark", predicate="has_item", object=new_id("obj"))),
+                ("retrieve_lexical", lambda: scratch.retrieve(scratch.namespace, "benchmark", mode="lexical", limit=5)),
+                ("retrieve_hybrid", lambda: scratch.retrieve(scratch.namespace, "benchmark", mode="hybrid", limit=5)),
+                ("context_pack", lambda: scratch.context_pack(scratch.namespace, "benchmark", token_budget=600)),
+                ("integrity_check", lambda: integrity_check(scratch, namespace=scratch.namespace)),
+                ("backup_create", lambda: create_backup(scratch, output_path=backup_path, encrypt=True,
+                    passphrase=backup_passphrase, verify_after=False, created_by="benchmark")),
+                ("backup_verify", lambda: verify_backup(scratch, backup_path=backup_path, passphrase=backup_passphrase, deep=False)),
+            ]
+            for name, fn in operations:
+                samples = []
+                loops = 1 if name.startswith("backup") or name == "integrity_check" else min(item_count, 5)
+                for _ in range(loops):
+                    start = perf_counter()
+                    fn()
+                    samples.append(int((perf_counter() - start) * 1000))
+                _record_benchmark_result(memory, run_id, name, loops, samples)
+        finally:
+            scratch.close()
     with memory.store.transaction():
         memory.store.connection.execute(
             "UPDATE benchmark_runs SET status = 'completed', finished_at = ?, metadata_json = ? WHERE id = ?",
@@ -1826,7 +1848,7 @@ def readiness_check(memory, *, namespace: str | None = None, profile: str = "loc
     critical_conflicts = memory.list_conflict_families(namespace=namespace, status="unresolved", limit=10)
     checks = {
         "schema_current": memory.health()["schema_version"] == SCHEMA_VERSION,
-        "verified_backup_exists": bool(backups),
+        "verified_backup_exists": verified_backup_exists(memory),
         "integrity_recent": bool(latest_integrity) and latest_integrity[0].status in {"passed", "passed_with_warnings"},
         "protected_mode_known": protected is not None,
         "protected_mode_enabled": protected.enabled,
@@ -1919,6 +1941,8 @@ def _logical_payload(memory, namespace: str | None, privacy_mode: str) -> dict[s
     payload: dict[str, bytes] = {}
     for table in LOGICAL_METADATA_COLUMNS:
         rows = _table_rows(memory, table, namespace=namespace, privacy_mode=privacy_mode)
+        if table == "evidence_events" and privacy_mode in {"full", "namespace_filtered"} and protected_mode_status(memory).backup_encryption_required:
+            rows = [{**row, "content": reveal_content_from_storage(memory, row["content"], content_digest=row["content_hash"])} for row in rows]
         payload[f"logical/{table}.jsonl"] = "\n".join(json.dumps(row, sort_keys=True) for row in rows).encode("utf-8")
     return payload
 
@@ -2033,23 +2057,35 @@ def _zip_bytes(files: dict[str, bytes]) -> bytes:
 
 def _read_zip_bytes(data: bytes) -> dict[str, bytes]:
     with zipfile.ZipFile(io.BytesIO(data), "r") as archive:
+        _validate_zip_size(archive)
         return {name: archive.read(name) for name in archive.namelist()}
 
 
 def _write_zip(path: Path, files: dict[str, bytes]) -> None:
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, data in files.items():
-            archive.writestr(name, data)
+    fd = _create_private_output(path)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for name, data in files.items():
+                    archive.writestr(name, data)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
-def _encrypt_bytes(data: bytes, passphrase: str, *, key_id: str | None) -> tuple[bytes, dict]:
-    return encrypt_bytes_with_passphrase(data, passphrase, key_id=key_id)
+def _manifest_aad(manifest: dict) -> bytes:
+    # The ciphertext checksum is computed afterwards; all semantic fields bind.
+    return _json_bytes({key: value for key, value in manifest.items() if key != "checksums"})
 
 
-def _decrypt_bytes(cipher: bytes, passphrase: str, metadata: dict) -> bytes:
+def _encrypt_bytes(data: bytes, passphrase: str, *, key_id: str | None, associated_data: bytes | None = None) -> tuple[bytes, dict]:
+    return encrypt_bytes_with_passphrase(data, passphrase, key_id=key_id, associated_data=associated_data)
+
+
+def _decrypt_bytes(cipher: bytes, passphrase: str, metadata: dict, *, associated_data: bytes | None = None) -> bytes:
     if metadata.get("algorithm") == LEGACY_XOR_HMAC_ALGORITHM:
         return decrypt_legacy_xor_hmac_bytes(cipher, passphrase, metadata)
-    return decrypt_bytes_with_passphrase(cipher, passphrase, metadata)
+    return decrypt_bytes_with_passphrase(cipher, passphrase, metadata, associated_data=associated_data)
 
 
 def _resolve_passphrase(passphrase: str | None, key_id: str | None) -> str | None:
@@ -2448,3 +2484,22 @@ def _record_benchmark_result(memory, run_id: str, operation: str, item_count: in
                 json.dumps({"samples": samples}, sort_keys=True),
             ),
         )
+
+
+def _validate_zip_size(archive):
+    infos = archive.infolist()
+    if len(infos) > 10000 or sum(item.file_size for item in infos) > 256 * 1024 * 1024:
+        raise ValidationError("Archive exceeds the supported decompressed size limit.")
+    if len({item.filename for item in infos}) != len(infos):
+        raise ValidationError("Archive contains duplicate member names.")
+
+
+def verified_backup_exists(memory):
+    return bool(memory.store.connection.execute("SELECT 1 FROM backup_verification_runs v JOIN backup_manifests b ON b.id=v.backup_id WHERE v.status IN ('passed', 'passed_with_warnings') LIMIT 1").fetchone())
+
+
+def _create_private_output(path):
+    try:
+        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except FileExistsError as exc:
+        raise ValidationError("Output archive already exists; choose a new path.") from exc

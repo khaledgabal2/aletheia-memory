@@ -96,7 +96,23 @@ class ReadAccess:
             record_source(kind, target_id)
         return bool(result)
 
+    def _project_for_access(self, target_id):
+        row = self.db.execute("SELECT namespace FROM projects WHERE id = ?", (target_id,)).fetchone()
+        if not row:
+            raise NotFoundError("Project unavailable.")
+        return self.memory.get_project(namespace=row["namespace"], project_id=target_id)
+
     def _allowed(self, kind, target_id):
+        if kind in {"session", "project"}:
+            item = (self.memory.get_session(target_id) if kind == "session"
+                    else self._project_for_access(target_id))
+            if not self.namespace(item.namespace, [getattr(item, "project_id", target_id if kind == "project" else None)]):
+                return False
+            if kind == "session":
+                evidence = [row[0] for row in self.db.execute("SELECT id FROM evidence_events WHERE session_id = ?", (target_id,))]
+            else:
+                evidence = [row[0] for row in self.db.execute("SELECT DISTINCT l.evidence_id FROM project_claim_links p JOIN claim_evidence_links l ON l.claim_id = p.claim_id WHERE p.project_id = ?", (target_id,))]
+            return all(self.allowed("evidence", value) for value in evidence)
         if kind == "evidence":
             return self.evidence(target_id)
         if kind == "claim":
@@ -135,8 +151,10 @@ class ReadAccess:
             self.auth.require_capability(self.context, "memory:review")
         table = {"claim": "claims", "candidate": "candidate_claims", "candidate_claim": "candidate_claims",
                  "evidence": "evidence_events", "event": "evidence_events"}.get(kind)
-        if table is None or not self.db.execute(f"SELECT 1 FROM {table} WHERE id = ?", (target_id,)).fetchone():
-            raise not_found("Read target not found.")
+        if table is None:
+            raise not_found("Unsupported read target type.")
+        if not self.db.execute(f"SELECT 1 FROM {table} WHERE id = ?", (target_id,)).fetchone():
+            raise forbidden("Read target is unavailable under the current access policy.")
         if not self.allowed(kind, target_id):
             raise forbidden("Read target is unavailable under the current access policy.")
 

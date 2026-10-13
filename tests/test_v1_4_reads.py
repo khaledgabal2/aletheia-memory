@@ -85,7 +85,7 @@ def test_actual_read_schemas_nonempty_success_errors_aliases_and_no_cursor(tmp_p
         assert overview["body"]["data"]["candidates"] and overview["body"]["data"]["review_tasks"]
         conform(document, "/v1/dashboard/overview", overview)
         for path, actual, role, status in [
-            ("/v1/claims/{claim_id}", "/v1/claims/missing", "agent", 404),
+            ("/v1/claims/{claim_id}", "/v1/claims/missing", "agent", 403),
             ("/v1/claims/{claim_id}", f"/v1/claims/{claim.id}", None, 401),
             ("/v1/audit/{target_type}/{target_id}", f"/v1/audit/claim/{claim.id}", "reader", 403),
             ("/v1/audit/{target_type}/{target_id}", f"/v1/audit/unknown/{claim.id}", "agent", 404),
@@ -316,4 +316,4 @@ def test_ranked_limit_empty_results_and_resource_type_are_explicit(tmp_path):
             assert response["status"] == 200 and len(response["body"]["data"]) == count
             conform(openapi_schema(), "/v1/retrieve", response)
         response = request(url, "GET", f"/v1/audit/claim/{pending.id}", token=tokens["reviewer"])
-        assert response["status"] == 404
+        assert response["status"] == 403

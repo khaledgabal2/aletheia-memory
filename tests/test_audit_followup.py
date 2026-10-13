@@ -140,7 +140,7 @@ def test_scoped_service_report_contains_only_authorized_tenant(memory):
     victim = claim(memory, namespace=OTHER, value="foreign operation")
     foreign = client(memory, namespace=OTHER)
     assert foreign("GET", "/v1/claims/" + victim.id + "?namespace=" + OTHER)[0] == 200
-    own = client(memory)
+    own = client(memory, capabilities=["memory:admin"], privacy="secret")
     status, body = own("POST", "/v1/reports/export", {"namespace": NS, "report_type": "service_activity", "format": "json"})
     assert status == 200, body
     report = json.loads(Path(body["data"]["file_path"]).read_text())
@@ -529,6 +529,8 @@ def test_background_job_ownership_and_completion(memory, monkeypatch, change):
         assert other.store.connection.execute("SELECT count(*) FROM embeddings").fetchone()[0] == int(change == "unchanged")
         if change == "failure":
             monkeypatch.setattr(MockEmbeddingProvider, "embed_texts", original)
+            assert other.get_job(job.id).run_after
+            other.store.connection.execute("UPDATE local_jobs SET run_after=NULL WHERE id=?", (job.id,))
             competitor.run_background_jobs(max_jobs=1)
             assert other.get_job(job.id).status == "completed"
             assert other.get_job(job.id).attempts == 2

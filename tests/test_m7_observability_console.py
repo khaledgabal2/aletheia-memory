@@ -432,16 +432,15 @@ def test_report_export_cannot_escape_service_safe_roots(tmp_path):
             "namespace": NAMESPACE,
             "report_type": "memory_health",
         }, Authorization=f"Bearer {raw}")
-        assert status == 200
-        default_path = Path(default_report["data"]["file_path"])
-        assert default_path.parent == tmp_path / "reports"
-        assert default_path.is_file()
+        assert status == 403
+        assert default_report["error"]["code"] == "forbidden"
 
         admin = auth.create_client(name="report-admin", client_type="test")
         _, admin_raw = auth.create_token(
             client_id=admin.id,
             namespace_grants=[NAMESPACE],
             capabilities=["memory:read", "memory:admin"],
+            privacy_ceiling="secret",
         )
         allowed = tmp_path / "report.md"
         status, _ = _post(service, "/v1/reports/export", {
@@ -471,7 +470,7 @@ def test_report_export_cannot_escape_service_safe_roots(tmp_path):
             assert body["error"]["code"] == "validation_error"
         assert service.memory.health()["status"] == "ok"
         operation = openapi_schema()["paths"]["/v1/reports/export"]["post"]
-        assert operation["x-permissions"]["conditional"]["output_path"] == ["memory:admin"]
+        assert operation["x-permissions"]["all_of"] == ["memory:admin"]
     finally:
         service.close()
 

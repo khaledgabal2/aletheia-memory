@@ -111,7 +111,23 @@ def apply(memory, roots, *, reason, actor="user", scrub=False, replacement="[RED
                 db.execute("UPDATE " + table + " SET metadata_json = '{}' WHERE id = ?", (value,))
             if kind in {"evidence", "source_document"}:
                 db.execute("UPDATE " + table + " SET content_hash = ? WHERE id = ?", (content_hash(replacement), value))
+            if kind == "claim":
+                db.execute("UPDATE claim_status_history SET reason = ? WHERE claim_id = ?", (replacement, value))
+                for conflict_table, link_table in (("conflicts", "conflict_claim_links"), ("conflict_families", "conflict_family_claims")):
+                    conflict_ids = [item[0] for item in db.execute(f"SELECT conflict_id FROM {link_table} WHERE claim_id = ?", (value,))]
+                    for conflict_id in conflict_ids:
+                        db.execute(f"UPDATE {conflict_table} SET subject = ?, predicate = ? WHERE id = ?", (replacement, replacement, conflict_id))
+                        db.execute("UPDATE review_tasks SET title = ?, description = ?, recommended_action = ?, metadata_json = '{}' WHERE target_id = ?", (replacement, replacement, replacement, conflict_id))
+                db.execute("UPDATE semantic_clusters SET label = ?, metadata_json = '{}' WHERE id IN (SELECT cluster_id FROM semantic_cluster_members WHERE member_id = ?)", (replacement, value))
+                entity_ids = [item[0] for item in db.execute("SELECT entity_id FROM claim_entity_links WHERE claim_id = ?", (value,))]
+                for entity_id in entity_ids:
+                    db.execute("UPDATE entities SET canonical_name = ?, metadata_json = '{}' WHERE id = ?", (replacement, entity_id))
+                    db.execute("DELETE FROM entity_aliases WHERE entity_id = ?", (entity_id,))
             if kind == "evidence":
+                entity_ids = [item[0] for item in db.execute("SELECT entity_id FROM entity_mentions WHERE evidence_id = ? AND entity_id IS NOT NULL", (value,))]
+                for entity_id in entity_ids:
+                    db.execute("UPDATE entities SET canonical_name = ?, metadata_json = '{}' WHERE id = ?", (replacement, entity_id))
+                    db.execute("DELETE FROM entity_aliases WHERE entity_id = ?", (entity_id,))
                 db.execute("UPDATE evidence_spans SET span_text = ?, start_char = 0, end_char = ? WHERE evidence_id = ?", (replacement, len(replacement), value))
                 db.execute("UPDATE content_risk_flags SET span_text = ?, note = ? WHERE evidence_id = ?", (replacement, replacement, value))
                 db.execute("UPDATE entity_mentions SET mention_text = ? WHERE evidence_id = ?", (replacement, value))

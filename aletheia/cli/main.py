@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import secrets
+import sys
 import urllib.error
 import urllib.request
 import webbrowser
@@ -47,7 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_apply.add_argument("--dry-run", action="store_true")
     migrate_apply.add_argument("--backup-before", action="store_true")
     migrate_apply.add_argument("--backup-output")
-    migrate_apply.add_argument("--passphrase")
+    migrate_apply.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    migrate_apply.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
     migrate_apply.add_argument("--verify-after", action="store_true")
     migrate_verify = migrate_subparsers.add_parser("verify")
     migrate_verify.add_argument("--db", default=argparse.SUPPRESS)
@@ -1381,14 +1383,16 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     backup_create.add_argument("--output", required=True)
     backup_create.add_argument("--type", dest="backup_type", choices=["physical", "logical", "hybrid"], default="physical")
     backup_create.add_argument("--encrypt", action="store_true")
-    backup_create.add_argument("--passphrase")
+    backup_create.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    backup_create.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
     backup_create.add_argument("--key-id")
     backup_create.add_argument("--privacy-mode", default="full")
     backup_create.add_argument("--no-verify", action="store_true")
     backup_verify = backup_sub.add_parser("verify")
     backup_verify.add_argument("path")
     backup_verify.add_argument("--db", default="./aletheia.db")
-    backup_verify.add_argument("--passphrase")
+    backup_verify.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    backup_verify.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
     backup_verify.add_argument("--key-id")
     backup_verify.add_argument("--shallow", action="store_true")
     backup_list = backup_sub.add_parser("list")
@@ -1403,20 +1407,23 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     restore_verify = restore_sub.add_parser("verify")
     restore_verify.add_argument("backup_path")
     restore_verify.add_argument("--db", default="./aletheia.db")
-    restore_verify.add_argument("--passphrase")
+    restore_verify.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    restore_verify.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
     restore_dry = restore_sub.add_parser("dry-run")
     restore_dry.add_argument("backup_path")
     restore_dry.add_argument("--db", default="./aletheia.db")
     restore_dry.add_argument("--target-db", required=True)
     restore_dry.add_argument("--namespace")
-    restore_dry.add_argument("--passphrase")
+    restore_dry.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    restore_dry.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
     restore_apply = restore_sub.add_parser("apply")
     restore_apply.add_argument("backup_path")
     restore_apply.add_argument("--db", default="./aletheia.db")
     restore_apply.add_argument("--target-db", required=True)
     restore_apply.add_argument("--mode", choices=["new_database", "overwrite_existing", "in_place"], default="new_database")
     restore_apply.add_argument("--namespace")
-    restore_apply.add_argument("--passphrase")
+    restore_apply.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    restore_apply.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
     restore_apply.add_argument("--confirm")
     restore_apply.add_argument(
         "--trust-unauthenticated",
@@ -1427,7 +1434,9 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     restore_namespace.add_argument("backup_path")
     restore_namespace.add_argument("--db", default="./aletheia.db")
     restore_namespace.add_argument("--namespace", required=True)
-    restore_namespace.add_argument("--passphrase")
+    restore_namespace.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    restore_namespace.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
+    restore_namespace.add_argument("--trust-unauthenticated", action="store_true")
     restore_namespace.add_argument("--apply", action="store_true")
 
     encrypt = subparsers.add_parser("encrypt", help="Inspect and enable protected mode.")
@@ -1520,7 +1529,8 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
         compact_parser = compact_sub.add_parser(name)
         compact_parser.add_argument("--db", default="./aletheia.db")
         compact_parser.add_argument("--backup-before", action="store_true")
-        compact_parser.add_argument("--passphrase")
+        compact_parser.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+        compact_parser.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
 
     export = subparsers.add_parser("export", help="Export namespace archives.")
     export_sub = export.add_subparsers(dest="export_command", required=True)
@@ -1530,7 +1540,8 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     export_namespace.add_argument("--format", choices=["alet", "jsonl"], default="alet")
     export_namespace.add_argument("--encrypt", action="store_true")
     export_namespace.add_argument("--privacy-mode", default="redacted")
-    export_namespace.add_argument("--passphrase")
+    export_namespace.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    export_namespace.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
 
     import_cmd = subparsers.add_parser("import", help="Import namespace archives.")
     import_sub = import_cmd.add_subparsers(dest="import_command", required=True)
@@ -1539,7 +1550,9 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
         import_parser.add_argument("input_path")
         import_parser.add_argument("--db", default="./aletheia.db")
         import_parser.add_argument("--namespace")
-        import_parser.add_argument("--passphrase")
+        import_parser.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+        import_parser.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
+        import_parser.add_argument("--trust-unauthenticated", action="store_true")
 
     support = subparsers.add_parser("support", help="Create redacted support bundles.")
     support_sub = support.add_subparsers(dest="support_command", required=True)
@@ -1548,7 +1561,8 @@ def _add_m8_parsers(subparsers: argparse._SubParsersAction) -> None:
     support_bundle.add_argument("--output", required=True)
     support_bundle.add_argument("--encrypt", action="store_true")
     support_bundle.add_argument("--include-raw-content", action="store_true")
-    support_bundle.add_argument("--passphrase")
+    support_bundle.add_argument("--passphrase", help="Deprecated: prefer --passphrase-stdin or ALETHEIA_BACKUP_PASSPHRASE.")
+    support_bundle.add_argument("--passphrase-stdin", action="store_true", help="Read the passphrase from standard input.")
 
     benchmark = subparsers.add_parser("benchmark", help="Run and compare benchmark profiles.")
     benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
@@ -1715,6 +1729,12 @@ def _add_m7_parsers(subparsers: argparse._SubParsersAction) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "passphrase_stdin", False):
+        if getattr(args, "passphrase", None):
+            parser.error("Choose --passphrase-stdin or --passphrase, not both.")
+        args.passphrase = sys.stdin.readline().rstrip("\r\n")
+        if not args.passphrase:
+            parser.error("Passphrase input must not be empty.")
     try:
         return _run(args)
     except (AletheiaError, ServiceError) as exc:
@@ -2578,6 +2598,7 @@ def _run_m8(memory: Memory, args: argparse.Namespace) -> int:
                 namespace=args.namespace,
                 passphrase=args.passphrase,
                 dry_run=not args.apply,
+                trust_unauthenticated=args.trust_unauthenticated,
             )))
             return 0
 
@@ -2687,6 +2708,7 @@ def _run_m8(memory: Memory, args: argparse.Namespace) -> int:
             namespace=args.namespace,
             passphrase=args.passphrase,
             dry_run=args.import_command == "dry-run",
+            trust_unauthenticated=args.trust_unauthenticated,
         )))
         return 0
 

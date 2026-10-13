@@ -45,3 +45,6 @@ def idempotency_conflict(message: str = "Idempotency key reused with a different
 
 def stale_schema(message: str) -> ServiceError:
     return ServiceError("stale_schema", message, status_code=503)
+
+
+ERROR_CODES = ['database_busy', 'forbidden', 'idempotency_conflict', 'internal_error', 'invalid_cursor', 'not_found', 'pairing_failed', 'pairing_unavailable', 'payload_too_large', 'precondition_required', 'provider_input_changed', 'rate_limited', 'replay_result_changed', 'request_timeout', 'review_conflict', 'review_scan_limit', 'service_closed', 'stale_cursor', 'stale_revision', 'stale_schema', 'unauthorized', 'unsupported_contract', 'validation_error']

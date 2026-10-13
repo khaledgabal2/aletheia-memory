@@ -7,6 +7,7 @@ import json
 import os
 import zipfile
 from dataclasses import asdict, replace
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
@@ -305,11 +306,8 @@ def add_peer(
     return get_peer(memory, peer_id)
 
 
-def get_peer(memory, peer_id: str) -> PeerDevice:
-    row = memory.store.connection.execute(
-        "SELECT * FROM peer_devices WHERE id = ? OR peer_instance_id = ? OR display_name = ?",
-        (peer_id, peer_id, peer_id),
-    ).fetchone()
+def get_peer(memory, peer_id: str, *, _exact=False) -> PeerDevice:
+    row = _lookup_identity(memory, "peer_devices", peer_id, ("peer_instance_id",) if _exact else ("peer_instance_id", "display_name"))
     if not row:
         raise NotFoundError(f"Peer not found: {peer_id}")
     return PeerDevice.from_row(row)
@@ -325,7 +323,7 @@ def trust_peer(memory, peer_id: str, *, trust_status: str, trust_domain_id: str 
     _require_reason(reason)
     if trust_status not in PEER_TRUST_STATUSES - {"revoked"}:
         raise ValidationError(f"Unsupported trust status: {trust_status}")
-    peer = get_peer(memory, peer_id)
+    peer = get_peer(memory, peer_id, _exact=True)
     if peer.trust_status == "revoked":
         raise ValidationError("Revoked peers require a new key and explicit replace_peer_key approval before trust can be restored.")
     if trust_domain_id:
@@ -365,7 +363,7 @@ def trust_peer(memory, peer_id: str, *, trust_status: str, trust_domain_id: str 
 
 def revoke_peer(memory, peer_id: str, *, reason: str, actor: str = "user", revoke_shares: bool = True) -> RevocationRecord:
     _require_reason(reason)
-    peer = get_peer(memory, peer_id)
+    peer = get_peer(memory, peer_id, _exact=True)
     now = utc_now_iso()
     with memory.store.transaction():
         memory.store.connection.execute(
@@ -432,7 +430,7 @@ def create_share_grant(
     _validate_share(namespace=namespace, grant_type=grant_type, permissions=permissions, privacy_ceiling=privacy_ceiling, allow_secret=allow_secret)
     if not recipient_peer_ids:
         raise ValidationError("At least one recipient peer is required.")
-    peers = [get_peer(memory, peer_id) for peer_id in recipient_peer_ids]
+    peers = [get_peer(memory, peer_id, _exact=True) for peer_id in recipient_peer_ids]
     revoked = [peer.id for peer in peers if peer.trust_status in {"revoked", "blocked"} or peer.revoked_at]
     if revoked:
         raise ValidationError("Cannot create share for revoked or blocked peers: " + ", ".join(revoked))
@@ -525,11 +523,11 @@ def create_share_grant(
                 expires_at=expires_at,
             )
         _write_federation_audit(memory, event_type="share.created", namespace=namespace, share_grant_id=share_id, target_id=share_id, target_type="share_grant", reason=reason)
-    return get_share_grant(memory, share_id)
+    return get_share_grant(memory, share_id, _exact=True)
 
 
-def get_share_grant(memory, share_id: str) -> ShareGrant:
-    row = memory.store.connection.execute("SELECT * FROM share_grants WHERE id = ? OR name = ?", (share_id, share_id)).fetchone()
+def get_share_grant(memory, share_id: str, *, _exact=False) -> ShareGrant:
+    row = _lookup_identity(memory, "share_grants", share_id, () if _exact else ("name",))
     if not row:
         raise NotFoundError(f"Share grant not found: {share_id}")
     return ShareGrant.from_row(row)
@@ -563,7 +561,7 @@ def revoke_share_grant(memory, share_id: str, *, reason: str, actor: str = "user
 
 def _revoke_share_grant(memory, share_id: str, *, reason: str, actor: str, peer_id: str | None = None) -> RevocationRecord:
     _require_reason(reason)
-    share = get_share_grant(memory, share_id)
+    share = get_share_grant(memory, share_id, _exact=True)
     now = utc_now_iso()
     with memory.store.transaction():
         memory.store.connection.execute("UPDATE share_grants SET status = 'revoked', revoked_at = ? WHERE id = ?", (now, share.id))
@@ -604,11 +602,8 @@ def _require_active_share(memory, share: ShareGrant, *, action: str) -> None:
         raise ValidationError(f"Cannot {action} expired share grant.")
 
 
-def get_sync_collection(memory, collection_id_or_share: str) -> SyncCollection:
-    row = memory.store.connection.execute(
-        "SELECT * FROM sync_collections WHERE id = ? OR share_grant_id = ? OR name = ?",
-        (collection_id_or_share, collection_id_or_share, collection_id_or_share),
-    ).fetchone()
+def get_sync_collection(memory, collection_id_or_share: str, *, _exact=False) -> SyncCollection:
+    row = _lookup_identity(memory, "sync_collections", collection_id_or_share, ("share_grant_id",) if _exact else ("share_grant_id", "name"))
     if not row:
         raise NotFoundError(f"Sync collection not found: {collection_id_or_share}")
     return SyncCollection.from_row(row)
@@ -636,7 +631,7 @@ def export_share_bundle(
     redacted: bool = False,
     actor: str = "user",
 ) -> SyncRun:
-    share = get_share_grant(memory, share_id)
+    share = get_share_grant(memory, share_id, _exact=True)
     _require_active_share(memory, share, action="export")
     if _protected_requires_encryption(memory) and not encrypt:
         raise ValidationError("Protected-mode databases require encrypted sync packages.")
@@ -700,6 +695,17 @@ def export_share_bundle(
     return run
 
 
+def _validated_external_input(method):
+    @wraps(method)
+    def wrapped(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise ValidationError("Malformed federation bundle fields.") from exc
+    return wrapped
+
+
+@_validated_external_input
 def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candidate_only", actor: str = "user", dry_run: bool = False,
                         authorize_scope: Callable[[str, str | None], None] | None = None) -> SyncRun:
     if trust_policy not in IMPORT_MODES | {"trusted_device"}:
@@ -823,14 +829,15 @@ def sync(
     input_path: str | None = None,
     output_path: str | None = None,
     dry_run: bool = False,
+    trust_policy: str = "candidate_only",
     authorize_scope: Callable[[str, str | None], None] | None = None,
 ) -> SyncRun:
-    collection = get_sync_collection(memory, collection_id)
+    collection = get_sync_collection(memory, collection_id, _exact=True)
     share = get_share_grant(memory, collection.share_grant_id)
     _require_active_share(memory, share, action="sync")
     if collection.status != "active":
         raise ValidationError("Cannot sync revoked or inactive collection.")
-    peer = get_peer(memory, peer_id) if peer_id else _default_peer_for_share(memory, share.id)
+    peer = get_peer(memory, peer_id, _exact=True) if peer_id else _default_peer_for_share(memory, share.id)
     if peer.trust_status in {"revoked", "blocked"}:
         raise ValidationError("Peer is revoked or blocked.")
     if dry_run:
@@ -853,7 +860,12 @@ def sync(
     if output_path:
         return export_share_bundle(memory, share_id=share.id, output_path=output_path, encrypt=True)
     if input_path:
-        return import_share_bundle(memory, input_path=input_path, authorize_scope=authorize_scope)
+        _manifest, imported_payload = _read_bundle(memory, input_path)
+        if (imported_payload["collection"]["id"] != collection.id
+                or imported_payload["share_grant"]["id"] != share.id
+                or imported_payload["peer_identity"]["instance_id"] != peer.peer_instance_id):
+            raise ValidationError("Bundle does not match the requested sync peer and collection.")
+        return import_share_bundle(memory, input_path=input_path, trust_policy=trust_policy, authorize_scope=authorize_scope)
     return _insert_sync_run(
         memory,
         collection_id=collection.id,
@@ -1820,9 +1832,20 @@ def _write_bundle(
         archive.writestr("signature.json", json.dumps(signature_doc, indent=2, sort_keys=True) + "\n")
 
 
-def _read_bundle(memory, input_path: str, *, recovery_key: tuple[str, x25519.X25519PrivateKey] | None = None) -> tuple[dict, dict]:
+def _read_bundle(memory, input_path, *, recovery_key=None):
+    try:
+        return _read_bundle_unchecked(memory, input_path, recovery_key=recovery_key)
+    except (KeyError, TypeError, ValueError, AttributeError, zipfile.BadZipFile) as exc:
+        raise ValidationError("Malformed federation bundle.") from exc
+
+
+def _read_bundle_unchecked(memory, input_path: str, *, recovery_key: tuple[str, x25519.X25519PrivateKey] | None = None) -> tuple[dict, dict]:
     with zipfile.ZipFile(input_path, "r") as archive:
+        from aletheia.core.hardening import _validate_zip_size
+        _validate_zip_size(archive)
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValidationError("Federation manifest must be an object.")
         if manifest.get("crypto_version") != BUNDLE_CRYPTO_VERSION:
             raise ValidationError("Legacy unsigned sync bundles are not accepted.")
         origin_identity = json.loads(archive.read("origin_identity.json").decode("utf-8"))
@@ -1835,6 +1858,18 @@ def _read_bundle(memory, input_path: str, *, recovery_key: tuple[str, x25519.X25
                                                   recovery_key=recovery_key).decode("utf-8"))
         else:
             payload = json.loads(archive.read("payloads/payload.json").decode("utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("share_grant"), dict) or not isinstance(payload.get("collection"), dict):
+        raise ValidationError("Federation payload requires grant and collection objects.")
+    for kind, fields in (("share_grant", ("id", "namespace", "name", "grant_type", "privacy_ceiling", "status")),
+                         ("collection", ("id", "share_grant_id", "namespace", "name", "direction", "transport", "status"))):
+        if any(not isinstance(payload[kind].get(field), str) or not payload[kind][field].strip() for field in fields):
+            raise ValidationError("Federation grant and collection fields must be nonempty strings.")
+    permissions = payload["share_grant"].get("permissions")
+    if not isinstance(permissions, list) or any(not isinstance(value, str) or value not in SHARE_PERMISSIONS for value in permissions):
+        raise ValidationError("Federation permissions must be a list of supported permission names.")
+    payloads = payload.get("payloads", {})
+    if not isinstance(payloads, dict) or any(not isinstance(items, list) or any(not isinstance(item, dict) for item in items) for items in payloads.values()):
+        raise ValidationError("Federation payload groups must contain object lists.")
     peer_identity = payload.get("peer_identity", {})
     _validate_peer_identity_payload(peer_identity)
     if any(peer_identity.get(field) != origin_identity.get(field) for field in ("instance_id", "public_key", "key_fingerprint")):
@@ -1945,6 +1980,8 @@ def _read_checksums(body: str) -> dict[str, str]:
 
 
 def _verify_bundle_checksums(archive: zipfile.ZipFile) -> dict[str, str]:
+    from aletheia.core.hardening import _validate_zip_size
+    _validate_zip_size(archive)
     expected = _read_checksums(archive.read("checksums.sha256").decode("utf-8"))
     for name, digest in expected.items():
         actual = sha256_hex(archive.read(name))
@@ -2007,11 +2044,26 @@ def _validate_import_grant(memory, share: dict, collection: dict, identity: dict
         raise ValidationError("Sync collection does not match share grant.")
     # Do not let replay of an old, validly signed grant reset local revocation.
     row = memory.store.connection.execute("SELECT * FROM share_grants WHERE id = ?", (share["id"],)).fetchone()
+    locally_owned = bool(row) and not json.loads(row["metadata_json"] or "{}").get("imported")
     if row:
         require_active(dict(row), "share grant")
+        if row["namespace"] != share["namespace"]:
+            raise ValidationError("Imported share namespace does not match local grant.")
+        recipient = memory.store.connection.execute(
+            """SELECT sr.* FROM share_recipients sr JOIN peer_devices pd ON pd.id = sr.peer_id
+               WHERE sr.share_grant_id = ? AND pd.peer_instance_id = ? AND pd.public_key = ?""",
+            (share["id"], identity["instance_id"], identity["public_key"]),
+        ).fetchone()
+        if not recipient:
+            raise ValidationError("Origin is not an authorized recipient of the existing share grant.")
+        require_active(dict(recipient), "share recipient")
     row = memory.store.connection.execute("SELECT * FROM sync_collections WHERE id = ?", (collection["id"],)).fetchone()
+    if locally_owned and not row:
+        raise ValidationError("Locally owned grants require an existing local collection.")
     if row:
         require_active(dict(row), "collection")
+        if row["namespace"] != collection["namespace"] or row["share_grant_id"] != share["id"]:
+            raise ValidationError("Imported collection does not match the local collection binding.")
     recipient = memory.store.connection.execute(
         """SELECT sr.* FROM share_recipients sr JOIN peer_devices pd ON pd.id = sr.peer_id
            WHERE sr.share_grant_id = ? AND pd.peer_instance_id = ?""",
@@ -2022,6 +2074,10 @@ def _validate_import_grant(memory, share: dict, collection: dict, identity: dict
 
 
 def _ensure_imported_share_and_collection(memory, share_payload: dict, collection_payload: dict, peer: PeerDevice) -> None:
+    existing = memory.store.connection.execute("SELECT metadata_json FROM share_grants WHERE id = ?", (share_payload["id"],)).fetchone()
+    if existing and not json.loads(existing["metadata_json"] or "{}").get("imported"):
+        # Local outgoing grants and their recipient sets are operator-owned.
+        return
     now = utc_now_iso()
     with memory.store.transaction():
         memory.store.connection.execute(
@@ -2680,3 +2736,16 @@ def _write_revocation_record(memory, *, revocation_type: str, target_id: str, ta
     )
     row = memory.store.connection.execute("SELECT * FROM revocation_records WHERE id = ?", (record_id,)).fetchone()
     return RevocationRecord.from_row(row)
+
+
+def _lookup_identity(memory, table, value, fallback_fields):
+    row = memory.store.connection.execute(f"SELECT * FROM {table} WHERE id = ?", (value,)).fetchone()
+    if row:
+        return row
+    for field in fallback_fields:
+        rows = memory.store.connection.execute(f"SELECT * FROM {table} WHERE {field} = ?", (value,)).fetchall()
+        if len(rows) > 1:
+            raise ValidationError("Ambiguous name; use the exact object ID.")
+        if rows:
+            return rows[0]
+    return None

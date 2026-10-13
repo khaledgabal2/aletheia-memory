@@ -14,6 +14,7 @@ from aletheia.core.ids import new_id
 from aletheia.core.time import parse_iso, utc_now, utc_now_iso
 from aletheia.service.errors import ServiceError, idempotency_conflict, validation_error
 from aletheia.service.reads import ReadAccess
+from aletheia.service.replay import ReceiptAccess, claim_identity
 
 
 REVIEW_PROFILE = "memory-review-v1"
@@ -215,11 +216,14 @@ class ReviewProtocol:
         if replay is not None:
             if action == "promote":
                 access.require("claim", replay["data"]["id"])
-                if asdict(self.memory.read_claim(replay["data"]["id"])) != replay["data"]:
+                if claim_identity(asdict(self.memory.read_claim(replay["data"]["id"]))) != claim_identity(replay["data"]):
                     raise ServiceError("replay_result_changed", "The legacy result changed; inspect current memory before continuing.", status_code=409)
             return int(replay.pop("_status_code", 200)), replay
         reason = self.service._required(payload, "reason")
-        result = self.memory.promote_candidate(candidate.id, reason=reason) if action == "promote" else self.memory.reject_candidate(candidate.id, reason=reason)
+        receipt_access = ReceiptAccess(context)
+        with receipt_access.capture():
+            access.require("candidate_claim", candidate.id)
+            result = self.memory.promote_candidate(candidate.id, reason=reason) if action == "promote" else self.memory.reject_candidate(candidate.id, reason=reason)
         response = self.service._success(data=asdict(result), warnings=[], pagination=None, request_id=request_id)
-        self.service._idempotency_store(**options, status_code=200, response=response)
+        self.service._idempotency_store(**options, status_code=200, response=response, receipt_access=receipt_access.payload())
         return 200, response

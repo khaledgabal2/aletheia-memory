@@ -188,7 +188,8 @@ class HTTPEmbeddingProvider:
         # Nonempty only for an explicitly configured input/model preset.
         self.input_signature = (hashlib.sha256(json.dumps([document_prefix, query_prefix, model_revision]).encode()).hexdigest()
                                 if document_prefix or query_prefix or model_revision else "")
-        self.opener = None
+        from aletheia.provider_http import NoRedirect
+        self.opener = urllib.request.build_opener(NoRedirect())
         if local_only:
             from aletheia.provider_http import local_opener
             self.opener = local_opener(endpoint)
@@ -206,12 +207,6 @@ class HTTPEmbeddingProvider:
         payload = {
             "model": self.model,
             "input": [(self.query_prefix if purpose == "semantic_query" else self.document_prefix) + text for text in texts],
-            "metadata": {
-                "namespace": namespace,
-                "privacy_level": privacy_level,
-                "purpose": purpose,
-                **(metadata or {}),
-            },
         }
         request = urllib.request.Request(
             self.endpoint,
@@ -221,7 +216,7 @@ class HTTPEmbeddingProvider:
         )
         try:
             with (self.opener.open if self.opener else urllib.request.urlopen)(request, timeout=self.timeout) as response:
-                body = json.loads(response.read().decode("utf-8"))
+                body = json.loads(_bounded_response(response).decode("utf-8"))
         except urllib.error.URLError as exc:
             raise ValueError(f"Embedding provider {self.name!r} failed: {exc}") from exc
         vectors = self._extract_vectors(body)
@@ -584,7 +579,7 @@ def _json(value: str | None, default):
 
 
 def _semantic_tokens(text: str) -> list[str]:
-    raw_tokens = re.findall(r"[A-Za-z0-9_]+", text.lower())
+    raw_tokens = re.findall(r"\w+", text.lower())
     tokens: list[str] = []
     for token in raw_tokens:
         tokens.append(_normalize_token(token))
@@ -621,3 +616,10 @@ def _normalize_token(token: str) -> str:
         "retrieval": "retrieval",
     }
     return synonyms.get(token, token)
+
+
+def _bounded_response(response, limit=8 * 1024 * 1024):
+    data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("HTTP response exceeds the supported size limit.")
+    return data

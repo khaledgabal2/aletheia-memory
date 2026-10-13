@@ -143,7 +143,7 @@ def test_archive_import_preserves_every_source_privacy_and_is_idempotent(memory,
     with closing(Memory.open(str(tmp_path / "target.db"), namespace=NS)) as target:
         # Equal content must not collapse a private source into an existing public event.
         existing = target.write_event(namespace=NS, source_type="manual", content=MARKER, privacy_level="public")
-        result = target.import_archive(input_path=str(path), dry_run=False)
+        result = target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(path), dry_run=False)
         imported = target.list_claims(namespace=NS)[0]
         evidence = [target.read_event(value) for value in imported.evidence_ids]
         assert len(evidence) == 2
@@ -152,7 +152,7 @@ def test_archive_import_preserves_every_source_privacy_and_is_idempotent(memory,
         assert imported.status == "candidate"
         assert http(target, ["memory:read"])("GET", "/v1/claims/" + imported.id)[0] == 403
         original_links = list(imported.evidence_ids)
-        again = target.import_archive(input_path=str(path), dry_run=False)
+        again = target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(path), dry_run=False)
         assert len(target.list_claims(namespace=NS)) == 1
         assert target.read_claim(imported.id).evidence_ids == original_links
         assert again.imported_counts == {"evidence": 0, "claims": 0}
@@ -255,7 +255,7 @@ def test_incomplete_archive_provenance_is_rejected_atomically(memory, tmp_path, 
     with closing(Memory.open(str(tmp_path / "target.db"), namespace=NS)) as target:
         before = table_state(target, "claims", "evidence_events", "import_runs", "audit_log")
         with pytest.raises(ValidationError):
-            target.import_archive(input_path=str(archive), dry_run=dry_run)
+            target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(archive), dry_run=dry_run)
         assert table_state(target, *before) == before
 
 
@@ -271,7 +271,7 @@ def test_protected_archive_import_rewraps_sources_with_target_key(memory, tmp_pa
     with closing(Memory.open(str(tmp_path / "target.db"), namespace=NS)) as target:
         target.enable_protected_mode()
         target_key = target.list_keys()[0].id
-        target.import_archive(input_path=str(archive), dry_run=False, passphrase="synthetic-archive-key")
+        target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(archive), dry_run=False, passphrase="synthetic-archive-key")
         raw = target.store.connection.execute("SELECT content FROM evidence_events").fetchone()[0]
         assert raw.startswith("enc:") and target_key in raw and source_key not in raw and MARKER not in raw
         item = target.list_claims(namespace=NS)[0]
@@ -287,7 +287,7 @@ def test_structural_archives_are_not_imported_as_real_content(memory, tmp_path, 
     memory.create_backup(output_path=str(path), backup_type="logical", privacy_mode=privacy_mode, encrypt=False)
     with closing(Memory.open(str(tmp_path / "target.db"), namespace=NS)) as target:
         with pytest.raises(ValidationError, match="Redacted|metadata"):
-            target.import_archive(input_path=str(path), dry_run=False)
+            target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(path), dry_run=False)
         assert not target.list_claims(namespace=NS) and not target.list_events(namespace=NS)
 
 
@@ -301,8 +301,8 @@ def test_namespace_archive_filters_links_and_remaps_identity_per_destination(mem
         assert own.id in links and foreign.id not in links
     with closing(Memory.open(str(tmp_path / "target.db"), namespace=NS)) as target:
         for namespace in ["tenant/one", "tenant/two"]:
-            target.import_archive(input_path=str(path), namespace=namespace, dry_run=False)
-            target.import_archive(input_path=str(path), namespace=namespace, dry_run=False)
+            target.import_archive(trust_unauthenticated=True, input_path=str(path), namespace=namespace, dry_run=False)
+            target.import_archive(trust_unauthenticated=True, input_path=str(path), namespace=namespace, dry_run=False)
             values = target.list_claims(namespace=namespace)
             assert len(values) == 1
             assert all(target.read_event(value).namespace == namespace for value in values[0].evidence_ids)
@@ -316,16 +316,16 @@ def test_changed_archive_source_requires_review_and_local_deletion_prevents_repl
     memory.store.connection.execute("UPDATE claims SET object = 'changed synthetic value' WHERE id = ?", (item.id,))
     memory.create_backup(output_path=str(changed), backup_type="logical", encrypt=False)
     with closing(Memory.open(str(tmp_path / "target.db"), namespace=NS)) as target:
-        target.import_archive(input_path=str(old), dry_run=False)
+        target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(old), dry_run=False)
         local = target.list_claims(namespace=NS)[0]
         before = table_state(target, "claims", "evidence_events", "import_runs", "audit_log")
         with pytest.raises(ValidationError, match="changed"):
-            target.import_archive(input_path=str(changed), dry_run=False)
+            target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(changed), dry_run=False)
         assert table_state(target, *before) == before
         target.forget(selector={"target_type": "claim", "target_id": local.id}, mode="hard_delete",
             reason="fixture", dry_run=False, confirmation="forget memory")
     with closing(Memory.open(str(tmp_path / "target.db"), namespace=NS)) as target:
-        result = target.import_archive(input_path=str(old), dry_run=False)
+        result = target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(old), dry_run=False)
         assert result.imported_counts["claims"] == 0
         assert not target.list_claims(namespace=NS)
 
@@ -348,7 +348,7 @@ def test_partial_storage_failure_rolls_back_content_links_and_tombstones(memory,
         monkeypatch.setattr(changed, "_write_audit", fail)
         with pytest.raises(RuntimeError, match="synthetic interrupted"):
             if operation == "archive_import":
-                changed.import_archive(input_path=str(archive), dry_run=False)
+                changed.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(archive), dry_run=False)
             else:
                 changed.redact(target_type="evidence", target_id=item.evidence_ids[0], reason="fixture", dry_run=False)
         assert table_state(changed, *before) == before
@@ -445,16 +445,16 @@ def test_archive_source_deletion_propagates_and_old_content_cannot_return(memory
     memory.forget(selector=selector, mode=mode, reason="fixture", dry_run=False, confirmation="forget memory")
     memory.create_backup(output_path=str(removed), backup_type="logical", encrypt=False)
     with closing(Memory.open(str(tmp_path / "target.db"), namespace=NS)) as target:
-        target.import_archive(input_path=str(old), dry_run=False)
+        target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(old), dry_run=False)
         local = target.list_claims(namespace=NS)[0]
         before = table_state(target, "claims", "evidence_events", "deletion_tombstones")
-        target.import_archive(input_path=str(removed), dry_run=True)
+        target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(removed), dry_run=True)
         assert table_state(target, *before) == before
-        target.import_archive(input_path=str(removed), dry_run=False)
+        target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(removed), dry_run=False)
         assert target.read_claim(local.id).status == "archived"
         assert target.read_event(local.evidence_ids[0]).content == "[REDACTED]"
         after = table_state(target, *before)
-        target.import_archive(input_path=str(old), dry_run=False)
+        target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(old), dry_run=False)
         assert table_state(target, *after) == after
         assert target.store.connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -483,7 +483,7 @@ def test_legacy_archive_reimports_stop_for_review_without_more_copies(memory, tm
         before = table_state(target, "claims", "evidence_events", "import_runs", "audit_log")
         for dry_run in (True, False):
             with pytest.raises(ValidationError, match="Historical archive import"):
-                target.import_archive(input_path=str(path), dry_run=dry_run)
+                target.import_archive(namespace=NS, trust_unauthenticated=True, input_path=str(path), dry_run=dry_run)
             assert table_state(target, *before) == before
 
 

@@ -515,3 +515,49 @@ def test_federation_history_filters_scope_before_limit(memory, federated, monkey
     monkeypatch.setattr(AletheiaClient, "_request", request)
     assert AletheiaClient("http://127.0.0.1").sync_runs(namespace=NS, limit=1)[0]["id"] == runs[NS].id
     assert asyncio.run(AsyncAletheiaClient("http://127.0.0.1").remote_sources(namespace=NS))
+
+
+@pytest.mark.parametrize("status", ["core", "disputed", "superseded"])
+def test_active_remember_cannot_bypass_review_status(memory, status):
+    call = client(memory, ["memory:write_active"])
+    code, response = call("POST", "/v1/remember", {"namespace": NS, "write_mode": "active",
+        "memory_type": "fact", "subject": "a", "predicate": "b", "object": "c", "status": status})
+    assert code == 400, response
+    assert memory.list_claims(namespace=NS) == []
+
+
+def test_ingest_enforces_credential_privacy(memory):
+    call = client(memory, ["memory:ingest"])
+    code, response = call("POST", "/v1/ingest", {"namespace": NS, "content": "synthetic secret", "privacy_level": "secret"})
+    assert code == 403, response
+    assert memory.list_events(namespace=NS) == []
+
+
+def test_admin_selector_cannot_escape_namespace(memory):
+    victim = remember(memory, OTHER)
+    call = client(memory, ["memory:admin"])
+    before = rows(memory, "claims", "evidence_events")
+    code, response = call("POST", "/v1/forget/apply", {"namespace": NS, "selector": {"namespace": OTHER},
+        "mode": "hard_delete", "confirmation": "forget memory", "reason": "synthetic"})
+    assert code == 403, response
+    assert rows(memory, *before) == before
+
+
+def test_active_replay_survives_usage_but_detects_content_changes(memory):
+    service = AletheiaService(memory, ServiceConfig(db_path=memory.store.path, rate_limit_enabled=False))
+    principal = service.auth.create_client(name="replay", client_type="test")
+    _, token = service.auth.create_token(client_id=principal.id, capabilities=["memory:write_active", "memory:read"],
+        namespace_grants=[NS], privacy_ceiling="personal")
+    headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "active-regression"}
+    payload = {"namespace": NS, "write_mode": "active", "memory_type": "fact", "subject": "a", "predicate": "b", "object": "c"}
+    def call():
+        return service.handle_http(method="POST", path="/v1/remember", headers=headers, body=json.dumps(payload).encode())
+    code, first = call()
+    assert code == 200, first
+    claim_id = first["data"]["claim"]["id"]
+    assert first["data"]["claim"] == __import__("dataclasses").asdict(memory.read_claim(claim_id))
+    assert call()[0] == 200
+    memory.retrieve(namespace=NS, query="a", recompute_confidence=True)
+    assert call()[0] == 200
+    memory.store.connection.execute("UPDATE claims SET status='superseded' WHERE id=?", (claim_id,))
+    assert call()[0] == 409

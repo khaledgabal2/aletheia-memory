@@ -142,7 +142,7 @@ def replace_peer_key(memory, peer_id: str, *, peer_identity: dict, expected_fing
     fed._validate_peer_identity_payload(peer_identity)
     _confirm_fingerprint(confirmed_fingerprint, peer_identity["key_fingerprint"])
     with memory.store.transaction(immediate=True):
-        peer = fed.get_peer(memory, peer_id)
+        peer = fed.get_peer(memory, peer_id, _exact=True)
         _confirm_fingerprint(expected_fingerprint, peer.key_fingerprint)
         if peer_identity["instance_id"] != peer.peer_instance_id:
             raise ValidationError("Replacement identity must use the pinned peer instance ID.")

@@ -228,10 +228,12 @@ class LLMExtractor:
             model_metadata = {
                 key: value
                 for key, value in dict(item.get("metadata") or {}).items()
-                if key not in PROTECTED_LLM_METADATA_KEYS
+                if key in {"tags", "summary", "rationale", "custom_note"} and key not in PROTECTED_LLM_METADATA_KEYS
             }
             metadata = {
                 **model_metadata,
+                **_risk_metadata(span_text),
+                **_risk_metadata(event.content),
                 "candidate_reason": item.get("candidate_reason"),
                 "extraction_prompt_id": "m12.extract_candidates",
                 "provider": self.provider.name,

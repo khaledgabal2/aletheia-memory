@@ -64,7 +64,7 @@ def _guard_legacy_imports(memory, claims, evidence, namespace, previous, manifes
         if "source_mappings" not in metadata:
             legacy_namespaces.add(run["target_namespace"])
         if ("source_mappings" not in metadata and metadata.get("manifest_id") == manifest_id
-                and run["target_namespace"] == namespace):
+                and run["target_namespace"] in {None, namespace}):
             raise ValidationError(message)
     for audit in memory.store.connection.execute(
         "SELECT namespace, details FROM audit_log WHERE action = 'import.claim_as_candidate'"
@@ -110,8 +110,8 @@ def _sources(claim_id, claims, evidence, links, parents):
     return sorted(found)
 
 
-def import_into(memory, *, input_path, namespace, dry_run, passphrase):
-    if namespace is not None and (not isinstance(namespace, str) or not namespace.strip()):
+def import_into(memory, *, input_path, namespace, dry_run, passphrase, trust_unauthenticated=False):
+    if not isinstance(namespace, str) or not namespace.strip():
         raise ValidationError("An import namespace must be a nonempty string.")
     started = utc_now_iso()
     status, warnings, manifest, payload = storage.verify_backup_file(backup_path=input_path, passphrase=passphrase, deep=True)
@@ -119,6 +119,8 @@ def import_into(memory, *, input_path, namespace, dry_run, passphrase):
         raise ValidationError("Import source verification failed: " + "; ".join(warnings))
     if manifest.get("privacy_mode") not in {"full", "namespace_filtered"}:
         raise ValidationError("Redacted or metadata-only archives cannot restore content or provenance; use a full archive.")
+    if not manifest.get("_manifest_authenticated") and not trust_unauthenticated:
+        raise ValidationError("Unauthenticated imports require explicit trust_unauthenticated=True.")
     tables = _rows(payload)
     evidence = _index(tables["evidence_events"])
     claims = _index(tables["claims"])
@@ -176,7 +178,9 @@ def import_into(memory, *, input_path, namespace, dry_run, passphrase):
             raise ValidationError("Archive evidence requires a valid privacy label.")
         if not isinstance(source.get("content"), str) or not source["content"]:
             raise ValidationError("Archive evidence content is missing.")
-        plaintext = storage.reveal_content_from_storage(memory, source["content"])
+        if source["content"].startswith("enc:"):
+            raise ValidationError("Archive evidence must contain plaintext, not instance-local ciphertext.")
+        plaintext = source["content"]
         normalized = {**source, "content": plaintext}
         digest = content_hash(json.dumps(normalized, sort_keys=True))
         mapped, removed = prior("evidence", source, digest)

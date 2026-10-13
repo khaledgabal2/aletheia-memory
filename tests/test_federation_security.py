@@ -334,3 +334,49 @@ def test_http_import_cannot_escalate_candidate_permissions(pair, tmp_path, polic
     claims = right.list_claims(namespace=NAMESPACE)
     assert len(claims) == int(allow_active)
     assert len(right.list_candidates(NAMESPACE)) == int(policy in {None, "candidate_only"})
+
+
+def test_unpaired_origin_cannot_add_itself_to_locally_owned_share(pair, tmp_path):
+    left, right, recipient, _ = pair
+    local_share, _ = export(left, recipient, tmp_path)
+    collection = left.list_sync_collections(namespace=NAMESPACE)[0]
+    with closing(Memory.open(str(tmp_path / "attacker.db"), namespace=NAMESPACE)) as attacker:
+        attacker.create_federation_identity(display_name="Attacker", protected=False)
+        victim = attacker.add_peer(peer_identity=left.export_federation_identity(), reason="synthetic")
+        _, forged = export(attacker, victim, tmp_path)
+        def collide(_manifest, payload):
+            payload["share_grant"]["id"] = local_share.id
+            payload["collection"]["id"] = collection.id
+            payload["collection"]["share_grant_id"] = local_share.id
+        rewrite_signed_bundle(attacker, left, forged, collide)
+        before = snapshot(left)
+        with pytest.raises(ValidationError):
+            left.import_share_bundle(input_path=str(forged), trust_policy="candidate_only")
+        assert snapshot(left) == before
+
+
+@pytest.mark.parametrize("field,value", [("share_grant",{}),("collection",{}),("payloads",[]),("share_grant",[])])
+def test_malformed_signed_bundle_returns_validation_without_partial_import(pair,tmp_path,field,value):
+    left,right,recipient,_ = pair
+    _,path = export(left,recipient,tmp_path)
+    rewrite_signed_bundle(left,right,path,lambda _m,p:p.update({field:value}))
+    before = snapshot(right)
+    with pytest.raises(ValidationError):right.import_share_bundle(input_path=str(path))
+    assert snapshot(right) == before
+
+
+def test_mutations_require_stable_identity_not_display_names(pair, tmp_path):
+    from aletheia.core.errors import NotFoundError
+    left, _, recipient, _ = pair
+    share, _ = export(left, recipient, tmp_path)
+    assert left.get_peer(recipient.display_name).id == recipient.id
+    assert left.get_share_grant(share.name).id == share.id
+    before = snapshot(left)
+    with pytest.raises(NotFoundError):
+        left.trust_peer(recipient.display_name, trust_status="blocked", reason="test")
+    with pytest.raises(NotFoundError):
+        left.revoke_share_grant(share.name, reason="test")
+    with pytest.raises(NotFoundError):
+        left.export_share_bundle(share_id=share.name, output_path=str(tmp_path / "alias.aletsync"), encrypt=False)
+    assert snapshot(left) == before
+    assert not (tmp_path / "alias.aletsync").exists()

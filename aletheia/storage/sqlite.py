@@ -98,6 +98,8 @@ class SQLiteStore:
                 raise RuntimeError(
                     f"Database schema {current_version} is newer than supported schema {SCHEMA_VERSION}."
                 )
+            if current_version and self._version_key(current_version) < self._version_key(SUPPORTED_MIGRATION_FROM):
+                raise RuntimeError(f"Database schema {current_version} predates the supported migration range starting at {SUPPORTED_MIGRATION_FROM}; preserve it for manual recovery.")
             if current_version == SCHEMA_VERSION and self._schema_current():
                 return
 
@@ -111,8 +113,9 @@ class SQLiteStore:
             try:
                 self.connection.executescript("BEGIN IMMEDIATE;\n" + schema)
                 self._ensure_compatible_columns()
-                self._backfill_m2_records()
-                self._backfill_m3_records()
+                if current_version != SCHEMA_VERSION:
+                    self._backfill_m2_records()
+                    self._backfill_m3_records()
                 self._backfill_m4_records()
                 self._backfill_m5_records()
                 self._backfill_m7_records()
@@ -144,7 +147,7 @@ class SQLiteStore:
         self.connection.close()
 
     @contextmanager
-    def transaction(self, *, immediate: bool = False) -> Iterator[None]:
+    def transaction(self, *, immediate: bool = True) -> Iterator[None]:
         """Run writes in an atomic transaction with savepoints for nested callers."""
         with self._lock:
             outermost = self._transaction_depth == 0 and not self.connection.in_transaction

@@ -1197,7 +1197,8 @@ def doctor_run(memory, *, service_url: str | None = None) -> DoctorRun:
     )
     protected = memory.protected_mode_status()
     add("protected_mode", "passed" if protected.enabled else "warning", "Protected mode enabled." if protected.enabled else "Protected mode disabled.")
-    backups = memory.list_backups(limit=1)
+    from aletheia.core.hardening import verified_backup_exists
+    backups = verified_backup_exists(memory)
     add("backup_status", "passed" if backups else "warning", "Verified backup recorded." if backups else "No verified backup in last 7 days.")
     if not backups:
         recommendations.append("Run: aletheia backup create --encrypt ...")
