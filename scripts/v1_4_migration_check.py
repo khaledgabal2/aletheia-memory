@@ -9,6 +9,7 @@ import sys
 import tempfile
 
 from aletheia import Memory
+from aletheia.core.hardening import verify_backup_file
 from aletheia.storage import SCHEMA_VERSION
 from aletheia.storage.review import integrity
 
@@ -17,7 +18,6 @@ import json, pathlib, sys
 sys.path.insert(0, sys.argv[1])
 from aletheia import Memory
 from aletheia.service.auth import AuthService
-from aletheia.core.hardening import restore_backup
 assert pathlib.Path(__import__('aletheia').__file__).is_relative_to(pathlib.Path(sys.argv[1]))
 action, path, archive = sys.argv[2:5]
 namespace = 'user/migration-fixture'
@@ -31,9 +31,6 @@ if action == 'refuse':
         raise AssertionError('Older binary accepted the new storage version')
     print('Older binary refused upgraded storage')
 else:
-    if action == 'recover':
-        restore_backup(backup_path=archive, target_db_path=path, mode='new_database',
-            passphrase='synthetic-migration-password', dry_run=False)
     memory = Memory.open(path)
     try:
         if action == 'seed':
@@ -68,7 +65,7 @@ def main():
         assert hashlib.sha256(package.joinpath(*name.split(".")).with_suffix(".py").read_bytes()).hexdigest() == expected
     for spelling in ("absolute", "tilde"):
         verify_round_trip(package, spelling)
-    print("Published 1.3.1 database (absolute and quoted tilde paths): planning leaves old storage readable; upgrade preserves claims, evidence, candidates, permissions and retrieval; older binary refuses new storage and recovers the encrypted pre-upgrade backup.")
+    print("Published 1.3.1 database (absolute and quoted tilde paths): planning leaves old storage readable; upgrade preserves claims, evidence, candidates, permissions and retrieval; older binary refuses new storage and reads the pre-upgrade snapshot restored by the authenticated-backup reader.")
 
 
 def verify_round_trip(package, spelling):
@@ -99,7 +96,17 @@ def verify_round_trip(package, spelling):
         finally:
             memory.close()
         legacy("refuse", path)
-        assert json.loads(legacy("recover", Path(directory) / "recovered.db")) == before
+        recovered = Path(directory) / "recovered.db"
+        # Current restore intentionally upgrades storage. For binary rollback,
+        # authenticate and extract the physical snapshot before opening it.
+        status, warnings, manifest, payload = verify_backup_file(backup_path=str(archive),
+            passphrase="synthetic-migration-password", deep=True)
+        assert status == "passed", warnings
+        assert manifest["schema_version"] == "1.3.0"
+        fd = os.open(recovered, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as output:
+            output.write(payload["database.sqlite"])
+        assert json.loads(legacy("inspect", recovered)) == before
 
 
 if __name__ == "__main__":

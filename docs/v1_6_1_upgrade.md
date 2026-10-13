@@ -27,6 +27,10 @@ synthetic data. After publication, the equivalent pinned install is
   `trust_unauthenticated=True` / `--trust-unauthenticated` after independent trust
   verification. Newly created encrypted manifests are authenticated. Imports
   refuse instance-local ciphertext; use an encrypted portable logical export.
+  Older binaries cannot read the newly authenticated encryption format. Keep
+  an older-format backup before upgrading; binary rollback from a new archive
+  requires the current verifier to authenticate and extract its physical
+  snapshot before the older binary opens it. Normal restore upgrades storage.
 - Object IDs unavailable under current authority receive the same generic 403
   error as absent IDs. Public route/type errors still use 404. CSRF and missing
   capability diagnostics remain explicit.
