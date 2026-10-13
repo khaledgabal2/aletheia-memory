@@ -1,10 +1,6 @@
-The next release is **1.6.1**, currently prepared for publication. Until it is
-published, use the reviewed 1.6.1 wheel or source archive from this release
-preparation. See [the upgrade guide](v1_6_1_upgrade.md).
-
 # Installation
 
-This guide covers Aletheia 1.6.0 beta, verifying the command line,
+This guide covers Aletheia 1.6.1 beta, verifying the command line,
 initializing a local database, and finding installed help. Follow the
 [zero-model quickstart](quickstart.md) for the primary first-run journey:
 evidence, candidate, explicit review, lexical context, provenance and reopen.
@@ -22,10 +18,12 @@ The Python package name is `aletheia-memory`. The console script is named
 
 ## Install From PyPI
 
-Install the published package:
+The latest published release is **1.6.1**, available on
+[GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.1) and
+[PyPI](https://pypi.org/project/aletheia-memory/1.6.1/). Install the pinned release:
 
 ```bash
-python -m pip install aletheia-memory
+python -m pip install aletheia-memory==1.6.1
 ```
 
 Then verify the CLI:
@@ -35,16 +33,17 @@ aletheia --help
 aletheia docs list
 ```
 
-## 1.6.0 Upgrade And Packaged Starters
+## 1.6.1 Upgrade And Packaged Starters
 
-Use `python -m pip install aletheia-memory==1.6.0` for this release, or install
-the reviewed `aletheia_memory-1.6.0-py3-none-any.whl` or matching source archive
+Use `python -m pip install aletheia-memory==1.6.1` for this release, or install
+the reviewed `aletheia_memory-1.6.1-py3-none-any.whl` or matching source archive
 by local path. All releases so far are beta, for development and evaluation.
 
-Upgrading from Memory 1.5.0 adds no database migration; storage remains 1.3.1.
-The cryptography dependency is upgraded to at least 50.0.1. Follow the
-[1.6.0 beta upgrade guide](v1_6_0_upgrade.md) for stricter access/privacy behavior
-and a choice between disposable data and preserving existing data.
+Upgrading from Memory 1.5.0 or 1.6.0 adds no database migration; storage remains 1.3.1.
+The cryptography dependency requires at least 50.0.1. Follow the
+[1.6.1 beta upgrade guide](v1_6_1_upgrade.md) for access/privacy, authenticated
+backup and caller compatibility changes. The [1.6.0 guide](v1_6_0_upgrade.md)
+retains fresh-start and data-preserving walkthroughs.
 Preserve your database backups and local identity
 directory. A normal service restart preserves paired credentials; a restored or
 relocated database needs fresh pairing because identity binds to its file.
@@ -52,7 +51,7 @@ relocated database needs fresh pairing because identity binds to its file.
 When upgrading from Memory 1.3.x, first read the
 [migration/backup guide](v1_4_0_migration_guide.md). Storage moves from 1.3.0 to
 1.3.1; older software cannot open the upgraded database. Keep the pre-upgrade
-backup and old binary for recovery. From the installed 1.6.0 environment:
+backup and old binary for recovery. From the installed 1.6.1 environment:
 
 ```bash
 aletheia examples create --type embedded --output ./memory-demo
@@ -80,7 +79,7 @@ the published version.
 Install a downloaded release artifact into your environment:
 
 ```bash
-python -m pip install ./dist/aletheia_memory-1.6.0-py3-none-any.whl
+python -m pip install ./dist/aletheia_memory-1.6.1-py3-none-any.whl
 ```
 
 Then verify the CLI:

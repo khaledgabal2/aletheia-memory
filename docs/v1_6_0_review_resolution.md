@@ -1,14 +1,14 @@
 # 1.6.0 review verification and resolution
 
-Date: October 13, 2026 (America/Chicago). Reviewed baseline: main `18b884b` / `v1.6.0`. Fix release: prepared `1.6.1`.
+Date: October 13, 2026 (America/Chicago). Reviewed baseline: main `18b884b` / `v1.6.0`. Fix release: published `1.6.1`.
 
 The original [Claude review](v1_6_0_code_review.md) was independently checked against the source. The highest-impact findings were reproduced on the unfixed baseline before patching. Existing issue #10 was retained; 51 new issues (#11–#61) track the other verified findings, with the low-severity group split into separate defects. The complete mapping is in [github-issues.json](review-v1.6.0/github-issues.json).
 
-Implementation and local acceptance are complete. Issues close only after the accepted fixes are integrated. GitHub/PyPI publication remains a separate release step.
+Implementation and acceptance are complete. [PR #62](https://github.com/khaledgabal2/aletheia-memory/pull/62) is merged and all 52 tracked issues #10–#61 are closed. Release 1.6.1 is published on GitHub and PyPI.
 
 ## Acceptance evidence
 
-The final local Python 3.13 full suite passed **835 tests**; the additional curation regression also passed (836 cases in the current suite). Release CI re-runs the complete source-archive suite on Python 3.11, 3.12 and 3.13. Test sources: [review regressions](../tests/test_v1_6_review_regressions.py), [service security](../tests/test_service_security.py), [federation security](../tests/test_federation_security.py), [storage security](../tests/test_storage_security.py), and [provider concurrency](../tests/test_retrieval_boundaries.py).
+The complete local isolated source archive passed **836 tests** on Python 3.13. Release CI passed all 836 cases on each of Python 3.11, 3.12 and 3.13. Test sources: [review regressions](../tests/test_v1_6_review_regressions.py), [service security](../tests/test_service_security.py), [federation security](../tests/test_federation_security.py), [storage security](../tests/test_storage_security.py), and [provider concurrency](../tests/test_retrieval_boundaries.py).
 
 All databases, keys, identities, providers, ports and messages in acceptance tests are synthetic. No live model was called, no other owner’s job was stopped and no model profile was changed.
 
@@ -86,6 +86,6 @@ All databases, keys, identities, providers, ports and messages in acceptance tes
 - A verified historical backup record is evidence of past verification, not proof that an externally modified file remains valid. Failed verifications are retained for audit and do not establish readiness.
 - Database mutations and their receipts commit together. Files and separate restore destinations cannot participate in the same SQLite commit; their uncertain in-progress reservations are retained instead of automatically re-executing the operation after five minutes.
 
-## Release handoff
+## Published release
 
-See [1.6.1 upgrade guidance](v1_6_1_upgrade.md) and [release verification](v1_6_1_release_verification.md). Keep publication pending until the accepted commit, built wheel/source distribution, installed checks and GitHub release matrix are verified. A draft GitHub release must target the accepted implementation commit and carry the reviewed artifacts; publishing it starts the existing trusted PyPI workflow.
+See [1.6.1 upgrade guidance](v1_6_1_upgrade.md) and [release verification](v1_6_1_release_verification.md). The accepted commit `2f8cc18c3809837f7585562406b65a00d787d8b6` is tagged `v1.6.1`. The trusted publishing workflow succeeded, and a fresh uncached PyPI installation passed installed-version, dependency, CLI and Python/TypeScript onboarding checks.

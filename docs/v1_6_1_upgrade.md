@@ -1,12 +1,13 @@
 # Memory 1.6.1 beta upgrade
 
 1.6.1 repairs the independently verified findings in the 1.6.0 code review.
-The API remains v1 and storage remains 1.3.1. This is a release candidate until
-GitHub and PyPI publication completes.
+The API remains v1 and storage remains 1.3.1. This beta release was published
+on October 13, 2026 on [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.1)
+and [PyPI](https://pypi.org/project/aletheia-memory/1.6.1/).
 
 Keep a verified encrypted backup and the previous binary before upgrading.
 Install the reviewed wheel in a separate environment and validate it with
-synthetic data. After publication, the equivalent pinned install is
+synthetic data. The published pinned install is
 `python -m pip install aletheia-memory==1.6.1`.
 
 ## Changes that require caller updates
