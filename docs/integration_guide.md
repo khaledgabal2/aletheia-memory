@@ -339,3 +339,31 @@ Do not write directly into SQLite tables from external systems. Use the Python k
 Do not expose the HTTP service on a remote host without authentication. The service validates that remote binding requires `--allow-remote` and authentication.
 
 Do not assume federation exists yet. Use export/import or backup/restore for current movement of data between databases.
+
+### HTTP semantic provider selection
+
+For `POST /v1/retrieve` and `/v1/search`, explicitly select the server's embedding
+provider with `ALETHEIA_SEMANTIC_PROVIDER=ollama_style` or
+`[server] semantic_provider = "ollama_style"` in the service TOML configuration.
+Restart the service after configuration changes. The default remains `mock`;
+provider-specific environment variables alone do not opt into external calls.
+The setting selects a built-in provider from the existing embedding configuration;
+clients cannot select endpoints, credentials, models or providers in a request.
+Existing clients, including Desktop, can keep their current request bodies.
+
+Configure `ALETHEIA_EMBEDDING_OLLAMA_STYLE_ENDPOINT`, `_MODEL`, `_DIMENSION`,
+`_DOCUMENT_PREFIX` and `_QUERY_PREFIX` to match the explicitly created native
+index. Existing local-only transport, index privacy and HTTP authorization checks
+still apply. Only the query is sent during retrieval, after eligible targets have
+been filtered. Changed model/input presets require explicit indexing; incompatible
+HTTP-provider dimensions require reindexing even without input prefixes.
+
+Retrieval results now include `semantic_status`: `not_requested` for lexical
+requests, `indexed` when that claim has a positive vector match, or `unavailable`
+when no positive vector match is available for that claim. When retrieval falls
+back entirely to lexical/ranking features, `retrieval_mode` is `lexical`, including
+for a requested semantic/hybrid mode. A missing preset-specific index or changed
+preset returns a validation error before provider invocation. Neither a requested
+mode nor a zero score proves that embeddings were used. Empty result lists remain
+empty. Corrections awaiting indexing may appear in lexical fallback or hybrid
+results; semantic results with positive vector matches exclude unindexed claims.

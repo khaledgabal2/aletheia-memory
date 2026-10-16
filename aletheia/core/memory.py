@@ -12135,7 +12135,8 @@ class Memory:
                 raise ValidationError("No compatible semantic index for this configured model. Index explicitly before semantic retrieval.")
             return {}
         metadata = json.loads(latest["metadata_json"] or "{}")
-        if getattr(engine, "input_signature", "") or metadata.get("input_signature"):
+        if (getattr(engine, "input_signature", "") or metadata.get("input_signature")
+                or engine.provider_type in {"local_http", "ollama_style", "openai_compatible"}):
             expected = semantic_index_version(provider=engine, redaction_policy=metadata.get("protected_mode_policy", "index_public_and_personal_only"))
             if latest["index_version"] != expected or latest["dimension"] != engine.dimension:
                 raise ValidationError("Semantic model, dimensions or input preset changed; explicitly reindex before retrieval.")
@@ -12235,7 +12236,8 @@ class Memory:
                     conflict_ids=conflict_ids_by_claim.get(row["id"], []),
                     project_ids=project_ids,
                     semantic_score=semantic,
-                    retrieval_mode=mode,
+                    retrieval_mode=mode if semantic_scores else "lexical",
+                    semantic_status="indexed" if row["id"] in semantic_scores else "unavailable",
                 )
             )
         results.sort(

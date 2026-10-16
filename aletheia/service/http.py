@@ -841,6 +841,7 @@ class AletheiaService:
             namespace=namespace,
             query=payload.get("query", ""),
             mode=payload.get("mode", "hybrid"),
+            semantic_provider=self.config.semantic_provider,
             limit=self._integer(payload.get("limit", 10), "limit"),
             project_id=project_id,
             session_id=payload.get("session_id"),

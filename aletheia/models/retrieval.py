@@ -27,3 +27,4 @@ class RetrievalResult:
     project_ids: list[str] = field(default_factory=list)
     semantic_score: float = 0.0
     retrieval_mode: str = "lexical"
+    semantic_status: str = "not_requested"
