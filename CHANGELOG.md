@@ -4,6 +4,13 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+## 1.6.3 — 2026-10-16
+
+- Include the corrected 1.6.2 publication and upgrade documentation in the
+  distributed package and PyPI description. Use stable latest-release links
+  instead of a version-specific latest-release claim that becomes stale.
+- No runtime code, API, storage or permission changes from 1.6.2.
+
 ## 1.6.2 — 2026-10-16
 
 - Use the operator-configured semantic provider for HTTP search/retrieve. Report

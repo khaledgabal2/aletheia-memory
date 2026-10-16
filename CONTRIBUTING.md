@@ -30,6 +30,24 @@ uv run --extra dev pytest
 - Keep generated databases, support bundles, private logs, credentials, tokens,
   and environment files out of commits.
 
+## Before Publishing A Release
+
+- Finalize and review README/PyPI description, changelog, upgrade guidance,
+  security/version statements, packaged docs and release notes before tagging
+  or starting the publication workflow.
+- Use stable latest-release links or version-accurate wording. Documentation
+  must read correctly when the tagged package is published; do not ship pending
+  placeholders or defer known wording corrections until after publication.
+- Build the wheel and source distribution from the final release source. Verify
+  their embedded README/description matches the finalized source, then run the
+  metadata checks and required release gates before publication.
+- Do not plan a release followed by another package release just for omitted
+  documentation. Fix known documentation problems before the first publication.
+- After publication, verify PyPI's actual description as well as version, file
+  hashes and fresh installation. Add publication-only results to the existing
+  GitHub release notes or verification assets; they do not require another
+  package release.
+
 ## Design Boundaries
 
 Open an issue or discussion before introducing:
