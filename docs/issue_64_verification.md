@@ -72,4 +72,5 @@ All seven PR CI checks passed on the implementation commit, including Python
 3.11/3.12/3.13, package build, contracts, packaged TypeScript starter, and the
 baseline boundary. The final evidence-only documentation update was checked
 with the generic-main release gate and `git diff --check`; unchanged source
-validation is reused. The fix is unreleased; published 1.6.1 remains unchanged.
+validation is reused. The fix is included in published 1.6.2; see the
+[release verification](v1_6_2_release_verification.md).

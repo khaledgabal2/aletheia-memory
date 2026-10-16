@@ -1,7 +1,7 @@
 # 1.6.1 release verification
 
-Published and verified October 13, 2026 (America/Chicago). The latest published
-release is **1.6.1** on [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.1)
+Published and verified October 13, 2026 (America/Chicago). This historical record
+covers **1.6.1** on [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.1)
 and [PyPI](https://pypi.org/project/aletheia-memory/1.6.1/).
 Software: 1.6.1 beta; API: v1; storage: 1.3.1; automatic migration minimum: 1.3.0.
 

@@ -4,7 +4,7 @@ Version 1.6.2 fixes HTTP semantic provider selection and fallback reporting from
 issue #64. Python remains 3.11+, the API remains v1, and storage remains 1.3.1.
 No database migration or new Desktop permissions are required.
 
-After 1.6.2 is published, upgrade the service's own Python environment:
+Upgrade the service's own Python environment:
 
 ```bash
 python -m pip install --upgrade aletheia-memory==1.6.2
