@@ -25,12 +25,15 @@ clear audit trail.
 
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
-- Latest published release: [1.6.2 on GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/tag/v1.6.2) and [PyPI](https://pypi.org/project/aletheia-memory/1.6.2/).
+- Latest release: [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/latest) and [PyPI](https://pypi.org/project/aletheia-memory/).
 - Maturity: beta; intended for development and evaluation, not production use.
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
 - Distribution: [PyPI](https://pypi.org/project/aletheia-memory/); source installs and release wheels are also supported.
+
+1.6.3 packages the corrected release documentation and PyPI description; runtime
+behavior is unchanged from 1.6.2.
 
 1.6.2 fixes HTTP semantic provider selection and reports lexical fallback accurately.
 Select the server provider explicitly with `ALETHEIA_SEMANTIC_PROVIDER=ollama_style`
