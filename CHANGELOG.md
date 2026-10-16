@@ -4,6 +4,10 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+- Use the operator-configured semantic provider for HTTP search/retrieve. Report
+  lexical fallback and per-result semantic availability, and reject incompatible
+  HTTP embedding index dimensions even without input prefixes (issue #64).
+
 ## 1.6.1 — 2026-10-13
 
 Security and correctness repairs from the independent 1.6.0 review. Python

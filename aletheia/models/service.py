@@ -202,6 +202,7 @@ class ServiceConfig:
     discovery_directory: str | None = None
     local_pairing_enabled: bool = False
     identity_directory: str | None = None
+    semantic_provider: str = "mock"
 
     @classmethod
     def load(
@@ -233,6 +234,7 @@ class ServiceConfig:
             "host": server.get("host", "127.0.0.1"),
             "port": int(server.get("port", 8765)),
             "api_prefix": server.get("api_prefix", "/v1"),
+            "semantic_provider": server.get("semantic_provider", "mock"),
             "auto_migrate": _bool(server.get("auto_migrate", False)),
             "auth_required": _bool(auth.get("required", True)),
             "allow_remote": _bool(security.get("allow_remote", False)),
@@ -259,6 +261,7 @@ class ServiceConfig:
             "ALETHEIA_HOST": ("host", str),
             "ALETHEIA_PORT": ("port", int),
             "ALETHEIA_AUTH_REQUIRED": ("auth_required", _bool),
+            "ALETHEIA_SEMANTIC_PROVIDER": ("semantic_provider", str),
         }
         for env_name, (key, parser) in env_map.items():
             if env_name in os.environ:
@@ -277,6 +280,7 @@ class ServiceConfig:
                 "port": self.port,
                 "db": self.db_path,
                 "api_prefix": self.api_prefix,
+                "semantic_provider": self.semantic_provider,
                 "auto_migrate": self.auto_migrate,
             },
             "auth": {"required": self.auth_required},

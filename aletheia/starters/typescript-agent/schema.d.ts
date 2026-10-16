@@ -976,6 +976,7 @@ export interface components {
             retrieval_mode: string;
             score: number;
             semantic_score: number;
+            semantic_status: string;
             status: string;
             subject: string;
             text: string;
