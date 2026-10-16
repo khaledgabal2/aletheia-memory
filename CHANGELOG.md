@@ -4,9 +4,18 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+## 1.6.2 — 2026-10-16
+
 - Use the operator-configured semantic provider for HTTP search/retrieve. Report
   lexical fallback and per-result semantic availability, and reject incompatible
   HTTP embedding index dimensions even without input prefixes (issue #64).
+
+Configure `ALETHEIA_SEMANTIC_PROVIDER=ollama_style` (or
+`server.semantic_provider` in TOML) to select the server provider explicitly.
+Existing embedding model/dimension/prefix configuration must match the index.
+The default remains `mock`. API v1 and storage 1.3.1 remain unchanged.
+See [acceptance evidence](docs/issue_64_verification.md) and the
+[1.6.2 upgrade guide](docs/v1_6_2_upgrade.md).
 
 ## 1.6.1 — 2026-10-13
 
