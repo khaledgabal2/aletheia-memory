@@ -631,8 +631,9 @@ class AletheiaService:
                 with self.lock:
                     if self._closed:
                         raise ServiceError("service_closed", "The service is closed.", status_code=503)
-                    if endpoint in {"/v1/backups/create", "/v1/backups/verify", "/v1/exports", "/v1/support/bundle", "/v1/restore/apply", "/v1/restore/dry-run", "/v1/benchmarks/run"}:
-                        # SQLite backup requires an idle source connection; exclusive output creation prevents unsafe file replays.
+                    if endpoint in {"/v1/backups/create", "/v1/backups/verify", "/v1/exports", "/v1/support/bundle", "/v1/restore/apply", "/v1/restore/dry-run", "/v1/benchmarks/run", "/v1/compact/run"}:
+                        # Backup/checkpoint/VACUUM require an idle connection;
+                        # exclusive output creation prevents unsafe file replays.
                         kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"], previous=kwargs["auth_context"])
                         result = self._route(**kwargs)
                         if completion:

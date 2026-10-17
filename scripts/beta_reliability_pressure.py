@@ -28,6 +28,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--seconds', type=int, default=120)
     args = parser.parse_args()
+    if not 120 <= args.seconds <= 3600:
+        parser.error('--seconds must be between 120 and 3600')
     args.output.mkdir(parents=True, exist_ok=False)
     rows = []
     def case(name, fn):
@@ -107,12 +109,12 @@ print(json.dumps({'requests':50,'seconds':time.monotonic()-started}))
             deadline = time.monotonic() + args.seconds
             cycles, reads = 0, 0
             while time.monotonic() < deadline:
-                if cycles < 200:
+                if cycles < 5000:
                     marker = f'soakmarker{cycles}'
                     created = agent.remember_candidate(namespace=ns, memory_type='fact', subject=f'cycle-{cycles}',
                         predicate='observes', object=marker, evidence_text=f'cycle-{cycles} observes {marker}',
                         idempotency_key=f'cycle-create-{cycles}')
-                    assert all(marker not in row.get('text', '') for row in agent.retrieve(namespace=ns, query=marker))
+                    assert all(row['object'] != marker for row in agent.retrieve(namespace=ns, query=marker))
                     candidate = reviewer.get_candidate_for_review(created['candidate']['id'])
                     arguments = dict(action='promote', reason='Synthetic source checked by separate operator',
                         expected_revision=candidate['revision'], idempotency_key=f'cycle-review-{cycles}')
@@ -126,12 +128,15 @@ print(json.dumps({'requests':50,'seconds':time.monotonic()-started}))
                     context = agent.context_pack(namespace=ns, query=marker, token_budget=128, record_usage=True)
                     assert marker in context['markdown']
                     cycles += 1
+                    if cycles % 50 == 0:
+                        (args.output / 'soak-progress.json').write_text(json.dumps({'cycles': cycles,
+                            'seconds_remaining': max(0, deadline - time.monotonic())}))
                 else:
                     assert len(agent.retrieve(namespace=ns, query='socketpressuremarker', limit=20)) == 20
                     reads += 1
                 time.sleep(.05)
-            assert cycles == 200
-            assert len(m.list_claims(namespace=ns, limit=1000)) == 232
+            assert cycles >= 200
+            assert m.store.connection.execute('SELECT count(*) FROM claims WHERE namespace = ?', (ns,)).fetchone()[0] == 32 + cycles
             assert m.store.connection.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
             return {'lifecycle_cycles': cycles, 'extra_reads': reads, 'duration_seconds': args.seconds,
                     'lifecycle': 'candidate -> invisible to trusted recall -> guarded operator approval -> idempotent replay -> recall -> zero feedback -> context usage'}

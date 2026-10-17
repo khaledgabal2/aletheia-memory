@@ -20,6 +20,7 @@ jobs:
         run: python scripts/release_gate.py --base-ref main
 
   tests:
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -50,7 +51,10 @@ jobs:
           archive_root="$(mktemp -d)"
           tar -xzf dist/*.tar.gz -C "$archive_root"
           cd "$archive_root"/aletheia_memory-*
-          python -m pytest
+          python -m pytest -vv -o faulthandler_timeout=120
+      - name: Verify bounded memory failure and recovery on Linux
+        if: runner.os == 'Linux'
+        run: python scripts/beta_resource_pressure.py --only-memory --output "$RUNNER_TEMP/aletheia-memory-pressure"
 
 
   build:

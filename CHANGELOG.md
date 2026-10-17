@@ -4,6 +4,19 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+- Correct zero-strength feedback, validate context budgets, and require complete
+  atomic conflict scopes. Assistant repetition without evidence is inert.
+- Validate all eight advisory LLM outputs with task-specific contracts. Add
+  standard MCP JSON-RPC stdio and correct custom-namespace authorization.
+- Clear console data on logout/auth loss, discard late responses, show action
+  errors, and include selected namespaces in federation requests.
+- Preserve refused legacy databases, reject existing dangling database links,
+  run HTTP compaction outside a SQLite transaction, classify unavailable sync
+  inputs as validation errors, and preserve disk-full errors through rollback.
+- Add executable conformance probes, regression tests and a recorded live beta
+  harness spanning public methods, CLI, HTTP, SDK, MCP, browsers, local models,
+  installed artifacts, resource failure and native OS/Python validation.
+
 ## 1.6.3 — 2026-10-16
 
 - Include the corrected 1.6.2 publication and upgrade documentation in the

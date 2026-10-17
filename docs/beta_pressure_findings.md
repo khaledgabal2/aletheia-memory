@@ -1,5 +1,8 @@
 # Beta pressure findings — October 16, 2026
 
+This is the original diagnosis. Implemented corrections and subsequent evidence
+are recorded in `beta_pressure_resolution.md`.
+
 Baseline: `4ad75a8a98b86d1606a4f2cead7f0cdfe63c3826`, source version 1.6.3.
 Product implementation was not changed. Evidence is synthetic and retained under
 `output/beta-pressure-2026-10-16-*`. This is a qualification report, not a release

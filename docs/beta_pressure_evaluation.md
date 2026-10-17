@@ -57,7 +57,7 @@ scorecards create their own temporary databases; the new pressure cases retain
 their disposable databases for diagnosis. Synthetic records and test credentials
 must stay out of commits. Interrupted/running steps are never counted as passes.
 
-## Coverage map
+## Initial coverage map (historical)
 
 | Area | Baseline evidence | Additional adversarial evidence |
 | --- | --- | --- |
@@ -255,3 +255,44 @@ not thereby tested for every branch, argument, authorization combination or
 provider. Reliability uses SQLite page-capacity exhaustion rather than filling
 the host filesystem, eight independent HTTP clients, and a bounded two-minute
 workflow soak. It does not establish multi-day reliability or a load SLA.
+
+
+## Follow-up interface and resource phases
+
+The current correction journal is `docs/beta_pressure_resolution.md`. Historical
+counts above remain unchanged. The SDK request denominator is 142 (75 sync and
+67 async), with four additional async response properties. Current measured body
+coverage is distinct from successful semantic assertions and route coverage.
+
+```sh
+.venv/bin/python scripts/beta_pressure_harness.py --phase http-surface --output output/http-UNIQUE
+.venv/bin/python scripts/beta_pressure_harness.py --phase resources --output output/resources-UNIQUE
+.venv/bin/python scripts/beta_pressure_harness.py --phase reliability --soak-seconds 1800 --output output/soak-UNIQUE
+```
+
+HTTP coverage runs record method/template/status only, never request data, IDs
+or credentials. The separate socket sweep tests every current OpenAPI operation
+with bounded missing-object/empty-state requests. It does not replace positive
+workflow tests. Installed-artifact extended runs also launch every CLI leaf's
+`--help` from an empty working directory and assert no storage is created;
+that qualifies discoverability and parsing, not every command's semantics.
+
+Resource pressure never exhausts host storage. On macOS it mounts an owned
+64 MiB disk image beneath the output directory, fills it to ENOSPC, checks failed
+SQLite write rollback/recovery, and detaches it in finally. On Linux it uses an
+owned child with a 256 MiB address-space limit, verifies MemoryError, restores
+its limit, and checks subsequent database write/reopen/integrity. Those are
+bounded failure paths, not every SQLite/crypto allocator or crash point.
+
+The longer reliability phase continuously exercises governed lifecycle writes
+until its 5,000-cycle budget, then continues reads until the selected deadline.
+It saves periodic progress, final assertions and cleanup. A long run must retain
+its logs and receive a scheduled result follow-up; running/deferred is never a
+pass. It qualifies that workload and duration only, not a multi-day reliability
+claim, production traffic distribution or load SLA.
+
+For browser repeats: open the printed read URL, run its checks to PASS, then run
+review checks to PASS. Console uses a separate synthetic database and private
+fixture token. Exercise console actions, verify scoped failures are visible,
+then verify logout clears panels/inputs. Save browser states, error logs and
+screenshots. Never commit fixture tokens, synthetic key files or databases.

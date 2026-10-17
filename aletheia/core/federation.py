@@ -712,7 +712,10 @@ def import_share_bundle(memory, *, input_path: str, trust_policy: str = "candida
         raise ValidationError(f"Unknown import trust policy: {trust_policy}")
     if trust_policy == "reject_by_default":
         raise ValidationError("Import trust policy rejects remote bundles.")
-    manifest, payload = _read_bundle(memory, input_path)
+    try:
+        manifest, payload = _read_bundle(memory, input_path)
+    except (FileNotFoundError, IsADirectoryError, PermissionError) as exc:
+        raise ValidationError("Sync bundle input is unavailable.") from exc
     if manifest.get("format") != "aletsync":
         raise ValidationError("Not an Aletheia sync bundle.")
     origin_identity = payload["peer_identity"]

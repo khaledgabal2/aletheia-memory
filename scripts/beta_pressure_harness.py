@@ -34,8 +34,9 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--live-models', action='store_true')
     parser.add_argument('--timeout', type=int, default=1800)
-    parser.add_argument('--phase', choices=['baseline', 'extended', 'targeted', 'diagnostics', 'regression', 'models', 'reliability', 'coverage', 'interop'], default='baseline')
+    parser.add_argument('--phase', choices=['baseline', 'extended', 'targeted', 'diagnostics', 'regression', 'models', 'reliability', 'resources', 'http-surface', 'coverage', 'surface', 'interop'], default='baseline')
     parser.add_argument('--artifact-run', type=Path)
+    parser.add_argument('--soak-seconds', type=int, default=120)
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -150,8 +151,23 @@ def main():
             step('adversarial-pressure', [py, str(ROOT / 'scripts/beta_pressure_cases.py'),
                                           '--output', str(output / 'pressure')])
             step('release-gate', [py, 'scripts/release_gate.py', '--branch', 'main'])
+        elif args.phase == 'surface':
+            if not args.artifact_run:
+                raise ValueError('Surface coverage requires --artifact-run pointing to baseline coverage.')
+            baseline = args.artifact_run.resolve()
+            prior = json.loads((baseline / 'receipt.json').read_text())
+            for name, digest in prior['source_sha256'].items():
+                if name.startswith('aletheia/') and hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != digest:
+                    raise ValueError('Implementation changed since baseline coverage: ' + name)
+            shutil.copyfile(baseline / '.coverage', output / '.coverage')
+            report['coverage_baseline'] = str(baseline)
+            save()
+            step('coverage-surface', [py, '-m', 'coverage', 'run', '--append', '--branch', '--source=aletheia', '--data-file=' + str(output / '.coverage'), '-m', 'pytest', 'tests/test_beta_surface_workflows.py', 'tests/test_beta_sdk_surface.py', 'tests/test_beta_pressure_regressions.py', '--junitxml=' + str(output / 'surface.xml')])
+            step('coverage-json', [py, '-m', 'coverage', 'json', '--data-file=' + str(output / '.coverage'), '-o', str(output / 'coverage.json')])
+            step('public-body-coverage', [py, 'scripts/beta_coverage_inventory.py', '--coverage', str(output / 'coverage.json'), '--output', str(output / 'public-body-coverage.json')])
         elif args.phase == 'coverage':
-            step('coverage-pytest', [py, '-m', 'coverage', 'run', '--branch', '--source=aletheia', '--data-file=' + str(output / '.coverage'), '-m', 'pytest', '--junitxml=' + str(output / 'pytest.xml')])
+            os.environ['ALETHEIA_BETA_HTTP_COVERAGE'] = str(output / 'http-route-coverage.json')
+            step('coverage-pytest', [py, '-m', 'coverage', 'run', '--branch', '--source=aletheia', '--data-file=' + str(output / '.coverage'), '-m', 'pytest', '-p', 'scripts.beta_http_coverage', '--junitxml=' + str(output / 'pytest.xml')])
             step('coverage-json', [py, '-m', 'coverage', 'json', '--data-file=' + str(output / '.coverage'), '-o', str(output / 'coverage.json')])
             for script in ['live_mvp_scorecard.py', 'live_v0_1_polish_scorecard.py'] + [p.name for p in sorted((ROOT / 'scripts').glob('live_m[0-9]*_scorecard.py'))]:
                 step(Path(script).stem, [py, str(ROOT / 'scripts' / script)])
@@ -160,11 +176,17 @@ def main():
             if not args.artifact_run:
                 raise ValueError('Interop requires --artifact-run pointing to a completed extended phase.')
             step('official-mcp-sdk', [py, 'scripts/beta_mcp_interoperability.py', '--server-python', str(args.artifact_run.resolve() / 'installed/bin/python'), '--output', str(output / 'mcp-sdk')])
+        elif args.phase == 'http-surface':
+            step('http-route-contracts', [py, 'scripts/beta_http_surface.py', '--output', str(output / 'http')], timeout=600)
+        elif args.phase == 'resources':
+            mode = '--disk-only' if sys.platform == 'darwin' else '--only-memory'
+            step('bounded-resource-pressure', [py, 'scripts/beta_resource_pressure.py', '--output', str(output / 'resources'), mode], timeout=240)
         elif args.phase == 'reliability':
-            step('reliability-pressure', [py, 'scripts/beta_reliability_pressure.py', '--output', str(output / 'reliability')], timeout=300)
+            step('reliability-pressure', [py, 'scripts/beta_reliability_pressure.py', '--output', str(output / 'reliability'), '--seconds', str(args.soak_seconds)], timeout=args.soak_seconds + 180)
         elif args.phase == 'regression':
             step('regression', [py, '-m', 'pytest', 'tests/test_beta_pressure_regressions.py',
                 'tests/test_beta_surface_workflows.py', 'tests/test_beta_sdk_surface.py',
+                'tests/test_v1_5_local_pairing.py::test_cli_registration_shutdown_and_crash_lease',
                 'tests/test_m2_memory_integrity.py', 'tests/test_m12_governed_llm_memory.py',
                 'tests/test_m6_memory_service.py', 'tests/test_certification_evidence.py',
                 '--junitxml=' + str(output / 'regression.xml')])
@@ -179,6 +201,7 @@ def main():
             step('fresh-install', ['uv', 'pip', 'install', '--python', str(fresh / 'bin/python'), str(wheel)])
             step('artifact-inspection', [py, 'scripts/beta_artifact_inspection.py', '--dist', str(output / 'dist'),
                                          '--python', str(fresh / 'bin/python'), '--output', str(output / 'artifacts.json')])
+            step('installed-cli-surface', [py, 'scripts/beta_cli_surface.py', '--python', str(fresh / 'bin/python'), '--output', str(output / 'cli')])
             step('previous-venv', ['uv', 'venv', str(previous)])
             step('previous-install', ['uv', 'pip', 'install', '--python', str(previous / 'bin/python'), 'aletheia-memory==1.6.2'])
             step('installed-onboarding', [py, 'scripts/v1_4_onboarding_check.py', '--python', str(fresh / 'bin/python'), '--typescript'])

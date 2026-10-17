@@ -250,12 +250,15 @@ def test_database_replacement_changes_identity(services, tmp_path):
 @pytest.mark.parametrize("crash", [False, True])
 def test_cli_registration_shutdown_and_crash_lease(tmp_path, crash):
     directory = tmp_path / "discovery"
-    command = [sys.executable, "-m", "aletheia.cli.main", "serve", "--db", str(tmp_path / "cli.db"),
+    bootstrap = "import faulthandler,runpy; faulthandler.dump_traceback_later(15,repeat=True); runpy.run_module('aletheia.cli.main',run_name='__main__')"
+    command = [sys.executable, "-c", bootstrap, "serve", "--db", str(tmp_path / "cli.db"),
         "--port", "0", "--auto-migrate", "--discovery-dir", str(directory), "--identity-dir", str(tmp_path / "identities")]
     startup_log = (tmp_path / "cli-startup.log").open("w")
     process = subprocess.Popen(command, stdout=startup_log, stderr=subprocess.STDOUT)
     try:
-        deadline = time.monotonic() + 10
+        # This checks lifecycle, not a startup-latency SLA. Cold native CI hosts
+        # get a bounded minute; a stall leaves periodic Python stack evidence.
+        deadline = time.monotonic() + 60
         records = []
         while time.monotonic() < deadline and not records and process.poll() is None:
             records = list(directory.glob("*.json"))

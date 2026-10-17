@@ -2,6 +2,7 @@
 import io
 import json
 import shutil
+import sqlite3
 import subprocess
 import sys
 from dataclasses import asdict
@@ -55,6 +56,40 @@ def test_zero_budget_is_valid_and_returns_no_items(memory):
     assert not memory.context_pack('beta/main', 'Vim', token_budget=0).items()
 
 
+def test_nested_engine_abort_preserves_original_error_and_transaction_depth(memory):
+    original = sqlite3.OperationalError('Synthetic disk-full auto-rollback')
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        with memory.store.transaction():
+            with memory.store.transaction():
+                memory.store.connection.rollback()  # SQLite auto-abort destroys savepoints.
+                raise original
+    assert caught.value is original
+    assert memory.store._transaction_depth == 0
+    claim = remember(memory)
+    assert memory.read_claim(claim.id).object == claim.object
+
+
+def test_failed_savepoint_creation_never_leaks_transaction_depth(memory):
+    connection = memory.store.connection
+    class Fault:
+        def __getattr__(self, name):
+            return getattr(connection, name)
+        def execute(self, sql, *args):
+            if sql.startswith('SAVEPOINT'):
+                raise sqlite3.OperationalError('Synthetic savepoint allocation failure')
+            return connection.execute(sql, *args)
+    memory.store.connection = Fault()
+    try:
+        with pytest.raises(sqlite3.OperationalError, match='allocation failure'):
+            with memory.store.transaction():
+                with memory.store.transaction():
+                    pytest.fail('Failed savepoint must never enter the body')
+        assert memory.store._transaction_depth == 0
+    finally:
+        memory.store.connection = connection
+    assert remember(memory).status == 'active'
+
+
 @pytest.mark.parametrize('value', [True, False, '1', float('nan'), float('inf'), None])
 def test_feedback_rejects_invalid_strength_without_mutation(memory, value):
     claim = remember(memory)
@@ -101,6 +136,34 @@ def test_http_and_cli_scope_refusal_preserves_conflict_then_atomic_resolution(me
         headers={}, body=json.dumps(payload).encode())
     assert status == 200, envelope
     assert memory.read_conflict(conflict.id).status == 'resolved'
+
+
+def test_http_compaction_uses_idle_connection_and_missing_bundle_is_client_error(memory, tmp_path):
+    from aletheia.models import ServiceConfig
+    from aletheia.service.http import AletheiaService
+    claim = remember(memory)
+    service = AletheiaService(memory, ServiceConfig(db_path=memory.store.path, local_pairing_enabled=False))
+    admin = service.auth.create_client(name='Synthetic maintenance operator', client_type='test')
+    _, token = service.auth.create_token(client_id=admin.id, namespace_grants=['*'],
+        capabilities=['memory:admin'], privacy_ceiling='secret')
+    headers = {'Authorization': 'Bearer ' + token}
+    status, result = service.handle_http(method='POST', path='/v1/compact/run', headers=headers,
+        body=json.dumps({'namespace': memory.namespace}).encode())
+    assert status == 200, result
+    assert result['data']['status'] == 'completed'
+    assert memory.read_claim(claim.id).object == claim.object
+    assert memory.store.connection.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+    before = len(memory.list_sync_runs())
+    status, result = service.handle_http(method='POST', path='/v1/shares/import', headers=headers,
+        body=json.dumps({'input_path': str(tmp_path / 'absent.aletsync'), 'namespace': memory.namespace}).encode())
+    assert status == 400 and result['error']['code'] == 'validation_error', result
+    assert len(memory.list_sync_runs()) == before
+    reader = service.auth.create_client(name='Synthetic reader', client_type='test')
+    _, read_token = service.auth.create_token(client_id=reader.id, namespace_grants=[memory.namespace],
+        capabilities=['memory:read'], privacy_ceiling='personal')
+    count = memory.store.connection.execute('SELECT count(*) FROM compaction_runs').fetchone()[0]
+    assert service.handle_http(method='POST', path='/v1/compact/run', headers={'Authorization': 'Bearer ' + read_token}, body=b'{}')[0] == 403
+    assert memory.store.connection.execute('SELECT count(*) FROM compaction_runs').fetchone()[0] == count
 
 
 @pytest.mark.parametrize('strategy', ['context_scope', 'time_scope'])

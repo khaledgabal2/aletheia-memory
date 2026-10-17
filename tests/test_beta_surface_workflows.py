@@ -1,5 +1,7 @@
 """Behavioral follow-ups selected from measured public-method coverage gaps."""
 from contextlib import closing
+from dataclasses import asdict
+import json
 
 import pytest
 
@@ -136,3 +138,56 @@ def test_project_eval_and_decay_catalogs_respect_namespace(memory):
     assert not memory.list_eval_sets(namespace='surface/other')
     policy = memory.set_half_life_policy(namespace=memory.namespace, memory_type='fact', half_life_days=30, reason='Synthetic decay policy')
     assert policy in memory.list_half_life_policies(namespace=memory.namespace, memory_type='fact')
+
+
+def test_export_receipts_and_changesets_preserve_provenance_without_active_import(memory, tmp_path):
+    memory.create_federation_identity(display_name='Synthetic sender', protected=False)
+    with closing(Memory.open(str(tmp_path / 'recipient.db'), namespace=memory.namespace)) as recipient:
+        recipient.create_federation_identity(display_name='Synthetic recipient', protected=False)
+        peer = memory.add_peer(peer_identity=recipient.export_federation_identity(), reason='Synthetic pairing')
+        claim = memory.remember(memory_type='fact', subject='sender', predicate='observes', object='export canary', privacy_level='public')
+        domain = memory.list_trust_domains()[0]
+        assert memory.get_trust_domain(domain.name) == domain
+        share = memory.create_share_grant(name='Synthetic share', namespace=memory.namespace,
+            recipient_peer_ids=[peer.id], permissions=['read_claims', 'read_evidence'], privacy_ceiling='public', reason='Synthetic explicit sharing')
+        exported = memory.export_share_bundle(share_id=share.id, output_path=str(tmp_path / 'share.aletsync'), encrypt=False)
+        assert memory.get_sync_run(exported.id) == exported
+        changeset = memory.get_sync_changeset(exported.metadata['changeset_id'])
+        items = memory.list_sync_change_items(changeset.id)
+        assert changeset.item_count == len(items)
+        assert any(item.object_id == claim.id and item.object_type == 'claim' for item in items)
+        assert not recipient.list_claims(namespace=memory.namespace)
+        for method in [memory.get_sync_run, memory.get_sync_changeset, memory.get_trust_domain]:
+            with pytest.raises(NotFoundError):
+                method('missing-synthetic-object')
+
+
+def test_plugin_catalog_and_public_execution_log_never_store_payload_text(memory, tmp_path):
+    plugin = tmp_path / 'plugin'
+    plugin.mkdir()
+    (plugin / 'aletheia-plugin.toml').write_text('''[plugin]
+name = "synthetic-catalog"
+version = "1.0.0"
+plugin_type = "extractor"
+entrypoint = "not_imported:Plugin"
+description = "Synthetic catalog probe"
+[compatibility]
+aletheia_min_version = "1.3.0"
+api_contract_version = "v1"
+[permissions]
+permissions_required = ["write_candidate"]
+external_network_access = false
+reads_memory_content = false
+writes_memory = true
+stores_data = false
+''')
+    installation = memory.install_plugin(plugin_path=str(plugin), trust_level='local')
+    assert any(row['id'] == installation.id for row in memory.list_plugins())
+    assert not memory.list_plugins(include_disabled=False)
+    record = memory.log_plugin_execution(plugin_id=installation.id, operation='synthetic-declined', namespace=memory.namespace,
+        status='blocked', input_payload={'text': 'input-private-canary'}, output_payload={'text': 'output-private-canary'})
+    serialized = json.dumps(asdict(record))
+    assert record.input_hash and record.output_hash and record.status == 'blocked'
+    assert 'input-private-canary' not in serialized and 'output-private-canary' not in serialized
+    assert record in memory.list_plugin_logs(plugin_id=installation.id)
+    assert not memory.list_claims(namespace=memory.namespace)

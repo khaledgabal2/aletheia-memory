@@ -23,6 +23,26 @@ METHODS = [(kind, name) for kind, cls in [('sync', AletheiaClient), ('async', As
            for name, method in inspect.getmembers(cls, inspect.isfunction) if not name.startswith('_')]
 
 
+def test_async_pagination_and_envelope_follow_real_response_then_clear_on_health(tmp_path):
+    from scripts.v1_4_phase0 import local_service, NAMESPACE
+    with local_service(tmp_path) as (service, url, tokens):
+        for text in ['User prefers concise notes.', 'User prefers careful reviews.']:
+            batch = service.memory.ingest(NAMESPACE, source_type='manual', content=text)
+            service.memory.extract_candidates(NAMESPACE, batch_id=batch.id)
+        client = AsyncAletheiaClient(url, tokens['reviewer'])
+        async def run():
+            rows = await client.list_candidates_for_review(namespace=NAMESPACE, limit=1)
+            assert len(rows) == 1
+            assert client.last_pagination['next_cursor']
+            assert client.last_envelope['data'] == rows
+            first_id = client.last_request_id
+            await client.health()
+            assert client.last_request_id != first_id
+            assert client.last_pagination is None
+            assert 'schema_version' in client.last_envelope['data']
+        asyncio.run(run())
+
+
 @pytest.mark.parametrize('kind,name', METHODS)
 def test_sdk_request_has_declared_route_and_cannot_mutate_without_permission(tmp_path, kind, name):
     with closing(Memory.open(str(tmp_path / 'sdk.db'), namespace='sdk/surface')) as m:

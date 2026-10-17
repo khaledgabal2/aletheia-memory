@@ -166,15 +166,19 @@ class SQLiteStore:
 
             self._savepoint_counter += 1
             savepoint = f"aletheia_sp_{self._savepoint_counter}"
-            self.connection.execute(f"SAVEPOINT {savepoint}")
             try:
-                yield
-            except BaseException:
-                self.connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-                self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
-                raise
-            else:
-                self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                self.connection.execute(f"SAVEPOINT {savepoint}")
+                try:
+                    yield
+                except BaseException:
+                    # SQLITE_FULL/IOERR can roll back the entire transaction,
+                    # destroying every savepoint. Preserve the original error.
+                    if self.connection.in_transaction:
+                        self.connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                        self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    raise
+                else:
+                    self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
             finally:
                 self._transaction_depth -= 1
 

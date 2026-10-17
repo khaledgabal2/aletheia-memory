@@ -73,7 +73,7 @@ release evidence and quality decisions are reviewed.
     `beta-fixes-interop2`. The initial interoperability fixture resolved the
     virtualenv Python symlink to base Python and lost site-packages; that harness
     failure is retained in interop1.
-11. Added a 144-case SDK request-facade sweep using actual handlers and independent
+11. Added a 142-case SDK request-facade sweep using actual handlers and independent
     OpenAPI paths, plus positive lifecycle tests for clustering, inference
     rejection, operator dismissal/snoozing, catalog persistence and membership
     removal. Added all 19 MCP tools through JSON-RPC. Retained fixture failures
@@ -84,7 +84,7 @@ release evidence and quality decisions are reviewed.
     from the local macOS result. Remaining native jobs are pending.
 
 13. Expanded focused verification: `beta-fixes-regression6` passed 304 tests,
-    including all 19 MCP tools and all 144 SDK request facades. The independent
+    including all 19 MCP tools and all 142 SDK request facades. The independent
     SDK route oracle is OpenAPI; positive domain semantics are tested separately.
 14. Browser2 passed all seven read and six review checks. Exercising all 17 console
     actions exposed four unhandled errors: Encryption/Support Bundle correctly
@@ -96,3 +96,43 @@ release evidence and quality decisions are reviewed.
     Path/home/TOML test setup, condition POSIX mode assertions on POSIX rather
     than certifying Windows ACLs, and refuse an existing dangling symlink before
     exclusive database reservation. Retain all original failures and repeat.
+
+16. Browser3 verified visible scoped-access refusal, working Shares/Conflicts,
+    no new unhandled browser errors and cleared logout state. Screenshots and
+    per-step states remain under `output/beta-fixes-browser3`.
+17. `beta-fixes-coverage4`: 1,069 passed, 85.0% statement / 65.8% branch coverage.
+    Bodies observed: Memory 317/317, sync SDK 75/75, async SDK 71/71 (including
+    four response properties), MCP registry 4/4. The request-facade sweep contains
+    142 methods (75 sync + 67 async); the earlier 144 count was incorrect.
+    Executed bodies do not establish every argument, branch or provider behavior.
+18. Route instrumentation observed 134/221 operations inside pytest. A separate
+    actual-socket sweep then exercised all 221 declared operations with explicit
+    missing-object/empty-state contracts. Its first fixture treated Prometheus
+    as JSON; corrected that format assumption. Disabled console/pairing responses
+    were not accepted as positive implementation evidence.
+19. The socket sweep exposed two additional product defects: HTTP compaction
+    attempted checkpoint/VACUUM inside the service transaction, and an absent
+    share-import file became HTTP 500. Idle-connection handling and a clear
+    validation error fix those paths. The reader denial remains unchanged.
+    `beta-fixes-http3` passed all 221 operations, with no unexpected server error,
+    retained namespace intact and database integrity intact. This is route/error
+    qualification; positive semantic workflows remain separately tested.
+20. `beta-fixes-resources1` filled only a disposable 64 MiB HFS+ disk image.
+    SQLite rolled back and recovered, but nested rollback masked SQLITE_FULL as
+    a missing-savepoint error. Preserve the original error after SQLite aborts
+    its entire transaction; restore depth even if creating a savepoint fails.
+    `beta-fixes-resources2` passed actual ENOSPC, SQLITE_FULL=13, atomic rollback,
+    integrity, subsequent write/reopen, and image detachment. Host storage was
+    never filled. Added deterministic regressions for both transaction failures.
+21. The macOS address-space limit attempt was refused by the OS and remains a
+    failed capability probe, not an application failure or a memory-pressure
+    pass. Linux CI now runs the bounded 256 MiB child-allocation/recovery probe.
+    Native resource phases select the host-supported probe explicitly.
+22. `beta-fixes-regression8` passed 312 focused tests, including the new HTTP and
+    transaction corrections and both real CLI lifecycle subprocesses. Native
+    Linux 3.11/3.12/3.13 and Windows 3.11/3.13 passed on the earlier fix revision.
+    macOS native children remained alive beyond the original 10-second lifecycle
+    deadline without startup output. The repeat allows a bounded minute and
+    captures periodic Python stacks; no startup-latency SLA is claimed. The next
+    native run is still required. CI now retains verbose case names and bounded
+    stall diagnostics instead of leaving an indefinite silent job.
