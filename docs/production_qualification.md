@@ -10,7 +10,9 @@ The model selects a complete, exact evidence event from schema-bound anchors.
 The host independently validates its identifier, Unicode character boundaries
 and byte-for-byte text equality. Blank subject, predicate, object and memory type
 are rejected. Full-event evidence retains cross-sentence qualifiers; candidate
-objects must preserve negation, attribution, temporal boundaries and exceptions.
+objects and typed suggested scope must preserve negation, attribution, temporal
+boundaries and exceptions. Human-approved temporal boundaries are carried into
+the promoted claim and scope.
 All output remains untrusted and pending review. Source instructions cannot
 approve, verify or promote candidates. Private/external and secret-source gates
 remain in effect.
@@ -127,3 +129,10 @@ readiness when investigating an exceeded target.
 14. Local3 was resource-deferred before any test executed: another owner's
     PID 92833 held the existing shared lock and had an actual Ollama connection.
     New temporal changes remain unverified until local/native repeats complete.
+
+15. Native `9010319` exposed three related mock/conformance failures: the bundled
+    mock extractor still emitted the obsolete `{type: review_required}` scope.
+    Corrected unqualified mock output to null without relaxing the scope validator.
+    Local4 passed 86 tests with two native-Windows skips and ten startup samples,
+    including lower/upper boundary promotion regressions. Models5 is running
+    prompt v6 against all twelve semantic cases; no quality pass is inferred yet.

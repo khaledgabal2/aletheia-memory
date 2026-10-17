@@ -405,7 +405,7 @@ def _candidate_from_event(event: dict[str, Any]) -> dict[str, Any]:
         },
         "suggested_confidence": 0.72,
         "suggested_importance": 0.45,
-        "suggested_scope": {"type": "review_required"},
+        "suggested_scope": None,
         "privacy_level": event.get("privacy_level", "personal"),
         "candidate_reason": "Structured mock LLM extraction from source evidence.",
         "suggested_categories": categories,
