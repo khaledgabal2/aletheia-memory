@@ -27,7 +27,7 @@ clear audit trail.
 - CLI command: `aletheia`
 - Latest release: [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/latest) and [PyPI](https://pypi.org/project/aletheia-memory/).
 - Maturity: beta; intended for development and evaluation, not production use.
-- Upcoming source: the [qualification report](docs/production_qualification.md) recommends production within its documented boundaries. This does not change the maturity of published 1.6.x packages; see [prepared release notes](docs/next_release_notes.md).
+- Upcoming source: the [qualification report](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/production_qualification.md) recommends production within its documented boundaries. This does not change the maturity of published 1.6.x packages; see [prepared release notes](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/next_release_notes.md).
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
