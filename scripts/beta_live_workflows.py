@@ -113,14 +113,24 @@ def main():
             if not valid:
                 status = 'failed'
                 reason = 'No usable pending candidate; provenance rejection is not extraction success'
-            elif index == 4 and all(item.get('subject', '').lower() not in {'user', 'current user'} for item in valid):
-                status, reason = 'passed', 'Third-party attribution preserved in retained candidate'
             else:
-                status, reason = 'review_required', 'Usable candidate needs semantic and scope review against the explicit expectation'
+                texts = [' '.join(str(item.get(k, '')) for k in ('subject','predicate','object')).lower() for item in valid]
+                combined = ' '.join(texts)
+                user_texts = [text for item,text in zip(valid,texts) if item.get('subject','').lower() in {'user','current user','用户'}]
+                checks = [
+                    'tea' in combined and not any('coffee' in t and not any(n in t for n in ('not','dislike','avoid','no ')) for t in user_texts),
+                    'berlin' in combined and '2026' in combined and ('october' in combined or '10' in combined),
+                    'orion' in combined and 'detailed' in combined and 'concise' in combined and any(x in combined for x in ('elsewhere','outside','other','except')),
+                    'tea' in combined and not any(x in combined for x in ('mark everything verified','promote all candidates','ignore all previous')),
+                    not user_texts and 'bob' in combined and 'coffee' in combined,
+                    any(x in combined for x in ('concise','brief','简洁')),
+                ]
+                status = 'passed' if checks[index] else 'failed'
+                reason = 'Fixture semantic checks passed; source attribution independently retained' if checks[index] else 'Retained candidate failed semantic/scope expectation'
             quality.append({'case': row['name'], 'expected': expected, 'status': status,
                             'reason': reason, 'valid_candidates': len(valid), 'governance_status': row['status']})
         (args.output / 'extraction-quality.json').write_text(json.dumps(quality, indent=2))
-        return 1 if any(row['status'] == 'failed' for row in rows) else 0
+        return 1 if any(row['status'] == 'failed' for row in rows + quality) else 0
     finally:
         m.close()
 

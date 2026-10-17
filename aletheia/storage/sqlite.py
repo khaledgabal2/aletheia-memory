@@ -59,13 +59,21 @@ class SQLiteStore:
     def open(cls, path: str, auto_migrate: bool = True) -> "SQLiteStore":
         if path != ":memory:":
             expanded_path = str(Path(path).expanduser())
-            Path(expanded_path).parent.mkdir(parents=True, exist_ok=True)
+            parent = Path(expanded_path).parent
+            parent_created = not parent.exists()
+            parent.mkdir(parents=True, exist_ok=True)
+            from aletheia.storage.private_files import create_private_file
+            if os.name == "nt":
+                from aletheia.storage.private_files import windows_private_directory, require_windows_private_directory
+                if parent_created:
+                    windows_private_directory(parent)
+                require_windows_private_directory(parent)
+                for suffix in ("", "-wal", "-shm", "-journal"):
+                    artifact = Path(expanded_path + suffix)
+                    if artifact.exists():
+                        require_windows_private_directory(artifact)
             try:
-                descriptor = os.open(
-                    expanded_path,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                )
+                descriptor = create_private_file(expanded_path)
             except FileExistsError:
                 pass
             else:

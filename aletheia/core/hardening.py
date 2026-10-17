@@ -2500,6 +2500,7 @@ def verified_backup_exists(memory):
 
 def _create_private_output(path):
     try:
-        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        from aletheia.storage.private_files import create_private_file
+        return create_private_file(path)
     except FileExistsError as exc:
         raise ValidationError("Output archive already exists; choose a new path.") from exc

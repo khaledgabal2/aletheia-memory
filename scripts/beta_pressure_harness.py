@@ -34,7 +34,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--live-models', action='store_true')
     parser.add_argument('--timeout', type=int, default=1800)
-    parser.add_argument('--phase', choices=['baseline', 'extended', 'targeted', 'diagnostics', 'regression', 'models', 'reliability', 'resources', 'http-surface', 'coverage', 'surface', 'interop'], default='baseline')
+    parser.add_argument('--phase', choices=['baseline', 'extended', 'targeted', 'diagnostics', 'regression', 'models', 'reliability', 'resources', 'http-surface', 'coverage', 'surface', 'interop', 'production'], default='baseline')
     parser.add_argument('--artifact-run', type=Path)
     parser.add_argument('--soak-seconds', type=int, default=120)
     args = parser.parse_args()
@@ -183,6 +183,11 @@ def main():
             step('bounded-resource-pressure', [py, 'scripts/beta_resource_pressure.py', '--output', str(output / 'resources'), mode], timeout=240)
         elif args.phase == 'reliability':
             step('reliability-pressure', [py, 'scripts/beta_reliability_pressure.py', '--output', str(output / 'reliability'), '--seconds', str(args.soak_seconds)], timeout=args.soak_seconds + 180)
+        elif args.phase == 'production':
+            step('production-regressions', [py, '-m', 'pytest', 'tests/test_production_blockers.py',
+                'tests/test_m12_governed_llm_memory.py', 'tests/test_storage_security.py',
+                '--junitxml=' + str(output / 'production.xml')])
+            step('startup-latency', [py, 'scripts/beta_startup_latency.py', '--output', str(output / 'startup'), '--samples', '5'], timeout=1200)
         elif args.phase == 'regression':
             step('regression', [py, '-m', 'pytest', 'tests/test_beta_pressure_regressions.py',
                 'tests/test_beta_surface_workflows.py', 'tests/test_beta_sdk_surface.py',
