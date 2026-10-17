@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import sqlite3
+import socketserver
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -3612,6 +3613,12 @@ class AletheiaDaemon:
 
         Handler.service = service
         class LocalHTTPServer(ThreadingHTTPServer):
+            def server_bind(self):
+                # HTTPServer's default performs synchronous reverse DNS. The
+                # bound numeric address is sufficient for this local service.
+                socketserver.TCPServer.server_bind(self)
+                self.server_name, self.server_port = self.server_address[:2]
+
             running = threading.Event()
             def serve_forever(self, *args, **kwargs):
                 self.running.set()

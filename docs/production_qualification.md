@@ -91,3 +91,39 @@ readiness when investigating an exceeded target.
    does not implement a context manager. Corrected the test to close explicitly;
    all failed receipts are retained. Started the production phase with the shared
    resource lock and no active external Ollama client observed.
+8. Local1 passed 83 tests (two Windows-only skips); five startup samples/profile
+   observed maxima 0.188 seconds new and 0.151 seconds current. This is local
+   evidence only. A model admission retry was resource-deferred, not an attempt.
+9. Native initial revision `96d8714`: Windows/Python 3.13 passed 1,076 tests
+   (17 POSIX skips), both native ACL cases including the restricted-token readable
+   positive control, and startup targets (maxima 1.165s new / 0.550s current).
+   Linux combinations passed. macOS 3.13 passed 1,091 tests with two Windows skips,
+   but current-database startup timed out at the unchanged 30-second hard limit;
+   fresh database startup was about 35 seconds. This is a qualification failure.
+10. Inspected the inherited HTTPServer.server_bind: it synchronously calls
+    socket.getfqdn on the bound host. A deterministic regression reproduced that
+    dependency with reverse DNS unavailable. The first reproducer also called a
+    nonexistent test cleanup method; corrected it to shutdown. Removed reverse
+    DNS from the daemon bind path; retain the numeric bound address as server_name.
+    Local2 passed 84 tests with two Windows skips and ten startup samples. Hosted
+    repeats are required to establish whether this explains the macOS delay.
+11. Added six held-out extraction probes before inspecting their model outputs:
+    a different negated beverage, dated warehouse move, another scoped project,
+    deletion instruction attack, different reported third party, and Spanish.
+    Models4 tests all twelve with real local providers; source is frozen for it.
+12. Models4 retained useful candidates for all twelve inputs; nine machine quality
+    checks passed. Two genuine failures omitted effective dates (office and
+    held-out warehouse). The attribution fixture also failed an overly strict
+    oracle that prohibited even a negative current-user statement; inspected
+    output correctly attributed coffee to Bob and explicitly denied a user
+    preference. Corrected the oracle to forbid affirmative user attribution,
+    matching the stated expectation, rather than forbidding all user mentions.
+13. Found a contract gap: suggested_scope was not exposed in the extraction
+    schema, and promotion discarded suggested temporal boundaries. Added typed
+    scope output and independent scope/time validation; carry approved date
+    boundaries into the resulting claim and its temporal scope. Added promotion
+    regressions for both lower and upper boundaries. Prompt v6 requests scope
+    rather than relying on a paraphrased object to carry every qualifier.
+14. Local3 was resource-deferred before any test executed: another owner's
+    PID 92833 held the existing shared lock and had an actual Ollama connection.
+    New temporal changes remain unverified until local/native repeats complete.

@@ -105,7 +105,7 @@ def test_extraction_prompt_keeps_unicode_and_schema_anchors(monkeypatch, tmp_pat
         def complete_json(**kwargs):
             seen.update(kwargs)
             output = {'candidates':[{'subject':'用户','predicate':'喜欢','object':'简洁的回答','memory_type':'preference',
-                'evidence_span':{'evidence_id':event.id,'start_char':0,'end_char':len(event.content),'text':event.content}}]}
+                'suggested_scope': None, 'evidence_span':{'evidence_id':event.id,'start_char':0,'end_char':len(event.content),'text':event.content}}]}
             validate(output,kwargs['schema'])
             return output
         monkeypatch.setattr(extractor.provider,'complete_json',complete_json)
@@ -119,3 +119,43 @@ def test_extraction_prompt_keeps_unicode_and_schema_anchors(monkeypatch, tmp_pat
             'evidence_span':{'evidence_id':event.id,'start_char':0,'end_char':len(event.content)-1,'text':event.content}}]}
         with pytest.raises(ValueError,match='does not match'):
             extractor._drafts_from_output(altered,evidence_by_id={event.id:event})
+
+
+def test_daemon_readiness_does_not_wait_for_reverse_dns(monkeypatch, tmp_path):
+    import socket
+    import threading
+    import json
+    from urllib.request import urlopen
+    from aletheia.models import ServiceConfig
+    from aletheia.service.http import AletheiaDaemon
+    def blocked_dns(*args):
+        raise AssertionError('Reverse DNS must not be on the daemon startup path')
+    monkeypatch.setattr(socket, 'getfqdn', blocked_dns)
+    daemon = AletheiaDaemon(ServiceConfig(db_path=str(tmp_path/'ready.db'),port=0,auto_migrate=True,
+        advertise_local=False,local_pairing_enabled=False))
+    try:
+        host,port = daemon.start()
+        thread = threading.Thread(target=daemon.httpd.serve_forever,daemon=True)
+        thread.start()
+        with urlopen(f'http://{host}:{port}/v1/ready',timeout=2) as response:
+            assert json.load(response)['data']['ready'] is True
+    finally:
+        daemon.shutdown()
+
+
+@pytest.mark.parametrize('scope', [
+    {'type':'temporal','valid_from':'2026-10-01T00:00:00+00:00','valid_to':None},
+    {'type':'temporal','valid_from':None,'valid_to':'2026-10-01T00:00:00+00:00'},
+])
+def test_approved_candidate_preserves_temporal_boundaries(tmp_path, scope):
+    with closing(Memory.open(str(tmp_path/'temporal.db'))) as memory:
+        batch = memory.ingest('test',source_type='manual',content='Remember that the office is Berlin since October 2026.')
+        run = memory.extract_candidates('test',batch_id=batch.id,extractor='mock')
+        candidate = memory.list_candidates('test',extraction_run_id=run.id)[0]
+        memory.review_candidate(candidate.id,decision='edit',reason='Review source time boundary',edits={'suggested_scope':scope})
+        memory.review_candidate(candidate.id,decision='validate',reason='Human source verification')
+        claim = memory.promote_candidate(candidate.id,reason='Human approval')
+        assert claim.valid_from == scope['valid_from']
+        assert claim.valid_to == scope['valid_to']
+        scopes = memory.list_claim_scopes(claim.id)
+        assert any(s.valid_from == scope['valid_from'] and s.valid_to == scope['valid_to'] for s in scopes)

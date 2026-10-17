@@ -1870,6 +1870,9 @@ class Memory:
             self._evidence_trust_adjusted_confidence(candidate.evidence_ids),
         )
         project_id = self._project_id_for_candidate(candidate)
+        scope = candidate.suggested_scope or {}
+        # Suggested boundaries are part of the human-approved candidate, not
+        # disposable display metadata. Preserve them in the resulting claim.
         claim = self.write_claim(
             namespace=candidate.namespace,
             subject=candidate.subject,
@@ -1882,6 +1885,8 @@ class Memory:
             half_life_days=candidate.suggested_half_life_days,
             importance=candidate.suggested_importance,
             project_id=project_id,
+            valid_from=scope.get("valid_from"),
+            valid_to=scope.get("valid_to"),
         )
         if target_status == "core" and claim.status != "core":
             self.promote_claim(claim.id, "core", reason=reason, force=force)
@@ -1946,11 +1951,13 @@ class Memory:
                 details={"candidate_id": candidate_id, "reason": reason},
             )
         scope = candidate.suggested_scope or {}
-        if scope and scope.get("type") in SCOPE_TYPES and scope.get("applies_when"):
+        if scope and scope.get("type") in SCOPE_TYPES and any(scope.get(k) for k in ("applies_when", "valid_from", "valid_to")):
             self.scope_claim(
                 claim.id,
                 scope_type=scope["type"],
                 applies_when=scope.get("applies_when"),
+                valid_from=scope.get("valid_from"),
+                valid_to=scope.get("valid_to"),
                 reason="Candidate suggested scope during promotion.",
             )
             claim = self.read_claim(claim.id)
