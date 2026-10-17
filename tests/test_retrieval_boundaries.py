@@ -133,11 +133,14 @@ def test_hidden_content_does_not_consume_context_budget(memory, endpoint):
 @pytest.mark.parametrize("backing", ["file", "memory"])
 @pytest.mark.parametrize("authentication_delay", [0, .5])
 def test_provider_wait_does_not_block_health_or_an_unrelated_write(tmp_path, monkeypatch, backing, authentication_delay):
-    entered, release = threading.Event(), threading.Event()
+    entered, release, provider_wait_ended = threading.Event(), threading.Event(), threading.Event()
     def slow(self, **kwargs):
         entered.set()
-        assert release.wait(5), "fixture provider was not released"
-        return {"original_query": WORD, "expanded_terms": [WORD]}
+        try:
+            assert release.wait(5), "fixture provider was not released"
+            return {"original_query": WORD, "expanded_terms": [WORD]}
+        finally:
+            provider_wait_ended.set()
     monkeypatch.setattr(MockLLMProvider, "complete_json", slow)
     with closing(Memory.open(":memory:" if backing == "memory" else str(tmp_path / "server.db"), namespace=NS)) as memory:
         server, _, call = service(memory)
@@ -166,7 +169,7 @@ def test_provider_wait_does_not_block_health_or_an_unrelated_write(tmp_path, mon
                 assert write.result(timeout=.75)[0] == 200
                 # Completion must precede provider release; an expired fixture
                 # or an accidental provider completion must never yield a pass.
-                assert not release.is_set() and not pending.done()
+                assert not release.is_set() and not provider_wait_ended.is_set() and not pending.done()
             finally:
                 release.set()
             assert pending.result(timeout=3)[0] == 200
