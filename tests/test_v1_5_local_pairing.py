@@ -276,4 +276,3 @@ def test_cli_registration_shutdown_and_crash_lease(tmp_path, crash):
             process.kill()
         process.wait(timeout=10)
         startup_log.close()
-            process.wait(timeout=5)
