@@ -4,6 +4,10 @@ This is the follow-up to the seven findings in `beta_pressure_findings.md`.
 It records changes and verification separately from the original campaign.
 No production release, tag or publication is authorized by this report.
 
+The subsequent production-blocker campaign and current recommendation are in
+[`production_qualification.md`](production_qualification.md). The decision below
+is the historical seven-finding checkpoint.
+
 ## Final campaign decision — October 16, 2026
 
 The seven reported defects are fixed and the bounded follow-up campaign is

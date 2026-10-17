@@ -1,8 +1,47 @@
 # Remaining production qualification
 
 This follow-up addresses the blockers retained by the beta pressure campaign.
-Results are pending until recorded below; implementation is not qualification.
+The bounded campaign is complete; verified results and limitations follow.
 No release is authorized by this document.
+
+
+## Final recommendation — October 17, 2026
+
+**Recommend a production release within the documented support boundaries.**
+The three retained blockers have fixes, regression coverage and terminal evidence
+on implementation `6256f35`. No demonstrated blocker remains in this campaign.
+This is a release recommendation, not authorization to merge, tag or publish.
+
+| Gate | Verified result |
+| --- | --- |
+| Full local suite and workflows | 1,104 passed, three Windows skips; all 14 scorecards and adversarial pressure passed |
+| Real local model quality | Eight advisory tasks and twelve extraction quality/governance probes passed; every triple/scope manually reviewed |
+| Native platforms | All nine Linux/macOS/Windows × Python 3.11/3.12/3.13 jobs passed, plus build/artifact/toolchain gates |
+| Windows isolation | Restricted-token readable positive control, private DB/WAL/SHM/archive read/write denial, shared-parent refusal and private scratch/reservation passed |
+| Startup | All 90 measurements passed unchanged budgets; maxima 1.297s new / 0.562s current |
+| Distribution/interfaces | Fresh wheel/sdist README, installed CLI/upgrade/recovery, TypeScript/contracts, official MCP SDK and HTTP route checks passed |
+| Recovery/load | Owned 64 MiB disk-full recovery, Linux bounded memory recovery, eight-process 400 retrievals and SQLite FULL recovery passed |
+| Sustained lifecycle | 1,800.815 measured seconds, 2,540 cycles, integrity and clean shutdown passed; source stable |
+
+Native evidence: [run 39006558182](https://github.com/khaledgabal2/aletheia-memory/actions/runs/39006558182).
+Local receipts remain in `output/production-blockers-*`, indexed by
+`output/production-blockers-continuation.json`; raw synthetic databases and
+credentials are deliberately uncommitted. Documentation-only finalization does
+not change the tested Python implementation. Statement coverage is 84.60% and
+branch coverage 65.69%; neither body execution nor help/refusal execution proves
+all semantics. The earlier seven-finding decision remains historical.
+
+Residual limits: all model proposals require human review; twelve probes do not
+establish general extraction accuracy. Calendar/project source anchoring uses a
+bounded grammar. Windows isolation assumes trusted ancestors and another standard
+principal, excluding administrator/SYSTEM; local pairing remains POSIX-only.
+Startup budgets cover the stated small-database baseline and five samples/profile,
+not population p95, provider loading or large-database migrations. One initial
+Windows 3.12 health-concurrency test exceeded 750ms; an unchanged repeat passed.
+Its cause remains unproven and should be monitored rather than represented as a
+fixed defect. The soak accumulated monotonic execution across host suspensions;
+it does not qualify uninterrupted wall-clock service availability or suspend/resume
+latency. No release publication occurred.
 
 ## Extraction contract
 
@@ -227,3 +266,71 @@ readiness when investigating an exceeded target.
     counted. Local9 is testing the final preparation; final native/full/artifact
     repeats remain pending. The source calendar parser now uses fixed English
     month names independently of the host locale.
+
+29. Frozen `6256f35` full coverage passed 1,104 tests with three native-Windows
+    skips, all fourteen milestone scorecards and adversarial pressure. Source
+    stability passed. Statement coverage is 84.60%, branch coverage 65.69%
+    (combined coverage.py metric 80.04%); this does not establish exhaustive
+    semantic correctness. Exact native run 39006558182 passed all six Linux/macOS
+    jobs and build/toolchain/artifact jobs; Windows remains pending. Models10
+    started on this exact frozen revision after no active external Ollama client
+    or lock holder was observed. Manual twelve-case review remains required.
+
+30. Exact `6256f35` Models10 passed the real recipe, eight advisory tasks and all
+    twelve quality/governance cases with stable source. Manually inspected every
+    triple and attached scope: no invented opposite date bounds, correct project
+    inclusion/exclusion, source attribution and multilingual meaning retained.
+    Native Windows 3.11/3.13 passed; Windows 3.12 failed one concurrency test
+    (health future exceeded 750ms), with 1,088 passed and 18 skips. Retained its
+    full log and requested an unchanged failed-job repeat to distinguish a
+    reproducible defect from scheduling variability; no deadline was relaxed.
+    Extended fresh-artifact/interface qualification started on frozen source.
+
+31. Extended1 passed all 25 frozen-source steps: fresh wheel/sdist and README,
+    installed CLI, prior-version upgrade/recovery, SDK interfaces, TypeScript and
+    discovery/read/review/agent contracts. Official MCP SDK interoperability
+    passed against that new artifact; both source-stability checks passed. Public
+    body inventory observed all 317 Memory, 75 sync and 71 async members (the latter
+    includes four response properties), not exhaustive semantic qualification.
+    Retained Windows 3.11 native log: 1,089 passed/18 POSIX skips; actual ACL
+    restricted-token positive control/denials, broad-parent refusal and private
+    scratch/reservation passed. All ten startup samples passed, maximum 0.547s
+    for each profile. Windows 3.12 unchanged repeat remains pending.
+
+32. Exact-source HTTP1 passed all 221 real-socket route contracts; these include
+    empty/refusal paths rather than exhaustive positive semantics. Resources1
+    passed bounded disk-full/recovery using the owned 64 MiB image. Both receipts
+    confirm stable source. Started the current-revision 1,800-second reliability
+    soak with saved logs and shared resource admission; source remains frozen.
+    Windows 3.12 unchanged native repeat remains pending.
+
+33. Native run 39006558182 completed successfully at `6256f35`: all nine OS/Python
+    combinations and build/artifact/toolchain jobs passed. Windows 3.12 unchanged
+    repeat passed 1,089 tests/18 POSIX skips, including the previously timed-out
+    concurrency case and all native ACL cases. The original 750ms timeout is
+    retained; a successful repeat does not establish its root cause. All ninety
+    startup measurements passed unchanged budgets: global maximum 1.297s new and
+    0.562s current. Linux bounded 256 MiB allocation failure and subsequent write,
+    reopen and integrity checks passed. Full native logs and summary are retained.
+34. At collection the owned soak remained active: latest progress 900 cycles and
+    1,594 monotonic seconds remaining despite about 31 minutes of wall time. This
+    is not a terminal pass and wall time is not substituted for the requested
+    sustained execution. Keep the owned process running and collect its terminal
+    receipt before the final recommendation; do not start a duplicate.
+
+35. Later collection still found the owned soak active: 1,600 cycles and 1,176
+    monotonic seconds remaining. Only about 40 measured seconds elapsed between
+    collections separated by over two wall-clock hours. Host assertions showed
+    no persistent sleep prevention for the soak. Attached `caffeinate -i -w 4308`
+    to prevent idle system sleep only while the existing child remains alive; it
+    exits automatically with that process. No duplicate campaign or changed
+    timing requirement was introduced. Terminal cleanup/source stability and
+    the final recommendation remain pending.
+
+36. Collected terminal Soak1: all three cases passed, including 2,540 complete
+    guarded review/recall/feedback/context cycles in 1,800.815 measured seconds.
+    Claim-count and SQLite integrity assertions passed; cleanup reports stopped
+    and the harness reports source_stable=true. No running test is counted as a
+    pass. All planned current-revision checks are now terminal. Finalized the
+    scoped production recommendation and reusable journal; preserve every earlier
+    failed, invalidated and resource-deferred receipt separately.

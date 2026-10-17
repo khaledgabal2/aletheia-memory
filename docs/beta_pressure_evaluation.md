@@ -57,6 +57,32 @@ scorecards create their own temporary databases; the new pressure cases retain
 their disposable databases for diagnosis. Synthetic records and test credentials
 must stay out of commits. Interrupted/running steps are never counted as passes.
 
+## Production qualification repeats
+
+The continuation journal and acceptance boundaries are in
+[`production_qualification.md`](production_qualification.md). Use fresh unique
+output directories and execute these phases serially on frozen Python source:
+`production`, `coverage`, `models --live-models`, `extended`, `interop`,
+`http-surface`, `resources`, and `reliability --soak-seconds 1800`. Pass
+`--artifact-run` pointing at the new extended output for interop. Coverage needs
+coverage.py; interop needs the official MCP SDK in the selected interpreter.
+The local tooling interpreter used for this campaign is recorded in the local
+manifest; it is not a portable installation requirement.
+
+Review every real extraction candidate triple **and its attached scope**, including
+negation, reported attribution, date direction, absence of invented opposite
+bounds and project inclusion/exclusion. Machine semantic checks alone previously
+missed wrong scopes; retain both the failure and corrected oracle evidence.
+Native Windows ACL checks must execute on Windows with a readable restricted-token
+positive control. POSIX skips cannot qualify that boundary.
+
+The reliability duration uses monotonic execution time. Host suspension can make
+wall-clock completion much longer. Inspect `reliability/soak-progress.json`, then
+require a terminal passed receipt, `source_stable=true`, all cases passed and
+`cleanup.json` confirming shutdown. A process-scoped temporary sleep assertion
+can help unattended execution but cannot prove continuous execution through every
+host suspension. Never count a running campaign or elapsed wall time as a pass.
+
 ## Initial coverage map (historical)
 
 | Area | Baseline evidence | Additional adversarial evidence |
