@@ -112,7 +112,7 @@ class M4Runner:
             }.issubset(default_rules)
             assert memory.list_inferences(NAMESPACE) == []
             assert memory.list_reflections(namespace=NAMESPACE) == []
-            return f"schema_version=1.3.0, m4_tables={len(required)}, default_rules={len(default_rules)}"
+            return f"schema_version={SCHEMA_VERSION}, m4_tables={len(required)}, default_rules={len(default_rules)}"
         finally:
             memory.close()
 

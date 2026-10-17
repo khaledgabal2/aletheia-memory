@@ -496,6 +496,19 @@ def test_cli_context_sessions_projects_and_migrate(tmp_path, capsys):
     assert session_id in capsys.readouterr().out
 
 
+def test_supported_initialization_uses_wal_before_migration(tmp_path, monkeypatch):
+    from aletheia.storage import SQLiteStore
+    migrate = SQLiteStore.migrate
+    observed = []
+    def checked(store):
+        observed.append(store.connection.execute('PRAGMA journal_mode').fetchone()[0])
+        return migrate(store)
+    monkeypatch.setattr(SQLiteStore, 'migrate', checked)
+    memory = Memory.open(str(tmp_path / 'fresh.db'))
+    memory.close()
+    assert observed == ['wal']
+
+
 def test_unsupported_migration_preserves_claims_and_audit(tmp_path):
     db_path = tmp_path / "m0.db"
     _create_minimal_m0_database(db_path)

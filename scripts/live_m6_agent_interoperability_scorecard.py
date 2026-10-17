@@ -110,7 +110,7 @@ class M6Runner:
 
     def run(self) -> list[CaseResult]:
         cases: list[tuple[str, str, str, Callable[[], str]]] = [
-            ("Migration", "M5-compatible database migrates to 1.3.0 with M6 tables", "API", self.case_migration),
+            ("Migration", "Compatible schema initializes with M6 tables", "API", self.case_migration),
             ("Migration", "Migration is idempotent and creates no clients, tokens, daemon, or MCP process", "API", self.case_migration_idempotent),
             ("Auth", "API clients and scoped tokens can be created explicitly", "API", self.case_create_clients_tokens),
             ("Auth", "Raw token is shown once and only token hashes are stored", "API", self.case_token_hash_storage),

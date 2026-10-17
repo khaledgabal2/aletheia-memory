@@ -136,3 +136,25 @@ release evidence and quality decisions are reviewed.
     captures periodic Python stacks; no startup-latency SLA is claimed. The next
     native run is still required. CI now retains verbose case names and bounded
     stall diagnostics instead of leaving an indefinite silent job.
+
+23. The transaction retry guard now refuses further Memory writes inside an
+    enclosing scope that SQLite already aborted, even if application code caught
+    the inner error. A regression demonstrates that retry cannot escape the
+    failed outer transaction. The harness now compares Python source hashes at
+    start/end and invalidates any run with changed source. Coverage5 executed
+    1,072 tests successfully but is superseded: its separate source-stability
+    audit records edits during execution. It is not final-revision evidence.
+24. Regression9 was resource-deferred before any test ran: another owner's Lucy3
+    job held the existing shared lock and an actual Ollama connection. No process,
+    model or profile belonging to that job was changed. Pending local checks must
+    resume in new output directories at the next available opportunity.
+25. Review found that the byte-preservation correction delayed WAL until after
+    normal initialization. Restore early WAL behind a read-only supported-version
+    preflight, sharing the same range validator with migration. This preserves
+    refused database bytes without imposing DELETE-journal initialization costs.
+    Added a regression asserting WAL is active before valid migration. Native
+    startup and platform timing repeats are required to confirm the performance.
+26. Source is prepared for frozen validation; final local repeat, fresh artifacts,
+    complete installed CLI help sweep, current native matrix, Linux memory probe
+    and 30-minute lifecycle soak remain pending until their receipts are terminal.
+    Pending, deferred and source-invalidated receipts never count as passing.

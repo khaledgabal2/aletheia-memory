@@ -86,7 +86,7 @@ class M7Runner:
 
     def run(self) -> list[CaseResult]:
         cases: list[tuple[str, str, str, Callable[[], str]]] = [
-            ("Migration", "M6 database migrates to 1.3.0 with M7 tables and no user side effects", "API", self.case_migration),
+            ("Migration", "Compatible schema initializes with M7 tables and no user side effects", "API", self.case_migration),
             ("CLI", "M7 console login-token, metrics, notifications, reviews, traces, and reports commands run", "CLI", self.case_cli_groups),
             ("Console", "/console is explicitly enabled and console login creates a one-time session", "HTTP", self.case_console_enablement_login),
             ("Security", "Console session requires CSRF for writes and namespace grants are enforced", "HTTP", self.case_console_security),

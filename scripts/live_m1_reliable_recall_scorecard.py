@@ -42,7 +42,7 @@ class M1Runner:
     def run(self) -> list[CaseResult]:
         cases: list[tuple[str, str, Callable[[], str]]] = [
             ("Command Surface", "M1 CLI commands are exposed", self.case_help),
-            ("Migration", "M0 database migrates to 1.3.0", self.case_m0_migration),
+            ("Migration", "Unsupported M0 migration is refused without changing bytes", self.case_m0_migration),
             ("Setup", "Initialize clean M1 database", self.case_init),
             ("Projects", "Create and inspect project", self.case_project_create),
             ("Sessions", "Start project session", self.case_session_start),
@@ -81,7 +81,7 @@ class M1Runner:
     def case_init(self) -> str:
         health = json.loads(self.cli(["init"]).stdout)
         assert health["schema_version"] == SCHEMA_VERSION
-        return "schema_version=1.3.0"
+        return f"schema_version={SCHEMA_VERSION}"
 
     def case_project_create(self) -> str:
         created = json.loads(

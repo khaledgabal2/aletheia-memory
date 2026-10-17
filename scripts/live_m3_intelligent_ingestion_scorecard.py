@@ -99,7 +99,7 @@ class M3Runner:
             assert required.issubset(names)
             labels = {row["label"] for row in memory.list_categories()}
             assert {"preference", "project", "communication_style"}.issubset(labels)
-            return f"schema_version=1.3.0, m3_tables={len(required)}"
+            return f"schema_version={SCHEMA_VERSION}, m3_tables={len(required)}"
         finally:
             memory.close()
 

@@ -59,7 +59,7 @@ class M2Runner:
             ("Duplicates", "Duplicate detection writes relationship without dispute", "API", self.case_duplicate_detection),
             ("Explanation", "Explain claim includes confidence, scope, history, evidence", "API", self.case_explain_claim),
             ("Supersession", "Supersede claim preserves old evidence and relationship", "CLI/API", self.case_supersede),
-            ("Migration", "M1-style database migrates idempotently to M2", "CLI/API", self.case_m1_to_m2_migration),
+            ("Migration", "Unsupported M1 migration is repeatedly refused without changing bytes", "CLI/API", self.case_m1_to_m2_migration),
         ]
         for category, case, interface, fn in cases:
             try:
@@ -95,7 +95,7 @@ class M2Runner:
             assert required.issubset(names)
         finally:
             memory.close()
-        return "schema_version=1.3.0 and M2 tables present"
+        return f"schema_version={SCHEMA_VERSION} and M2 tables present"
 
     def case_confidence_show(self) -> str:
         remembered = self.cli(

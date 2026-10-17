@@ -187,6 +187,7 @@ def main():
             step('regression', [py, '-m', 'pytest', 'tests/test_beta_pressure_regressions.py',
                 'tests/test_beta_surface_workflows.py', 'tests/test_beta_sdk_surface.py',
                 'tests/test_v1_5_local_pairing.py::test_cli_registration_shutdown_and_crash_lease',
+                'tests/test_m1_reliable_recall.py',
                 'tests/test_m2_memory_integrity.py', 'tests/test_m12_governed_llm_memory.py',
                 'tests/test_m6_memory_service.py', 'tests/test_certification_evidence.py',
                 '--junitxml=' + str(output / 'regression.xml')])
@@ -234,6 +235,13 @@ def main():
                                              '--python', str(artifacts / 'installed/bin/python'),
                                              '--output', str(output / 'artifacts.json')])
         report['status'] = 'failed' if any(s['status'] != 'passed' for s in report['steps']) else 'passed'
+        report['source_sha256_after'] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for base in ['aletheia', 'scripts', 'tests'] for p in sorted((ROOT / base).rglob('*.py'))}
+        report['changed_source_files'] = sorted(name for name in set(report['source_sha256']) | set(report['source_sha256_after'])
+            if report['source_sha256'].get(name) != report['source_sha256_after'].get(name))
+        report['source_stable'] = not report['changed_source_files']
+        if not report['source_stable']:
+            report['status'] = 'invalidated_source_changed'
         report['finished'] = datetime.now(timezone.utc).isoformat()
         save()
         return 0 if report['status'] == 'passed' else 1

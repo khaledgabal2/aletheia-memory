@@ -90,6 +90,20 @@ def test_failed_savepoint_creation_never_leaks_transaction_depth(memory):
     assert remember(memory).status == 'active'
 
 
+def test_caught_engine_abort_cannot_commit_new_writes_inside_failed_outer_scope(memory):
+    with memory.store.transaction():
+        try:
+            with memory.store.transaction():
+                memory.store.connection.rollback()
+                raise sqlite3.OperationalError('Synthetic engine abort')
+        except sqlite3.OperationalError:
+            pass
+        with pytest.raises(sqlite3.OperationalError, match='Enclosing transaction was aborted'):
+            remember(memory)
+    assert not memory.list_claims(namespace=memory.namespace)
+    assert remember(memory).status == 'active'
+
+
 @pytest.mark.parametrize('value', [True, False, '1', float('nan'), float('inf'), None])
 def test_feedback_rejects_invalid_strength_without_mutation(memory, value):
     claim = remember(memory)
