@@ -147,7 +147,7 @@ def test_provider_wait_does_not_block_health_or_an_unrelated_write(tmp_path, mon
         authenticated = {path: threading.Event() for path in ("/v1/health", "/v1/remember")}
         authenticate = server._authenticate
         def measured_authentication(method, endpoint, headers, **kwargs):
-            if endpoint in authenticated:
+            if endpoint in authenticated and kwargs.get("previous") is None:
                 # A separate preparation phase: serial authentication can be slow
                 # without being blocked on provider I/O. Keep its own bound and
                 # retain the original post-preparation response deadline below.

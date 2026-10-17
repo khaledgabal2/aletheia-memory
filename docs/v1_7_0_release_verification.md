@@ -36,3 +36,10 @@ then retains the original 750ms response deadlines and requires both operations
 to finish before the deliberately paused provider is released. Delayed-authentication
 cases exercise this distinction. This is provider-isolation evidence, not a
 750ms end-to-end health SLA; startup acceptance budgets are unchanged.
+
+The focused four-case preparation/response regression passed locally. An isolated
+negative control that deliberately held the service lock across provider work
+failed at the expected preparation assertion, confirming actual provider blocking
+is still detected. The injected delay applies only to initial authentication;
+rechecks retain normal behavior. An earlier test-fixture revision delayed rechecks
+as well and failed; its receipt is retained separately from the corrected result.
