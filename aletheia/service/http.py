@@ -149,6 +149,7 @@ CONSOLE_HTML = """<!doctype html>
         <button id="logout">Log Out</button>
       </div>
       <p id="sessionState">Checking session...</p>
+      <p id="actionStatus" role="status" aria-live="polite"></p>
     </section>
     <section>
       <h2>Dashboard</h2>
@@ -216,6 +217,8 @@ CONSOLE_HTML = """<!doctype html>
       sessionStorage.removeItem("aletheia_console_csrf");
       $("loginToken").value = "";
       $("traceQuery").value = "";
+      $("actionStatus").textContent = "";
+      $("sessionState").textContent = "Console authentication required.";
       $("metrics").replaceChildren();
       for (const id of ["reviews", "traceOutput", "hardeningOutput", "platformOutput", "federationOutput"]) {
         $(id).textContent = "";
@@ -312,11 +315,27 @@ CONSOLE_HTML = """<!doctype html>
       $("federationOutput").textContent = JSON.stringify(await api("/v1/peers"), null, 2);
     };
     $("federationShares").onclick = async () => {
-      $("federationOutput").textContent = JSON.stringify(await api("/v1/shares"), null, 2);
+      $("federationOutput").textContent = JSON.stringify(await api("/v1/shares?namespace=" + encodeURIComponent($("namespace").value || "default")), null, 2);
     };
     $("federationConflicts").onclick = async () => {
-      $("federationOutput").textContent = JSON.stringify(await api("/v1/sync/conflicts"), null, 2);
+      $("federationOutput").textContent = JSON.stringify(await api("/v1/sync/conflicts?namespace=" + encodeURIComponent($("namespace").value || "default")), null, 2);
     };
+    for (const id of ["login", "logout", "refresh", "snapshot", "generate", "trace", "encryptStatus",
+                      "integrityCheck", "readinessCheck", "supportBundle", "contracts", "compatibility",
+                      "doctor", "conformance", "v1Gate", "federationStatus", "federationPeers",
+                      "federationShares", "federationConflicts"]) {
+      const action = $(id).onclick;
+      $(id).onclick = async () => {
+        const generation = sessionGeneration;
+        $("actionStatus").textContent = "";
+        try { await action(); }
+        catch (error) {
+          if (generation === sessionGeneration && !error.staleSession) {
+            $("actionStatus").textContent = "Request failed: " + error.message;
+          }
+        }
+      };
+    }
     refresh();
   </script>
 </body>

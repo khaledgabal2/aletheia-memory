@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from aletheia.cli.main import main
 
@@ -15,7 +16,7 @@ def test_cli_installed_docs_are_discoverable(capsys):
 
     assert main(["docs", "path", "core-concepts"]) == 0
     path_output = capsys.readouterr().out
-    assert path_output.strip().endswith("docs/core_concepts.md")
+    assert Path(path_output.strip()).parts[-2:] == ("docs", "core_concepts.md")
 
     assert main(["docs", "show", "index"]) == 0
     show_output = capsys.readouterr().out

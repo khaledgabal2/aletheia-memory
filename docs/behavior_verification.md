@@ -119,3 +119,14 @@ boundaries and does not certify runtime behavior.
 
 Normal regression coverage is in `tests/test_policy_execution.py`,
 `tests/test_sync_resolution_effects.py`, and `tests/test_certification_evidence.py`.
+
+
+## Platform boundary
+
+Native CI exercises Linux, macOS and Windows on Python 3.11–3.13. Local pairing
+and its owner/0700/0600 protections require POSIX and are explicitly unsupported
+on Windows. POSIX mode assertions apply only on POSIX; passing Windows functional
+tests does not qualify NTFS ACL isolation for databases, backups or recovery
+files. That security boundary needs independent Windows ACL evidence before a
+Windows private-storage production claim. Hashed compatibility fixtures are
+checked out with LF endings on every platform.

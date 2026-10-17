@@ -17,6 +17,10 @@ def reserve_database(path):
     if str(path) == ":memory:":
         raise ValidationError("--new requires a filesystem database path.")
     target = Path(path).expanduser()
+    # Windows CRT exclusive creation can follow an existing dangling symlink.
+    # Refuse an existing directory entry explicitly as well as using O_EXCL.
+    if target.exists() or target.is_symlink():
+        raise ValidationError("Database destination already exists. Choose a new path; nothing was overwritten.")
     for suffix in ("-wal", "-shm", "-journal"):
         companion = Path(str(target) + suffix)
         if companion.exists() or companion.is_symlink():

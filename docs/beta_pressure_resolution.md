@@ -82,3 +82,17 @@ release evidence and quality decisions are reviewed.
     advertisement startup cases. The old tests discarded subprocess output;
     added saved startup diagnostics for the repeat. No platform pass is inferred
     from the local macOS result. Remaining native jobs are pending.
+
+13. Expanded focused verification: `beta-fixes-regression6` passed 304 tests,
+    including all 19 MCP tools and all 144 SDK request facades. The independent
+    SDK route oracle is OpenAPI; positive domain semantics are tested separately.
+14. Browser2 passed all seven read and six review checks. Exercising all 17 console
+    actions exposed four unhandled errors: Encryption/Support Bundle correctly
+    refuse scoped access but did not explain the refusal; Shares/Conflicts omit
+    their required namespace. Add visible action-error status and encoded selected
+    namespace; preserve server authorization. Logout clears all results/inputs.
+15. Initial native Windows 3.12 run: 884 passed, 17 expected POSIX pairing skips,
+    14 failures. LF checkout fixes hashed fixture transformations. Correct native
+    Path/home/TOML test setup, condition POSIX mode assertions on POSIX rather
+    than certifying Windows ACLs, and refuse an existing dangling symlink before
+    exclusive database reservation. Retain all original failures and repeat.

@@ -301,6 +301,12 @@ vm.createContext(ctx); vm.runInContext(SOURCE+';globalThis.probe={api,clearSessi
  assert.equal(document.getElementById('loginToken').value,'');assert.equal(document.getElementById('traceQuery').value,'');
  document.getElementById('traceOutput').textContent='canary';ctx.fetch=async()=>({ok:false,status:401,statusText:'Unauthorized',json:async()=>({})});
  await assert.rejects(ctx.probe.api('revoked'));assert.equal(document.getElementById('traceOutput').textContent,'');
+ const requested=[];ctx.fetch=async(path)=>{requested.push(path);return {ok:false,status:403,statusText:'Forbidden',json:async()=>({error:{message:'Explicit scoped operator refusal'}})};};
+ await document.getElementById('encryptStatus').onclick();assert.match(document.getElementById('actionStatus').textContent,/Request failed: Explicit scoped operator refusal/);
+ document.getElementById('namespace').value='project/with space';
+ await document.getElementById('federationShares').onclick();await document.getElementById('federationConflicts').onclick();
+ assert(requested.includes('/v1/shares?namespace=project%2Fwith%20space'));assert(requested.includes('/v1/sync/conflicts?namespace=project%2Fwith%20space'));
+ ctx.probe.clearSession();assert.equal(document.getElementById('actionStatus').textContent,'');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''.replace('SOURCE', json.dumps(script))
     result = subprocess.run([node, '-e', harness], capture_output=True, text=True, timeout=30)

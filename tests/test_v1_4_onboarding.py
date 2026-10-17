@@ -160,7 +160,7 @@ def test_configuration_errors_and_optional_models_never_leak_values(tmp_path, mo
     db = tmp_path / "sensitive-path-marker.db"
     Memory.open(str(db)).close()
     config = tmp_path / "settings.toml"
-    config.write_text('[server]\ndb = "' + str(db) + '"\n')
+    config.write_text("[server]\ndb = " + json.dumps(str(db)) + "\n")
     report = diagnose(config_path=str(config))
     assert "database_ready" in codes(report)
     assert "sensitive-path-marker" not in json.dumps(report)
@@ -345,7 +345,8 @@ def test_cli_ping_and_mcp_secret_validation_do_not_create_storage_and_new_db_is_
 
     memory = Memory.open(str(tmp_path / "private.db"))
     memory.close()
-    assert (tmp_path / "private.db").stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert (tmp_path / "private.db").stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize("document", ["README.md", "docs/quickstart.md"])

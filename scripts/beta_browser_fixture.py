@@ -41,6 +41,10 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     daemon = AletheiaDaemon(ServiceConfig(db_path=str(args.output / 'ui.db'), port=0, auto_migrate=True,
         console_enabled=True, rate_limit_enabled=False, advertise_local=False, local_pairing_enabled=False))
+    # Console trace/integrity actions write operational domain tables. Keep
+    # them separate from the read contract's strict unchanged-table baseline.
+    console_daemon = AletheiaDaemon(ServiceConfig(db_path=str(args.output / 'console.db'), port=0, auto_migrate=True,
+        console_enabled=True, rate_limit_enabled=False, advertise_local=False, local_pairing_enabled=False))
     proxies, threads = [], []
     try:
         host, port = daemon.start()
@@ -48,15 +52,21 @@ def main():
         thread.start()
         threads.append(thread)
         url = f'http://{host}:{port}'
+        console_host, console_port = console_daemon.start()
+        console_thread = threading.Thread(target=console_daemon.httpd.serve_forever, daemon=True)
+        console_thread.start()
+        threads.append(console_thread)
+        console_daemon.service.memory.remember(namespace=NAMESPACE, memory_type='preference', subject='demo',
+            predicate='prefers', object='careful architecture notes', confidence=.95)
         memory = daemon.service.memory
         claim = memory.remember(namespace=NAMESPACE, memory_type='preference', subject='demo', predicate='prefers',
                                 object='careful architecture notes', confidence=.95)
         first = seed(memory, 'User prefers careful architecture notes.')
         second = seed(memory, 'User prefers compact review summaries.')
-        manifest = {'console': url + '/console', 'namespace': NAMESPACE, 'pid': os.getpid()}
+        manifest = {'console': f'http://{console_host}:{console_port}/console', 'namespace': NAMESPACE, 'pid': os.getpid()}
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
-            assert cli_main(['console', 'login-token', '--db', str(args.output / 'ui.db'), '--namespace', NAMESPACE]) == 0
+            assert cli_main(['console', 'login-token', '--db', str(args.output / 'console.db'), '--namespace', NAMESPACE]) == 0
         manifest['synthetic_login_token'] = json.loads(buffer.getvalue())['login_token']
         for kind, candidates in [('read', ()), ('review', (first, second))]:
             proxy = browser_server(daemon.service, url, claim, review_candidates=candidates)
@@ -73,6 +83,7 @@ def main():
             proxy.shutdown()
             proxy.server_close()
         daemon.shutdown()
+        console_daemon.shutdown()
         for thread in threads:
             thread.join(timeout=5)
         os.close(descriptor)

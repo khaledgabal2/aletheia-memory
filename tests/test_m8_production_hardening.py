@@ -143,6 +143,7 @@ def test_migration_skips_current_schema_and_rejects_forward_schema(tmp_path):
 def test_storage_expands_home_path_and_enforces_nullable_embedding_key(monkeypatch, tmp_path):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     memory = Memory.open("~/aletheia/expanded.db", namespace=NAMESPACE)
     try:
         assert Path(memory.store.path) == home / "aletheia" / "expanded.db"
