@@ -26,15 +26,20 @@ clear audit trail.
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
 - Latest release: [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/latest) and [PyPI](https://pypi.org/project/aletheia-memory/).
-- Maturity: beta; intended for development and evaluation, not production use.
-- Upcoming source: the [qualification report](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/production_qualification.md) recommends production within its documented boundaries. This does not change the maturity of published 1.6.x packages; see [prepared release notes](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/next_release_notes.md).
+- Version: **1.7.0**; production/stable within the [qualified support boundaries](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_7_0_release_notes.md#qualification-and-limits).
+- API: v1; storage: 1.3.1. Earlier 1.6.x releases retain their beta status.
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
 - Distribution: [PyPI](https://pypi.org/project/aletheia-memory/); source installs and release wheels are also supported.
 
-1.6.3 packages the corrected release documentation and PyPI description; runtime
-behavior is unchanged from 1.6.2.
+1.7.0 adds governed extraction repairs, native Windows ACL isolation, standard
+MCP stdio, feedback/conflict corrections and startup targets. Read the
+[release notes](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_7_0_release_notes.md),
+[upgrade guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_7_0_upgrade.md)
+and [qualification record](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_7_0_release_verification.md)
+before upgrading. Model output still requires human review; local pairing remains
+POSIX-only and Windows ACL support assumes trusted ancestors.
 
 1.6.2 fixes HTTP semantic provider selection and reports lexical fallback accurately.
 Select the server provider explicitly with `ALETHEIA_SEMANTIC_PROVIDER=ollama_style`
@@ -539,7 +544,8 @@ python -m pytest
 
 A reviewed wheel can instead be installed by its local path. Development
 checkouts may contain unreleased changes; use a pinned published version for
-repeatable evaluation. All releases so far are beta. Never commit credentials or
+repeatable deployment. Version 1.7.0 is production/stable within its documented
+support boundaries; earlier releases remain beta. Never commit credentials or
 private databases.
 
 ## Local Application Pairing
