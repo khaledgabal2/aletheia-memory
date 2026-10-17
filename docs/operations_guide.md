@@ -289,8 +289,8 @@ aletheia docs test-examples --db ./aletheia.db
 
 ## Release Gate
 
-For the 1.6.0 beta, use the [release verification record](v1_6_0_release_verification.md)
-and [upgrade guide](v1_6_0_upgrade.md). The following commands inspect a selected
+For 1.7.0, use the [release qualification record](v1_7_0_release_verification.md)
+and [upgrade guide](v1_7_0_upgrade.md). The following commands inspect a selected
 database and its configuration; they do not certify production readiness:
 
 ```bash

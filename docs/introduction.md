@@ -7,7 +7,8 @@ The source of truth for this page is the code and tests in this repository, espe
 
 Aletheia is a local, auditable memory system for AI agents.
 
-The current release is 1.6.0 beta, for development and evaluation.
+The current release is 1.7.0 production/stable within the
+[documented qualification boundaries](v1_7_0_release_notes.md#qualification-and-limits).
 
 The current implementation is a Python package named `aletheia-memory` with:
 

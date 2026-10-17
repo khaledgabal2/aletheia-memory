@@ -1,5 +1,10 @@
 # Migration Guide
 
+Aletheia 1.7.0 uses storage 1.3.1 and API v1. Upgrades from 1.6.x do not
+change the storage version. Read the [1.7.0 upgrade guide](v1_7_0_upgrade.md)
+and keep a verified pre-upgrade backup. The milestone history below explains
+how earlier schema versions were introduced.
+
 M12 upgrades the schema target to `1.3.0` and backfills governed LLM records:
 
 - LLM prompt and prompt-version provenance tables.

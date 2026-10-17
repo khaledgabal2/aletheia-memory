@@ -132,4 +132,4 @@ all pairing-issued credentials with owner administration. Memory 1.4.1 does not
 enforce their original TLS binding. Only then start the older service. Returning
 to the current release requires fresh credentials; no storage downgrade is necessary.
 Older versions also reintroduce their defects; see the
-[1.6.0 beta upgrade guide](v1_6_0_upgrade.md) before choosing recovery by rollback.
+[1.7.0 upgrade guide](v1_7_0_upgrade.md) before choosing recovery by rollback.

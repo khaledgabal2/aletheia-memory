@@ -2,7 +2,8 @@
 
 This follow-up addresses the blockers retained by the beta pressure campaign.
 The bounded campaign is complete; verified results and limitations follow.
-No release is authorized by this document.
+This qualification checkpoint did not itself authorize publication. The subsequent
+1.7.0 release preparation is recorded in [the release qualification](v1_7_0_release_verification.md).
 
 
 ## Final recommendation — October 17, 2026

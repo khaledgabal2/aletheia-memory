@@ -1,7 +1,8 @@
 # Aletheia v1 Public Contracts
 
-Aletheia's v1 interface commitments cover these public surfaces. The current
-1.6.0 package is beta; interface stability does not certify production readiness.
+Aletheia 1.7.0 is production/stable within its [qualified boundaries](v1_7_0_release_notes.md#qualification-and-limits).
+The v1 interface commitments below remain unchanged; interface stability alone
+does not qualify every deployment or experimental surface.
 
 - Python package API: `Memory`, `AletheiaClient`, `AsyncAletheiaClient`, and plugin protocols in `aletheia.plugins`.
 - HTTP API: `/v1/*` routes published by `aletheia api openapi`.

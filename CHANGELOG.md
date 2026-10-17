@@ -2,10 +2,11 @@
 
 All notable public changes to Aletheia are tracked here.
 
-## Unreleased
+## 1.7.0 — 2026-10-17
 
-Prepared [release notes and upgrade guidance](docs/next_release_notes.md) record
-the qualification results and supported boundaries. No new release is published.
+First production/stable release within documented support boundaries. Python
+3.11+, API v1 and storage 1.3.1 remain unchanged. Read the
+[release notes](docs/v1_7_0_release_notes.md) and [upgrade guide](docs/v1_7_0_upgrade.md).
 
 - Bind LLM extraction scopes to source-derived references, preserve approved
   temporal boundaries, add bounded audited repairs, and enforce named-project
