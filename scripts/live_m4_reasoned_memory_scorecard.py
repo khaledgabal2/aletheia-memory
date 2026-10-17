@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aletheia import Memory
+from aletheia.storage import SCHEMA_VERSION
 from aletheia.core.errors import ValidationError
 
 
@@ -73,7 +74,7 @@ class M4Runner:
 
     def case_init_schema(self) -> str:
         health = json.loads(self.cli("init", "--db", str(self.db_path)).stdout)
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == SCHEMA_VERSION
         memory = Memory.open(str(self.db_path), namespace=NAMESPACE)
         try:
             names = {
@@ -126,7 +127,7 @@ class M4Runner:
         try:
             after_rules = len(second.list_rules(namespace=NAMESPACE))
             after_runs = len(second.store.connection.execute("SELECT id FROM inference_runs").fetchall())
-            assert second.health()["schema_version"] == "1.3.0"
+            assert second.health()["schema_version"] == SCHEMA_VERSION
             assert before_rules == after_rules
             assert before_runs == after_runs == 0
             assert second.list_reflections(namespace=NAMESPACE) == []

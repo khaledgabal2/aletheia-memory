@@ -16,6 +16,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aletheia import Memory
+from aletheia.version import software_version
+from aletheia.storage import SCHEMA_VERSION
 from aletheia.models import ServiceConfig
 from aletheia.service.http import AletheiaService, openapi_schema
 
@@ -105,7 +107,7 @@ class M7Runner:
         memory = Memory.open(str(self.db_path), namespace=NAMESPACE)
         try:
             health = memory.health()
-            assert health["schema_version"] == "1.3.0"
+            assert health["schema_version"] == SCHEMA_VERSION
             assert REQUIRED_M7_TABLES.issubset(self._tables(memory))
             assert self._count(memory, "console_sessions") == 0
             assert self._count(memory, "review_tasks") == 0
@@ -436,7 +438,7 @@ class M7Runner:
             assert "m7-secret-report-detail" not in report_text
             assert service.memory.list_trace_events(self._latest_trace_id(service.memory))
         paths = openapi_schema()["paths"]
-        assert openapi_schema()["info"]["version"] == "1.3.0"
+        assert openapi_schema()["info"]["version"] == software_version()
         assert REQUIRED_M7_ENDPOINTS.issubset(paths)
         return f"notification={notification.id}, dismissed={dismissed['data']['status']}, report={report['data']['id']}, openapi_paths={len(paths)}"
 

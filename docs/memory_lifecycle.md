@@ -325,3 +325,22 @@ evidence -> candidate -> reviewed claim -> governed retrieval -> feedback -> mai
 
 Every shortcut should preserve provenance, capability boundaries, auditability,
 and review state.
+
+
+### Feedback and advisory validation
+
+Zero-strength feedback remains auditable but does not change confidence, salience,
+verification or claim status. Strength must be a finite number; supplied values
+are clamped to the interval from zero to one. Assistant confirmations or
+verifications without independent evidence have no reinforcing effect, including
+when repeated.
+
+Context budgets must be nonnegative integers. Zero returns an empty budgeted
+pack; booleans, strings, floats and nonfinite values are refused before mutation.
+
+The eight advisory LLM tasks use task-specific JSON contracts and instructions.
+Missing, blank, malformed or unsupported source references are refused rather
+than replaced with successful placeholder output. Advisors cannot approve their
+own review state, change the requested candidate/conflict identity, or resolve a
+conflict. Schema validation establishes shape and source-reference boundaries;
+it does not establish factual correctness or extraction quality.

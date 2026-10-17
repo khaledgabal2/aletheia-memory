@@ -80,12 +80,12 @@ class SQLiteStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 5000")
-        if expanded_path != ":memory:":
-            connection.execute("PRAGMA journal_mode = WAL")
         store = cls(path=expanded_path, connection=connection)
         try:
             if auto_migrate:
                 store.migrate()
+            if expanded_path != ":memory:":
+                connection.execute("PRAGMA journal_mode = WAL")
         except BaseException:
             connection.close()
             raise

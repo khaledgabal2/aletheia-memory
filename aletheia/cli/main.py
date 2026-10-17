@@ -4001,7 +4001,7 @@ def _run_mcp(args: argparse.Namespace) -> int:
         config,
         tokenless_capabilities=tuple(MODE_CAPABILITIES[mode]) if not token else None,
     )
-    service = AletheiaService(Memory.open(config.db_path), config)
+    service = AletheiaService(Memory.open(config.db_path, namespace=namespace), config)
     try:
         registry = McpToolRegistry(service, token=token, namespace=namespace, mode=mode)
         if args.list_tools:

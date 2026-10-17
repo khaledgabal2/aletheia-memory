@@ -208,14 +208,33 @@ CONSOLE_HTML = """<!doctype html>
   </main>
   <script>
     let csrfToken = sessionStorage.getItem("aletheia_console_csrf") || "";
+    let sessionGeneration = 0;
     const $ = (id) => document.getElementById(id);
+    function clearSession() {
+      sessionGeneration++;
+      csrfToken = "";
+      sessionStorage.removeItem("aletheia_console_csrf");
+      $("loginToken").value = "";
+      $("traceQuery").value = "";
+      $("metrics").replaceChildren();
+      for (const id of ["reviews", "traceOutput", "hardeningOutput", "platformOutput", "federationOutput"]) {
+        $(id).textContent = "";
+      }
+    }
     const headers = () => ({
       "Content-Type": "application/json",
       ...(csrfToken ? {"X-CSRF-Token": csrfToken} : {})
     });
     async function api(path, options = {}) {
+      const generation = sessionGeneration;
       const res = await fetch(path, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
       const json = await res.json().catch(() => ({}));
+      if (generation !== sessionGeneration) {
+        const error = new Error("Session ended.");
+        error.staleSession = true;
+        throw error;
+      }
+      if (res.status === 401) clearSession();
       if (!res.ok) throw new Error(json.error?.message || res.statusText);
       return json.data ?? json;
     }
@@ -229,20 +248,22 @@ CONSOLE_HTML = """<!doctype html>
         const reviews = await api(`/v1/reviews?namespace=${encodeURIComponent(namespace)}&limit=20`);
         $("reviews").textContent = JSON.stringify(reviews, null, 2);
       } catch (err) {
-        $("sessionState").textContent = err.message;
+        if (!err.staleSession) $("sessionState").textContent = err.message;
       }
     }
     $("login").onclick = async () => {
-      const data = await api("/v1/console/login", { method: "POST", body: JSON.stringify({ login_token: $("loginToken").value }) });
+      const loginToken = $("loginToken").value;
+      clearSession();
+      const data = await api("/v1/console/login", { method: "POST", body: JSON.stringify({ login_token: loginToken }) });
       csrfToken = data.csrf_token;
       sessionStorage.setItem("aletheia_console_csrf", csrfToken);
       await refresh();
     };
     $("logout").onclick = async () => {
-      await api("/v1/console/logout", { method: "POST", body: "{}" }).catch(() => {});
-      csrfToken = "";
-      sessionStorage.removeItem("aletheia_console_csrf");
+      const pending = api("/v1/console/logout", { method: "POST", body: "{}" });
+      clearSession();
       $("sessionState").textContent = "Logged out";
+      await pending.catch(() => {});
     };
     $("refresh").onclick = refresh;
     $("snapshot").onclick = async () => {

@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aletheia import Memory
+from aletheia.version import software_version
+from aletheia.storage import SCHEMA_VERSION
 from aletheia.adapters import HttpAgentMemoryAdapter
 from aletheia.client import AletheiaClient, AletheiaForbiddenError
 from aletheia.models import ServiceConfig
@@ -154,7 +156,7 @@ class M6Runner:
         memory = Memory.open(str(self.db_path), namespace=NAMESPACE)
         try:
             health = memory.health()
-            assert health["schema_version"] == "1.3.0"
+            assert health["schema_version"] == SCHEMA_VERSION
             names = self._tables(memory)
             assert REQUIRED_M6_TABLES.issubset(names)
             assert memory.get_ranking_policy("rpol_default").active_version_id == "rpv_default_v1"
@@ -287,7 +289,7 @@ class M6Runner:
 
     def case_openapi_complete(self) -> str:
         schema = openapi_schema()
-        assert schema["info"]["version"] == "1.3.0"
+        assert schema["info"]["version"] == software_version()
         assert REQUIRED_ENDPOINTS.issubset(schema["paths"])
         assert "bearerAuth" in schema["components"]["securitySchemes"]
         assert "ResponseEnvelope" in schema["components"]["schemas"]
@@ -458,7 +460,7 @@ class M6Runner:
             assert status == 200
             status, projects = self.get(service, f"/v1/projects?namespace={NAMESPACE}", self.tokens["agent"])
             assert status == 200
-            assert any(item["id"] == PROJECT for item in projects["data"])
+            assert not any(item["id"] == PROJECT for item in projects["data"]), "Mixed secret project provenance must not be exposed to a personal-tier reader"
             return f"session={ended['data']['id']}, projects={len(projects['data'])}"
 
     def case_governance_gates(self) -> str:

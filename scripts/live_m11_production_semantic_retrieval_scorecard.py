@@ -293,9 +293,9 @@ class M11LiveScorecard:
             memory.index_semantic(NAMESPACE, target_ids=[claim.id], provider="local_hash", dimension=32, force=True)
             memory.redact(target_id=event.id, target_type="evidence", reason="live", dry_run=False)
             row = memory.store.connection.execute("SELECT status, stale_reason FROM embeddings WHERE target_id = ?", (claim.id,)).fetchone()
-            assert row["status"] == "stale"
-            assert row["stale_reason"] == "evidence.redacted"
-            return f"status={row['status']}, reason={row['stale_reason']}"
+            assert row is None, "Redaction must remove vector payloads, not retain sensitive embeddings"
+            assert claim.id not in {hit.claim_id for hit in memory.retrieve(NAMESPACE, "vector row", mode="semantic", semantic_provider="local_hash")}
+            return "Redacted source vector removed and no longer retrievable"
         finally:
             memory.close()
 

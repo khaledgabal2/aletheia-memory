@@ -98,16 +98,24 @@ Legacy certificates without behavioral evidence appear as `not_certified` and
 require recertification. The standalone federation conformance command also
 labels its table/contract inventory `structural_passed`.
 
-Other conformance suites currently provide structural inventory and/or report
-missing probes. They return `structural_passed` or `incomplete`, not a behavioral
-pass. Empty suites and unknown/skipped cases cannot pass. Caller metadata cannot
-promote structural evidence into a behavioral result. The in-database v1 gate
-requires current behavioral results; old passes and target-specific adapter
-checks cannot satisfy built-in suite requirements. Unit/integration attestations
-also default to missing, rather than passed. This gate therefore remains failed
-until its missing behavioral suites and other required checks are implemented
-and verified. The separate `scripts/release_gate.py` checks generic repository
-packaging boundaries and does not certify runtime behavior.
+All 17 built-in conformance suites now execute isolated synthetic probes when
+run without a custom target. They cover embedded recall/context, in-process
+HTTP and SDK clients, the stdio JSON-RPC parser, candidate-only plugin writes,
+backup/recovery, protected storage, semantic boundaries, LLM advisory governance,
+and federation import, conflicts, redaction, trust and revocation. Bundled adapter
+probes retain the restrictions above. HTTP/SDK suite probes use an in-process
+service and MCP uses in-memory streams; external transport qualification belongs
+to the separate live harness.
+
+Empty suites and unknown/skipped cases cannot pass. Caller metadata cannot
+promote structural evidence into a behavioral result. Each built-in result records
+a digest of the installed Python implementation; the v1 gate requires a current
+behavioral result for that implementation. Custom target and historical structural
+results cannot satisfy those requirements. Unit/integration attestations default
+to missing and must be supplied from actual external test results. Passing these
+bounded probes does not qualify every possible input, provider, host or workload.
+The separate `scripts/release_gate.py` checks generic repository packaging
+boundaries and does not certify runtime behavior.
 
 Normal regression coverage is in `tests/test_policy_execution.py`,
 `tests/test_sync_resolution_effects.py`, and `tests/test_certification_evidence.py`.

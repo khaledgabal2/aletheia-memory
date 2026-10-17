@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aletheia import Memory
+from aletheia.storage import SCHEMA_VERSION
 
 NAMESPACE = "user/default"
 
@@ -160,7 +161,7 @@ class LiveRunner:
         data = json.loads(proc.stdout)
         assert data["status"] == "ok"
         assert data["database"] == "connected"
-        assert data["schema_version"] == "1.3.0"
+        assert data["schema_version"] == SCHEMA_VERSION
         return f"schema_version={data['schema_version']}"
 
     def case_schema_tables(self) -> str:

@@ -239,13 +239,14 @@ def test_m9_conformance_docs_adapters_doctor_and_v1_gate(tmp_path):
         assert certification.status == "certified"
 
         for suite in ["kernel", "http-api", "mcp", "python-sdk", "context-pack-schema", "plugin", "agent-adapter"]:
-            assert memory.run_conformance(suite=suite).status == "incomplete"
+            assert memory.run_conformance(suite=suite).status == "passed"
 
         doctor = memory.doctor_run()
         assert doctor.status in {"healthy", "healthy_with_warnings"}
         gate = memory.v1_gate_run(metadata={"allow_missing_backup": True})
         assert gate.status == "failed"
-        assert any(item["name"] == "conformance_passed" and item["status"] == "failed" for item in gate.checks)
+        assert any(item["name"] == "conformance_passed" and item["status"] == "passed" for item in gate.checks)
+        assert any(item["name"] == "unit_tests_passed" and item["status"] == "failed" for item in gate.checks)
     finally:
         memory.close()
 

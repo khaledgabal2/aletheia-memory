@@ -501,8 +501,11 @@ def test_unsupported_migration_preserves_claims_and_audit(tmp_path):
     _create_minimal_m0_database(db_path)
     with sqlite3.connect(db_path) as connection:
         before = list(connection.iterdump())
+    original_bytes = db_path.read_bytes()
     with pytest.raises(RuntimeError, match="supported migration range"):
         Memory.open(str(db_path))
+    assert db_path.read_bytes() == original_bytes
+    assert not db_path.with_name(db_path.name + "-wal").exists()
     with sqlite3.connect(db_path) as connection:
         assert list(connection.iterdump()) == before
         assert connection.execute("SELECT object FROM claims WHERE id='clm_m0'").fetchone()[0] == "direct"

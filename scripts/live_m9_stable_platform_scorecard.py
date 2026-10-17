@@ -298,12 +298,12 @@ stores_data = false
         if self.memory.docs_status()["status"] != "passed":
             self.memory.build_docs(output_dir=str(self.docs_dir))
         gate = self.memory.v1_gate_run(metadata={"allow_missing_backup": True, "live_scorecard": True})
-        assert gate.status == "passed"
+        assert gate.status == "failed", "A scorecard must not invent external test attestations"
+        assert next(check for check in gate.checks if check["name"] == "conformance_passed")["status"] == "passed"
         check_names = {check["name"] for check in gate.checks}
         required = {
             "unit_tests_passed",
             "integration_tests_passed",
-            "migration_tests_passed",
             "conformance_passed",
             "docs_examples_passed",
             "openapi_generated",
@@ -329,7 +329,7 @@ stores_data = false
         docs = self.request("POST", "/v1/docs/build", {"output_dir": str(self.base_dir / "http-docs")})
         assert docs["status"] == "passed"
         gate = self.request("POST", "/v1/v1-gate/run", {"metadata": {"allow_missing_backup": True}})
-        assert gate["status"] == "passed"
+        assert gate["status"] == "failed", "HTTP callers must supply verified external test attestations"
         schema = openapi_schema()
         assert "/v1/plugins" in schema["paths"]
         assert "/v1/v1-gate/run" in schema["paths"]
