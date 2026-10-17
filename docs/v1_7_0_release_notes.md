@@ -71,3 +71,14 @@ See [qualification and step-by-step journal](production_qualification.md),
 [security boundaries](security_privacy_guide.md). See the [1.7.0 release qualification](v1_7_0_release_verification.md) and
 [upgrade guide](v1_7_0_upgrade.md). Publication receipts and distribution hashes
 are attached to the GitHub release.
+
+## Concurrency gate interpretation
+
+The 750ms Windows 3.12 health-concurrency timeout recurred on the prepublication
+main gate. No release was tagged from that failed run. Its log did not separate
+request preparation from response work, so the original timing cause remains
+unproven. The regression now bounds authenticated request preparation separately,
+then retains the original 750ms response deadlines and requires both operations
+to finish before the deliberately paused provider is released. Delayed-authentication
+cases exercise this distinction. This is provider-isolation evidence, not a
+750ms end-to-end health SLA; startup acceptance budgets are unchanged.

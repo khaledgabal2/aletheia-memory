@@ -3,6 +3,7 @@ from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
+import time
 
 import pytest
 
@@ -130,15 +131,32 @@ def test_hidden_content_does_not_consume_context_budget(memory, endpoint):
 
 
 @pytest.mark.parametrize("backing", ["file", "memory"])
-def test_provider_wait_does_not_block_health_or_an_unrelated_write(tmp_path, monkeypatch, backing):
-    entered, release = threading.Event(), threading.Event()
+@pytest.mark.parametrize("authentication_delay", [0, .5])
+def test_provider_wait_does_not_block_health_or_an_unrelated_write(tmp_path, monkeypatch, backing, authentication_delay):
+    entered, release, provider_wait_ended = threading.Event(), threading.Event(), threading.Event()
     def slow(self, **kwargs):
         entered.set()
-        assert release.wait(5), "fixture provider was not released"
-        return {"original_query": WORD, "expanded_terms": [WORD]}
+        try:
+            assert release.wait(5), "fixture provider was not released"
+            return {"original_query": WORD, "expanded_terms": [WORD]}
+        finally:
+            provider_wait_ended.set()
     monkeypatch.setattr(MockLLMProvider, "complete_json", slow)
     with closing(Memory.open(":memory:" if backing == "memory" else str(tmp_path / "server.db"), namespace=NS)) as memory:
         server, _, call = service(memory)
+        authenticated = {path: threading.Event() for path in ("/v1/health", "/v1/remember")}
+        authenticate = server._authenticate
+        def measured_authentication(method, endpoint, headers, **kwargs):
+            if endpoint in authenticated and kwargs.get("previous") is None:
+                # A separate preparation phase: serial authentication can be slow
+                # without being blocked on provider I/O. Keep its own bound and
+                # retain the original post-preparation response deadline below.
+                time.sleep(authentication_delay)
+            context = authenticate(method, endpoint, headers, **kwargs)
+            if endpoint in authenticated:
+                authenticated[endpoint].set()
+            return context
+        monkeypatch.setattr(server, "_authenticate", measured_authentication)
         with ThreadPoolExecutor(max_workers=3) as pool:
             pending = pool.submit(call, "/v1/llm/expand-query", {"namespace": NS, "query": WORD})
             assert entered.wait(3)
@@ -146,8 +164,12 @@ def test_provider_wait_does_not_block_health_or_an_unrelated_write(tmp_path, mon
                 health = pool.submit(call, "/v1/health")
                 write = pool.submit(call, "/v1/remember", {"namespace": NS, "subject": "concurrent",
                     "predicate": "records", "object": "independent", "memory_type": "fact"})
+                assert all(event.wait(3) for event in authenticated.values()), "request preparation blocked while provider waits"
                 assert health.result(timeout=.75)[0] == 200
                 assert write.result(timeout=.75)[0] == 200
+                # Completion must precede provider release; an expired fixture
+                # or an accidental provider completion must never yield a pass.
+                assert not release.is_set() and not provider_wait_ended.is_set() and not pending.done()
             finally:
                 release.set()
             assert pending.result(timeout=3)[0] == 200
