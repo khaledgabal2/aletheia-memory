@@ -105,7 +105,7 @@ def test_extraction_prompt_keeps_unicode_and_schema_anchors(monkeypatch, tmp_pat
         def complete_json(**kwargs):
             seen.update(kwargs)
             output = {'candidates':[{'subject':'用户','predicate':'喜欢','object':'简洁的回答','memory_type':'preference',
-                'suggested_scope': None, 'evidence_span':{'evidence_id':event.id,'start_char':0,'end_char':len(event.content),'text':event.content}}]}
+                'suggested_scope': {'type':'unqualified'}, 'evidence_span':{'evidence_id':event.id,'start_char':0,'end_char':len(event.content),'text':event.content}}]}
             validate(output,kwargs['schema'])
             return output
         monkeypatch.setattr(extractor.provider,'complete_json',complete_json)
@@ -121,7 +121,10 @@ def test_extraction_prompt_keeps_unicode_and_schema_anchors(monkeypatch, tmp_pat
             extractor._drafts_from_output(altered,evidence_by_id={event.id:event})
 
 
-def test_daemon_readiness_does_not_wait_for_reverse_dns(monkeypatch, tmp_path):
+@pytest.mark.parametrize('pairing', [False, True])
+def test_daemon_readiness_does_not_wait_for_reverse_dns(monkeypatch, tmp_path, pairing):
+    if pairing and os.name != 'posix':
+        pytest.skip('Local pairing is POSIX-only')
     import socket
     import threading
     import json
@@ -132,7 +135,7 @@ def test_daemon_readiness_does_not_wait_for_reverse_dns(monkeypatch, tmp_path):
         raise AssertionError('Reverse DNS must not be on the daemon startup path')
     monkeypatch.setattr(socket, 'getfqdn', blocked_dns)
     daemon = AletheiaDaemon(ServiceConfig(db_path=str(tmp_path/'ready.db'),port=0,auto_migrate=True,
-        advertise_local=False,local_pairing_enabled=False))
+        advertise_local=False,local_pairing_enabled=pairing,identity_directory=str(tmp_path/"identities")))
     try:
         host,port = daemon.start()
         thread = threading.Thread(target=daemon.httpd.serve_forever,daemon=True)
@@ -159,3 +162,28 @@ def test_approved_candidate_preserves_temporal_boundaries(tmp_path, scope):
         assert claim.valid_to == scope['valid_to']
         scopes = memory.list_claim_scopes(claim.id)
         assert any(s.valid_from == scope['valid_from'] and s.valid_to == scope['valid_to'] for s in scopes)
+
+
+@pytest.mark.parametrize('scope', [
+    {'type':'unqualified'},
+    {'type':'temporal','valid_from':'2026-10-01'},
+    {'type':'temporal','valid_to':'2026-10-01T00:00:00Z'},
+    {'type':'project','applies_when':'Project Vega only'},
+])
+def test_extraction_scope_branches_accept_explicit_meaning(scope):
+    from jsonschema import validate
+    from aletheia.extraction import _scope_schema
+    validate(scope,_scope_schema())
+
+@pytest.mark.parametrize('scope', [
+    None, {'type':'temporal'}, {'type':'contextual'},
+    {'type':'temporal','valid_from':'null'},
+    {'type':'temporal','valid_from':None},
+    {'type':'unqualified','valid_from':'2026-10-01'},
+    {'type':'project','applies_when':''},
+])
+def test_extraction_scope_branches_reject_ambiguous_shapes(scope):
+    from jsonschema import validate, ValidationError
+    from aletheia.extraction import _scope_schema
+    with pytest.raises(ValidationError):
+        validate(scope,_scope_schema())

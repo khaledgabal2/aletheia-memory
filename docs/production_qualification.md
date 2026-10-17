@@ -136,3 +136,23 @@ readiness when investigating an exceeded target.
     Local4 passed 86 tests with two native-Windows skips and ten startup samples,
     including lower/upper boundary promotion regressions. Models5 is running
     prompt v6 against all twelve semantic cases; no quality pass is inferred yet.
+16. Models5 completed with stable source identical to the Python files committed
+    in `12ba6ed` (started from `9010319` plus the recorded mock correction).
+    Seven of twelve quality checks passed; five were refused because model scopes
+    contained empty objects or string "null" dates. Governance remained intact;
+    this is a quality failure, not a pass. Replaced ambiguous nullable fields with
+    disjoint unqualified/temporal/context branches. Temporal scopes require a date
+    boundary; conditions require text; unused fields are omitted. Host validation
+    still rejects malformed dates and intervals. Added branch-shape regressions.
+17. Native `12ba6ed` passed all Linux/macOS matrix jobs and macOS startup budgets.
+    macOS 3.13 maxima were 0.611s new / 0.327s current after the DNS fix, against
+    unchanged targets. Build/recovery failed a 15-second restored-service start.
+    Inspection found a second inherited reverse-DNS path in the TLS pairing
+    listener; removed it and extended the deterministic DNS regression to pairing.
+    Added the child status/startup log to recovery timeout errors without changing
+    its deadline. The causal explanation for that build failure awaits a repeat.
+18. Local5 passed 98 tests with two Windows skips, including both HTTP/TLS DNS
+    paths and scope branches; all ten startup samples passed. Models6 admission
+    was resource-deferred before execution after another owner acquired the lock.
+    Latest real model output, final native artifacts and full-suite repeats remain
+    required. No targets, provenance checks or quality expectations were relaxed.
