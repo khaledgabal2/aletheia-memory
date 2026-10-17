@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import platform
 import socket
-import tempfile
+from aletheia.storage.private_files import private_temporary_directory
 import threading
 import time
 from urllib.request import Request
@@ -172,7 +172,7 @@ def main():
     monitor.start()
     started = time.perf_counter()
     try:
-        with tempfile.TemporaryDirectory(prefix="aletheia-live-recipe-") as directory:
+        with private_temporary_directory(prefix="aletheia-live-recipe-") as directory:
             memory = Memory.open(str(Path(directory)/"synthetic.db"))
             try:
                 if args.task in {"embedding","all"}:

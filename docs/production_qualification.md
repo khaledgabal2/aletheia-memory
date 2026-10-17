@@ -6,16 +6,21 @@ No release is authorized by this document.
 
 ## Extraction contract
 
-The model selects a complete, exact evidence event from schema-bound anchors.
-The host independently validates its identifier, Unicode character boundaries
-and byte-for-byte text equality. Blank subject, predicate, object and memory type
-are rejected. Full-event evidence retains cross-sentence qualifiers; candidate
-objects and typed suggested scope must preserve negation, attribution, temporal
-boundaries and exceptions. Human-approved temporal boundaries are carried into
-the promoted claim and scope.
-All output remains untrusted and pending review. Source instructions cannot
-approve, verify or promote candidates. Private/external and secret-source gates
-remain in effect.
+The model selects exact evidence and per-event scope references. The host
+independently validates source identity, Unicode boundaries and text equality,
+then resolves only a scope anchor belonging to that source. Blank fields, unknown
+references, invented calendar boundaries and detected lost qualifiers are refused.
+The bounded anchor grammar recognizes explicit English calendar boundaries and
+named-project conditions; unsupported semantics remain operator review work.
+Month boundaries use the first day. All model output remains untrusted and pending
+review. Source instructions cannot approve, verify or promote. Human-approved
+temporal boundaries survive promotion; project inclusions/exclusions match actual
+project context rather than query words. Privacy gates remain in effect.
+
+Extraction wire v2 uses `scope_ref`. At most two repair proposals may follow a
+rejection; each is independently validated, with attempt status/error/output hash
+recorded. Set `max_repair_attempts=0` to disable repairs. Bounded repair can make up
+to three provider requests and does not establish general semantic entailment.
 
 The six original adversarial examples must yield useful, semantically correct
 pending candidates, not merely pass governance refusal. The harness now exits
@@ -156,3 +161,69 @@ readiness when investigating an exceeded target.
     was resource-deferred before execution after another owner acquired the lock.
     Latest real model output, final native artifacts and full-suite repeats remain
     required. No targets, provenance checks or quality expectations were relaxed.
+19. Models7 executed on `6568db4` with stable source. Ten of twelve old machine
+    checks passed, but manual review caught two false positives: the previous
+    Paris office had a start boundary instead of an end boundary, and Orion's
+    restriction was text-only with no stored scope. Warehouse/Vega produced no
+    usable candidates. Strengthened the oracle to check boundary direction and
+    both stored project inclusion/exclusion conditions, not just keyword presence.
+20. Added conservative source-qualifier loss checks and bounded repair. Up to two
+    corrections are requested after a rejected proposal, independently revalidated
+    before any candidate is returned. Attempt status, rejection reason and output
+    hash are recorded in invocation metadata. The limit is configurable from zero
+    to two; privacy/policy refusal cannot be bypassed. This may use up to three
+    provider requests per extraction; it is not a guarantee of semantic entailment.
+21. Added explicit `project=NAME` / `project!=NAME` conditions, evaluated against
+    actual project context/namespace-local project title rather than query words.
+    Added positive/exclusion retrieval tests including a foreign namespace with a
+    misleading title, bounded-repair tests, and regressions for the oracle's two
+    observed false positives. Local6 passed 102 tests with two Windows skips and
+    ten startup samples. Two additional fail-closed blank-project guards were
+    then added; final stable repeat remains required.
+22. Models8 is running the strengthened twelve-case checks with frozen Python
+    source. These changes are not yet committed or qualified by the older native
+    `6568db4` run. Inspect all candidate triples and scopes before accepting its
+    terminal result; then finalize and repeat appropriate full/native checks.
+23. Models8 finished with stable source: nine strict machine cases passed. Tea
+    and reported-attribution cases had no usable candidate after all repairs;
+    Orion's optional `Project` prefix was a third machine failure, although the
+    runtime explicitly supports that alias. Aligned the oracle with the runtime
+    alias rather than treating equivalent project labels as different conditions.
+    Manual review also found a fabricated warehouse start date in a historical
+    candidate. Its source stated an end month but no start month.
+24. Replaced model-authored scope objects on the wire with source-bound references
+    (`candidate_claim_draft.v2`). Each event supplies a catalog of unqualified,
+    explicit English calendar boundaries/intervals and named-project conditions.
+    The model selects a key; the host validates event ownership of that key and
+    resolves the scope. Legacy objects must equal a known source anchor. This
+    prevents new dates, empty objects, string-null dates and borrowing another
+    event's scope. Date-only month anchors use the documented first-day convention;
+    unsupported natural-language qualifiers still require human review. This is
+    not a universal semantic parser or an entailment proof.
+25. Simplified the model instructions to source-only extraction/reference choice;
+    removed example facts and the nested scope-generation schema. Repair history
+    now retains only the base prompt and latest rejected proposal, bounding
+    context growth. Added source-catalog, cross-event reference and complete-
+    interval tests; replaced obsolete wire-branch tests. Local7 passed 94 tests
+    with two Windows skips and ten startup samples. Models9 is now running with
+    frozen source. Final full/native/artifact verification is still pending.
+
+26. Models9 passed the configured real recipe, eight advisory tasks and all twelve
+    extraction quality/governance cases with source stability true. Manual review
+    confirmed attached date direction and project conditions; source-backed month
+    boundaries are normalized, quoted attribution remains with Alice/Mira, and
+    Chinese/Spanish meaning is retained. Unattributed imperatives can retain an
+    unspecified actor; operator review is still required rather than inventing one.
+27. Historical native `6568db4` passed build and Linux/macOS/Windows 3.13, but
+    Windows 3.11 failed 28 cases because owned standard-library scratch directories
+    inherited broad ACLs. Kept its log. Added private scratch creation with native
+    DACLs at directory creation and applied it to all eight internal scratch users.
+    Kept broad-directory refusal. Also centralized database-destination preflight
+    for initialization, restore and SQLite copies so plaintext is not written
+    before permission validation, with atomic private file/directory creation.
+28. Added Windows scratch/reservation/refusal regressions and tightened the
+    temporal oracle to reject invented historical starts/current ends. Local8 was
+    resource-deferred behind PID98593 with an actual model client; no test attempt
+    counted. Local9 is testing the final preparation; final native/full/artifact
+    repeats remain pending. The source calendar parser now uses fixed English
+    month names independently of the host locale.

@@ -26,8 +26,9 @@ def reserve_database(path):
         if companion.exists() or companion.is_symlink():
             raise ValidationError("Database companion file already exists. Preserve it and choose a fresh path.")
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        from aletheia.storage.private_files import create_private_file, prepare_database_path
+        prepare_database_path(target)
+        descriptor = create_private_file(target)
         os.close(descriptor)
     except FileExistsError as exc:
         raise ValidationError("Database destination already exists. Choose a new path; nothing was overwritten.") from exc

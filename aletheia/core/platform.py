@@ -10,7 +10,7 @@ import platform as py_platform
 import socket
 import sqlite3
 import sys
-import tempfile
+from aletheia.storage.private_files import private_temporary_directory
 import time
 import tomllib
 import urllib.error
@@ -1072,7 +1072,7 @@ def test_doc_examples(memory) -> dict:
 
     run("contracts", contracts)
 
-    with tempfile.TemporaryDirectory(prefix="aletheia-doc-examples-") as temp:
+    with private_temporary_directory(prefix="aletheia-doc-examples-") as temp:
         root = Path(temp)
 
         def starters() -> str:

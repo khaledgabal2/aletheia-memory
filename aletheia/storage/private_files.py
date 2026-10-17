@@ -100,3 +100,77 @@ def _windows_user_sid():
     import csv
     import subprocess
     return list(csv.reader(subprocess.check_output(['whoami', '/user', '/fo', 'csv', '/nh'], text=True).splitlines()))[0][1]
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def private_temporary_directory(*, prefix='aletheia-'):
+    """Owned scratch directory, private at creation even on Python 3.11 Windows."""
+    import tempfile
+    if os.name != 'nt':
+        with tempfile.TemporaryDirectory(prefix=prefix) as directory:
+            yield directory
+        return
+    import secrets
+    import shutil
+    directory=None
+    for _ in range(100):
+        candidate=Path(tempfile.gettempdir())/(prefix+secrets.token_hex(16))
+        try:
+            _windows_create_private_directory(candidate)
+        except FileExistsError:
+            continue
+        directory=candidate
+        break
+    if directory is None:
+        raise FileExistsError('Could not reserve a unique private scratch directory.')
+    try:
+        yield str(directory)
+    finally:
+        shutil.rmtree(directory)
+
+
+def prepare_database_path(path: Path) -> None:
+    """Check sidecar inheritance before any database bytes are written."""
+    parent=path.parent
+    if os.name!='nt':
+        parent.mkdir(parents=True,exist_ok=True)
+        return
+    def mkdir(directory):
+        if directory.exists():
+            return
+        mkdir(directory.parent)
+        try:
+            _windows_create_private_directory(directory)
+        except FileExistsError:
+            pass
+    mkdir(parent)
+    require_windows_private_directory(parent)
+    if path.is_symlink():
+        raise PermissionError('Windows private database paths cannot be symbolic links.')
+    for suffix in ('','-wal','-shm','-journal'):
+        artifact=Path(str(path)+suffix)
+        if artifact.exists():
+            require_windows_private_directory(artifact)
+
+
+def _windows_create_private_directory(path: Path) -> None:
+    c,w,adv,kernel=_windows_api()
+    class Attributes(c.Structure):
+        _fields_=[('length',w.DWORD),('descriptor',c.c_void_p),('inherit',w.BOOL)]
+    sd=c.c_void_p()
+    if not adv.ConvertStringSecurityDescriptorToSecurityDescriptorW('D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)',1,c.byref(sd),None):
+        raise c.WinError(c.get_last_error())
+    kernel.CreateDirectoryW.argtypes=[w.LPCWSTR,c.POINTER(Attributes)]
+    kernel.CreateDirectoryW.restype=w.BOOL
+    try:
+        attrs=Attributes(c.sizeof(Attributes),sd,False)
+        if not kernel.CreateDirectoryW(str(path),c.byref(attrs)):
+            error=c.get_last_error()
+            if error in (80,183):
+                raise FileExistsError(str(path))
+            raise c.WinError(error)
+    finally:
+        kernel.LocalFree(sd)

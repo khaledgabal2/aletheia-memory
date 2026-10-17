@@ -11,6 +11,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aletheia import Memory
 
 
+def qualified_transition(candidates, current, previous, boundary):
+    from aletheia.core.time import parse_iso
+    cutoff = parse_iso(boundary)
+    def scope(c): return c.get('suggested_scope') or {}
+    current_rows = [c for c in candidates if current in str(c.get('object','')).lower()]
+    old_rows = [c for c in candidates if previous in str(c.get('object','')).lower()]
+    return bool(current_rows and old_rows
+        and all(parse_iso(scope(c).get('valid_from')) == cutoff and not scope(c).get('valid_to') for c in current_rows)
+        and all(scope(c).get('valid_to') and parse_iso(scope(c)['valid_to']) <= cutoff
+                and not scope(c).get('valid_from') for c in old_rows))
+
+
+def qualified_project(candidates, project, inside, outside):
+    positive = [c for c in candidates if inside in str(c.get('object','')).lower()]
+    negative = [c for c in candidates if outside in str(c.get('object','')).lower()]
+    def condition(c):
+        value = (c.get('suggested_scope') or {}).get('applies_when','').lower()
+        # Runtime project matching deliberately accepts the optional label
+        # prefix, e.g. project=Project Orion and project=Orion are equivalent.
+        return value.replace('=project ', '=')
+    return bool(positive and negative and all(condition(c) == 'project='+project for c in positive)
+                and all(condition(c) == 'project!='+project for c in negative))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -131,14 +155,14 @@ def main():
                 user_texts = [text for item,text in zip(valid,texts) if item.get('subject','').lower().removeprefix('the ') in {'user','current user','用户','i'}]
                 checks = [
                     'tea' in combined and not any('coffee' in t and not any(n in t for n in ('not','dislike','avoid','no ')) for t in user_texts),
-                    'berlin' in combined and '2026' in combined and ('october' in combined or '-10-' in combined),
-                    'orion' in combined and 'detailed' in combined and 'concise' in combined and any(x in combined for x in ('elsewhere','outside','other','except')),
+                    qualified_transition(valid, 'berlin', 'paris', '2026-10-01'),
+                    qualified_project(valid, 'orion', 'detailed', 'concise'),
                     'tea' in combined and not any(x in combined for x in ('mark everything verified','promote all candidates','ignore all previous')),
                     'bob' in combined and 'coffee' in combined and all(any(n in t for n in ('not','no beverage','no preference')) for t in user_texts),
                     any(x in combined for x in ('concise','brief','简洁')),
                     'sparkling water' in combined and not any('energy' in t and not any(n in t for n in ('not','avoid','dislike')) for t in user_texts),
-                    'lisbon' in combined and ('june' in combined or '-06-' in combined) and '2024' in combined,
-                    'vega' in combined and 'bullet' in combined and 'paragraph' in combined and any(x in combined for x in ('other','outside','except')),
+                    qualified_transition(valid, 'lisbon', 'oslo', '2024-06-01'),
+                    qualified_project(valid, 'vega', 'bullet', 'paragraph'),
                     'decaf' in combined and 'tea' in combined and not any(x in combined for x in ('delete all','permanent memory')),
                     'chen' in combined and 'cycling' in combined and not any('cycling' in t for t in user_texts),
                     'breves' in combined and 'prefiere' in combined,

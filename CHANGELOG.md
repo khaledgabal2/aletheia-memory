@@ -4,6 +4,14 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+- Bind LLM extraction scopes to source-derived references, preserve approved
+  temporal boundaries, add bounded audited repairs, and enforce named-project
+  inclusion/exclusion against actual project context.
+- Create Windows database/archive and owned scratch artifacts with native private
+  DACLs; refuse broad database directories and verify restricted-token isolation.
+- Remove reverse DNS from HTTP/TLS listener startup and add measured readiness
+  budgets across the native OS/Python matrix.
+
 - Correct zero-strength feedback, validate context budgets, and require complete
   atomic conflict scopes. Assistant repetition without evidence is inert.
 - Validate all eight advisory LLM outputs with task-specific contracts. Add

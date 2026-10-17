@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 import statistics
 import sys
-import tempfile
+from aletheia.storage.private_files import private_temporary_directory
 import zipfile
 from dataclasses import asdict
 from functools import wraps
@@ -156,7 +156,7 @@ def create_backup(
     manifest_id = new_id("bkp")
     created_at = utc_now_iso()
     stored_schema_version = memory.health()["schema_version"]
-    with tempfile.TemporaryDirectory(prefix="aletheia-backup-") as temp:
+    with private_temporary_directory(prefix="aletheia-backup-") as temp:
         temp_dir = Path(temp)
         payload_files: dict[str, bytes] = {
             "config_redacted.json": _json_bytes(_redacted_config(memory)),
@@ -456,11 +456,12 @@ def restore_backup(
         raise ValidationError("Target database already exists; use overwrite_existing mode explicitly.")
     if "database.sqlite" not in payload:
         raise ValidationError("Restore requires a database.sqlite payload.")
-    target.parent.mkdir(parents=True, exist_ok=True)
+    from aletheia.storage.private_files import prepare_database_path
+    prepare_database_path(target)
     from aletheia import Memory
     from aletheia.storage.review import rotate_generation
     # Prepare the restored generation before it can replace any live state.
-    with tempfile.TemporaryDirectory(prefix="aletheia-restore-") as temp:
+    with private_temporary_directory(prefix="aletheia-restore-") as temp:
         prepared = Path(temp) / "prepared.sqlite"
         prepared.write_bytes(payload["database.sqlite"])
         restored = Memory.open(str(prepared))
@@ -1747,7 +1748,7 @@ def benchmark_run(memory, *, profile: str = "tiny") -> BenchmarkRun:
         )
     from aletheia.core.memory import Memory
     import secrets
-    with tempfile.TemporaryDirectory(prefix="aletheia-benchmark-") as directory:
+    with private_temporary_directory(prefix="aletheia-benchmark-") as directory:
         scratch = Memory.open(str(Path(directory) / "scratch.db"), namespace="benchmark/scratch")
         backup_path = str(Path(directory) / "scratch.alet")
         backup_passphrase = secrets.token_hex(32)
@@ -1922,7 +1923,14 @@ def _sqlite_snapshot(memory, destination: Path) -> None:
 
 
 def _sqlite_copy(source: sqlite3.Connection, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    from aletheia.storage.private_files import prepare_database_path, create_private_file
+    prepare_database_path(destination)
+    try:
+        descriptor = create_private_file(destination)
+    except FileExistsError:
+        pass
+    else:
+        os.close(descriptor)
     target = sqlite3.connect(destination, timeout=0.2)
     try:
         last_progress = perf_counter()

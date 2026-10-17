@@ -105,7 +105,7 @@ def test_extraction_prompt_keeps_unicode_and_schema_anchors(monkeypatch, tmp_pat
         def complete_json(**kwargs):
             seen.update(kwargs)
             output = {'candidates':[{'subject':'用户','predicate':'喜欢','object':'简洁的回答','memory_type':'preference',
-                'suggested_scope': {'type':'unqualified'}, 'evidence_span':{'evidence_id':event.id,'start_char':0,'end_char':len(event.content),'text':event.content}}]}
+                'scope_ref': 'unqualified', 'evidence_span':{'evidence_id':event.id,'start_char':0,'end_char':len(event.content),'text':event.content}}]}
             validate(output,kwargs['schema'])
             return output
         monkeypatch.setattr(extractor.provider,'complete_json',complete_json)
@@ -164,26 +164,135 @@ def test_approved_candidate_preserves_temporal_boundaries(tmp_path, scope):
         assert any(s.valid_from == scope['valid_from'] and s.valid_to == scope['valid_to'] for s in scopes)
 
 
-@pytest.mark.parametrize('scope', [
-    {'type':'unqualified'},
-    {'type':'temporal','valid_from':'2026-10-01'},
-    {'type':'temporal','valid_to':'2026-10-01T00:00:00Z'},
-    {'type':'project','applies_when':'Project Vega only'},
+@pytest.mark.parametrize('expression,expected', [
+    ('project=Orion', {'id-a':True,'id-b':False,None:False}),
+    ('project!=Orion', {'id-a':False,'id-b':True,None:True}),
 ])
-def test_extraction_scope_branches_accept_explicit_meaning(scope):
-    from jsonschema import validate
-    from aletheia.extraction import _scope_schema
-    validate(scope,_scope_schema())
+def test_project_condition_inclusion_and_exclusion_use_actual_context(tmp_path, expression, expected):
+    with closing(Memory.open(str(tmp_path/'projects.db'))) as memory:
+        memory.create_project('test','id-a',title='Orion')
+        memory.create_project('test','id-b',title='Vega')
+        memory.create_project('foreign','id-b',title='Orion')
+        claim = memory.remember(namespace='test',memory_type='preference',subject='user',predicate='prefers_answers',object='detailed answers')
+        memory.scope_claim(claim.id,scope_type='conditional',applies_when=expression,reason='Approved source condition')
+        for project_id, allowed in expected.items():
+            hits = memory.retrieve('test','detailed answers',project_id=project_id)
+            assert (claim.id in {h.claim_id for h in hits}) is allowed
+            # Query text must never override the supplied project identity.
+            assert memory._scope_matches_claim(claim.id,query='project=Orion',project_id=project_id,session_id=None) is allowed
 
-@pytest.mark.parametrize('scope', [
-    None, {'type':'temporal'}, {'type':'contextual'},
-    {'type':'temporal','valid_from':'null'},
-    {'type':'temporal','valid_from':None},
-    {'type':'unqualified','valid_from':'2026-10-01'},
-    {'type':'project','applies_when':''},
-])
-def test_extraction_scope_branches_reject_ambiguous_shapes(scope):
-    from jsonschema import validate, ValidationError
-    from aletheia.extraction import _scope_schema
-    with pytest.raises(ValidationError):
-        validate(scope,_scope_schema())
+
+def test_qualifier_repair_is_bounded_audited_and_preserves_source(monkeypatch,tmp_path):
+    from copy import deepcopy
+    from aletheia.models import ExtractionPolicy
+    with closing(Memory.open(str(tmp_path/'repair.db'))) as memory:
+        event = memory.write_event(namespace='test',source_type='manual',content='The previous office was Paris. Since October 2026 the office is Berlin.')
+        extractor = LLMExtractor(provider='mock_llm',max_repair_attempts=1)
+        item = {'subject':'office','predicate':'was','object':'Paris','memory_type':'fact',
+                'suggested_scope':{'type':'temporal','valid_from':'2026-10-01'},
+                'evidence_span':{'evidence_id':event.id,'start_char':0,'end_char':len(event.content),'text':event.content}}
+        calls=[]
+        def complete_json(**kwargs):
+            calls.append(deepcopy(kwargs['messages']))
+            candidate=deepcopy(item)
+            if len(calls)>1: candidate['suggested_scope']={'type':'temporal','valid_to':'2026-10-01'}
+            return {'candidates':[candidate]}
+        monkeypatch.setattr(extractor.provider,'complete_json',complete_json)
+        drafts=extractor.extract(namespace='test',evidence=[event],policy=ExtractionPolicy())
+        assert len(calls)==2 and len(drafts)==1
+        assert drafts[0].suggested_scope=={'type':'temporal','valid_to':'2026-10-01'}
+        assert [a['status'] for a in extractor.last_invocation.metadata['attempts']]==['rejected','completed']
+        assert 'upper time boundary' in calls[1][-1]['content']
+        calls.clear()
+        monkeypatch.setattr(extractor.provider,'complete_json',lambda **kw: calls.append(kw) or {'candidates':[deepcopy(item)]})
+        assert extractor.extract(namespace='test',evidence=[event],policy=ExtractionPolicy())==[]
+        assert len(calls)==2
+        assert extractor.last_invocation.status=='invalid_schema'
+
+
+def test_quality_oracle_rejects_reversed_dates_and_text_only_project_scope():
+    from scripts.beta_live_workflows import qualified_transition,qualified_project
+    rows=[{'object':'Berlin','suggested_scope':{'valid_from':'2026-10-01'}},
+          {'object':'Paris','suggested_scope':{'valid_from':'2026-10-01'}}]
+    assert not qualified_transition(rows,'berlin','paris','2026-10-01')
+    rows[1]['suggested_scope']={'valid_to':'2026-10-01'}
+    assert qualified_transition(rows,'berlin','paris','2026-10-01')
+    assert not qualified_project([{'object':'detailed answers for Orion'},{'object':'concise answers elsewhere'}],'orion','detailed','concise')
+
+
+def test_source_scope_catalog_has_only_evidence_derived_choices():
+    from aletheia.extraction import _source_scopes
+    assert _source_scopes('User prefers tea.')=={'unqualified':None}
+    office=_source_scopes('The previous office was Paris. Since October 2026 the office is Berlin.')
+    assert office['since:2026-10-01']=={'type':'temporal','valid_from':'2026-10-01'}
+    assert office['until:2026-10-01']=={'type':'temporal','valid_to':'2026-10-01'}
+    warehouse=_source_scopes('Until May 2024 the warehouse was Oslo. Since June 2024 the warehouse is Lisbon.')
+    assert 'since:2024-05-01' not in warehouse
+    assert warehouse['until:2024-05-01']['valid_to']=='2024-05-01'
+    assert warehouse['since:2024-06-01']['valid_from']=='2024-06-01'
+    assert _source_scopes('Only for project Vega use bullets.')['project!=Vega']['applies_when']=='project!=Vega'
+
+
+def test_scope_reference_cannot_borrow_another_events_anchor(tmp_path):
+    with closing(Memory.open(str(tmp_path/'binding.db'))) as memory:
+        plain=memory.write_event(namespace='test',source_type='manual',content='User prefers tea.')
+        dated=memory.write_event(namespace='test',source_type='manual',content='Since October 2026 the office is Berlin.')
+        extractor=LLMExtractor(provider='mock_llm')
+        item={'subject':'user','predicate':'prefers','object':'tea','memory_type':'preference','scope_ref':'since:2026-10-01',
+              'evidence_span':{'evidence_id':plain.id,'start_char':0,'end_char':len(plain.content),'text':plain.content}}
+        with pytest.raises(ValueError,match='not an anchor'):
+            extractor._drafts_from_output({'candidates':[item]},evidence_by_id={plain.id:plain,dated.id:dated})
+        item['scope_ref']='unqualified'
+        assert extractor._drafts_from_output({'candidates':[item]},evidence_by_id={plain.id:plain})[0].suggested_scope is None
+
+
+def test_source_interval_anchor_preserves_both_bounds():
+    from aletheia.extraction import _source_scopes
+    anchors=_source_scopes('The office is Rome from March 2025 until July 2025.')
+    assert anchors['between:2025-03-01:2025-07-01']=={'type':'temporal','valid_from':'2025-03-01','valid_to':'2025-07-01'}
+
+
+def test_owned_scratch_directory_has_private_acl_before_database_creation():
+    from pathlib import Path
+    from aletheia.storage.private_files import private_temporary_directory,require_windows_private_directory
+    with private_temporary_directory(prefix='aletheia-scratch-test-') as directory:
+        path=Path(directory)
+        if os.name=='nt':
+            require_windows_private_directory(path)
+        else:
+            assert path.stat().st_mode & 0o077 == 0
+        with closing(Memory.open(str(path/'scratch.db'))) as memory:
+            memory.write_event(namespace='test',source_type='manual',content='synthetic private scratch')
+    assert not path.exists()
+
+
+def test_temporal_quality_oracle_rejects_invented_other_boundaries():
+    from scripts.beta_live_workflows import qualified_transition
+    rows=[{'object':'Lisbon','suggested_scope':{'valid_from':'2024-06-01'}},
+          {'object':'Oslo','suggested_scope':{'valid_from':'2024-05-01','valid_to':'2024-05-31'}}]
+    assert not qualified_transition(rows,'lisbon','oslo','2024-06-01')
+    rows[1]['suggested_scope']={'valid_to':'2024-05-01'}
+    assert qualified_transition(rows,'lisbon','oslo','2024-06-01')
+    rows[0]['suggested_scope']['valid_to']='2024-12-31'
+    assert not qualified_transition(rows,'lisbon','oslo','2024-06-01')
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Native Windows directory creation and refusal')
+def test_windows_reservation_creates_private_parent_and_refuses_shared_restore(tmp_path):
+    import subprocess
+    from pathlib import Path
+    from aletheia.onboarding import reserve_database
+    from aletheia.storage.private_files import require_windows_private_directory
+    target=tmp_path/'new'/'nested'/'m.db'
+    reserve_database(target)
+    require_windows_private_directory(target.parent)
+    require_windows_private_directory(target)
+    with closing(Memory.open(str(target))) as memory:
+        memory.write_event(namespace='test',source_type='manual',content='owned')
+        shared=tmp_path/'shared-copy'
+        shared.mkdir()
+        subprocess.run(['icacls',str(shared),'/grant','*S-1-1-0:(OI)(CI)F'],check=True,capture_output=True)
+        from aletheia.core.hardening import _sqlite_copy
+        with pytest.raises(PermissionError):
+            _sqlite_copy(memory.store.connection,shared/'must-not-exist.db')
+        assert not (shared/'must-not-exist.db').exists()

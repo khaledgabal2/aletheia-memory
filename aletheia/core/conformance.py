@@ -14,7 +14,7 @@ import io
 import json
 import os
 from pathlib import Path
-import tempfile
+from aletheia.storage.private_files import private_temporary_directory
 import traceback
 
 
@@ -46,7 +46,7 @@ def observe(suite):
     try:
         if not __debug__:
             raise RuntimeError('Behavioral probes require assertion-enabled Python.')
-        with tempfile.TemporaryDirectory(prefix='aletheia-conformance-') as directory, closing(
+        with private_temporary_directory(prefix='aletheia-conformance-') as directory, closing(
                 Memory.open(str(Path(directory) / 'fixture.db'), namespace='conformance/fixture')) as m:
             path = Path(directory)
             if suite in {'kernel', 'context-pack-schema'}:

@@ -10,7 +10,7 @@ from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
-import tempfile
+from aletheia.storage.private_files import private_temporary_directory
 from types import SimpleNamespace
 
 
@@ -71,7 +71,7 @@ def _probe_bundled_loop(code):
 
     namespace = "certification/fixture"
     query = "certneedle λ"
-    with tempfile.TemporaryDirectory(prefix="aletheia-adapter-contract-") as root, closing(
+    with private_temporary_directory(prefix="aletheia-adapter-contract-") as root, closing(
         Memory.open(str(Path(root) / "fixture.db"), namespace=namespace)
     ) as memory:
         public = memory.remember(memory_type="fact", subject="certneedle", predicate="records", object="fixture context λ")

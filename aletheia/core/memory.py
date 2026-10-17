@@ -13466,6 +13466,24 @@ class Memory:
                 continue
             if ends and ends <= now:
                 continue
+            condition = re.fullmatch(r"project(!?=)(.+)", scope.applies_when or "", re.I)
+            if condition:
+                expected = condition.group(2).strip().strip("\"'").casefold()
+                if not expected:
+                    continue
+                names = {str(project_id).casefold()} if project_id is not None else set()
+                if project_id is not None:
+                    project = self.store.connection.execute(
+                        "SELECT title FROM projects WHERE namespace=? AND id=?", (scope.namespace, project_id)
+                    ).fetchone()
+                    if project:
+                        names.add(project["title"].casefold())
+                names |= {"project " + name for name in names}
+                matches = expected in names
+                condition_matches = matches if condition.group(1) == "=" else not matches
+                if condition_matches:
+                    return True
+                continue
             if scope.scope_type == "project":
                 if scope.applies_when in {None, project_id}:
                     return True
