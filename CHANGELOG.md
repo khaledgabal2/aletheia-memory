@@ -4,6 +4,9 @@ All notable public changes to Aletheia are tracked here.
 
 ## Unreleased
 
+Prepared [release notes and upgrade guidance](docs/next_release_notes.md) record
+the qualification results and supported boundaries. No new release is published.
+
 - Bind LLM extraction scopes to source-derived references, preserve approved
   temporal boundaries, add bounded audited repairs, and enforce named-project
   inclusion/exclusion against actual project context.
