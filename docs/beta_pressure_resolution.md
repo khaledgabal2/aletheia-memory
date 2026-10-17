@@ -4,6 +4,40 @@ This is the follow-up to the seven findings in `beta_pressure_findings.md`.
 It records changes and verification separately from the original campaign.
 No production release, tag or publication is authorized by this report.
 
+## Final campaign decision — October 16, 2026
+
+The seven reported defects are fixed and the bounded follow-up campaign is
+complete. **Retain beta; this is not production approval.** Implementation
+revision `8dd1873` passed 1,074 local tests (including 324 focused regressions),
+all 14 milestone scorecards, configured real Llama/Nomic checks, fresh-artifact
+and interface checks, actual isolated disk-full recovery, and a 30-minute soak
+with 2,516 complete lifecycle cycles and stable source. Statement coverage was
+85.0%; branch coverage was 65.9%.
+
+Native Actions [run 38997788906](https://github.com/khaledgabal2/aletheia-memory/actions/runs/38997788906)
+passed every job at `8b02622`, including all nine Linux/macOS/Windows and Python
+3.11/3.12/3.13 combinations. That revision changes only redirect test fixtures
+and this journal relative to the tested implementation. Linux additionally
+verified bounded MemoryError and write/reopen/integrity recovery. Windows 3.13
+reported 1,057 passed and 17 POSIX-only skips. The earlier redirect failure is
+preserved; the successful repeat does not prove its original root cause.
+
+Coverage includes 221 HTTP empty/refusal route contracts, 19 positive MCP tool
+calls, 142 SDK request facades, 284 installed CLI help leaves, and browser flows.
+These counts do not establish every input, branch or positive workflow. All eight
+real advisory tasks passed, but five of six adversarial extraction samples had
+no usable candidate. Governance refusal remains intact; extraction quality is a
+release blocker. Windows ACL isolation and a production startup-latency SLA are
+unqualified; local pairing remains POSIX-only. These are explicit remaining
+qualification gaps, not passing checks. No merge, tag or publication occurred.
+
+The scripts and reproduction instructions in `beta_pressure_evaluation.md` are
+reusable. Canonical receipts and source-stability evidence are retained locally
+under `output/beta-fixes-continuation/state.json`; raw databases, keys, tokens and
+logs are excluded from commits. The temporary follow-up is disabled when this
+report is delivered. Later documentation-only commits do not change the tested
+Python implementation.
+
 ## Changes and regression evidence
 
 | Finding | Change | Regression boundary |
@@ -233,3 +267,11 @@ release evidence and quality decisions are reviewed.
     Windows validation remains required; the original failure is not erased or
     conclusively attributed to the fixture. This test-only change does not
     invalidate the completed implementation soak.
+
+40. Native repeat `38997788906` completed successfully at `8b02622`: all nine
+    matrix combinations and every other job passed. Retained final Windows 3.13
+    and Linux 3.13 logs. Linux observed bounded MemoryError and successful
+    subsequent write/reopen/integrity; Windows 3.13 passed 1,057 tests with 17
+    POSIX skips. Finalized the decision above, preserving prior failed, invalidated
+    and resource-deferred receipts. The completed campaign supports retaining
+    beta with explicitly documented extraction/platform/performance gaps.
