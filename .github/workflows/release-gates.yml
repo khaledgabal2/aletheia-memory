@@ -59,6 +59,22 @@ jobs:
         run: python scripts/beta_resource_pressure.py --only-memory --output "$RUNNER_TEMP/aletheia-memory-pressure"
 
 
+  required-python-checks:
+    # Preserve required branch-policy contexts after expanding tests to OS/Python.
+    # Each context fails closed unless the entire native matrix passed.
+    name: tests (${{ matrix.python-version }})
+    needs: tests
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Require successful native matrix
+        env:
+          NATIVE_MATRIX_RESULT: ${{ needs.tests.result }}
+        run: test "$NATIVE_MATRIX_RESULT" = success
+
   build:
     runs-on: ubuntu-latest
     steps:
