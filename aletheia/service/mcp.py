@@ -355,7 +355,7 @@ class McpToolRegistry:
             if kind == "array" and (not isinstance(value, list) or any(not isinstance(item, str) for item in value)):
                 return False
             if kind in {"integer", "number"}:
-                if type(value) not in ((int,) if kind == "integer" else (int, float)) or not math.isfinite(value):
+                if type(value) not in ((int,) if kind == "integer" else (int, float)) or type(value) is float and not math.isfinite(value):
                     return False
                 if not spec.get("minimum", -math.inf) <= value <= spec.get("maximum", math.inf):
                     return False

@@ -28,6 +28,8 @@ sys.path.insert(0, str(ROOT))
 
 
 def main():
+    if not __debug__:
+        raise RuntimeError('Pressure validation requires assertion-enabled Python.')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--live-models', action='store_true')
@@ -162,6 +164,7 @@ def main():
             step('reliability-pressure', [py, 'scripts/beta_reliability_pressure.py', '--output', str(output / 'reliability')], timeout=300)
         elif args.phase == 'regression':
             step('regression', [py, '-m', 'pytest', 'tests/test_beta_pressure_regressions.py',
+                'tests/test_beta_surface_workflows.py', 'tests/test_beta_sdk_surface.py',
                 'tests/test_m2_memory_integrity.py', 'tests/test_m12_governed_llm_memory.py',
                 'tests/test_m6_memory_service.py', 'tests/test_certification_evidence.py',
                 '--junitxml=' + str(output / 'regression.xml')])

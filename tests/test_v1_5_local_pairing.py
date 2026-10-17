@@ -252,14 +252,15 @@ def test_cli_registration_shutdown_and_crash_lease(tmp_path, crash):
     directory = tmp_path / "discovery"
     command = [sys.executable, "-m", "aletheia.cli.main", "serve", "--db", str(tmp_path / "cli.db"),
         "--port", "0", "--auto-migrate", "--discovery-dir", str(directory), "--identity-dir", str(tmp_path / "identities")]
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    startup_log = (tmp_path / "cli-startup.log").open("w")
+    process = subprocess.Popen(command, stdout=startup_log, stderr=subprocess.STDOUT)
     try:
         deadline = time.monotonic() + 10
         records = []
         while time.monotonic() < deadline and not records and process.poll() is None:
             records = list(directory.glob("*.json"))
             time.sleep(0.05)
-        assert len(records) == 1
+        assert len(records) == 1, (process.poll(), (tmp_path / "cli-startup.log").read_text())
         record = json.loads(records[0].read_text())
         assert 0 < record["expires_at_ms"] - time.time() * 1000 <= 30000
         if crash:
@@ -273,4 +274,6 @@ def test_cli_registration_shutdown_and_crash_lease(tmp_path, crash):
     finally:
         if process.poll() is None:
             process.kill()
+        process.wait(timeout=10)
+        startup_log.close()
             process.wait(timeout=5)

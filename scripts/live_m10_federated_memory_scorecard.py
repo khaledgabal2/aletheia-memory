@@ -376,7 +376,7 @@ class M10LiveScorecard:
         identity_output = run_cli(["federation", "init", "--db", str(cli_db), "--display-name", "live CLI"])
         conformance_output = run_cli(["federation-conformance", "run", "--db", str(cli_db)])
         assert "live CLI" in identity_output
-        assert '"status": "passed"' in conformance_output
+        assert '"status": "structural_passed"' in conformance_output
         assert hasattr(AletheiaClient, "federation_status")
         assert hasattr(AletheiaClient, "sync_run")
         assert hasattr(AsyncAletheiaClient, "create_workspace")

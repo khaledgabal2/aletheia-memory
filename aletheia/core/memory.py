@@ -7428,9 +7428,9 @@ class Memory:
         namespace = namespace or self.namespace
         if target_type == "claim" and self.read_claim(target_id).namespace != namespace:
             raise ValidationError("Feedback target belongs to another namespace.")
-        if isinstance(strength, bool) or not isinstance(strength, (int, float)) or not math.isfinite(strength):
+        if type(strength) not in (int, float) or type(strength) is float and not math.isfinite(strength):
             raise ValidationError("Feedback strength must be a finite number.")
-        strength = max(0.0, min(float(strength), 1.0))
+        strength = float(max(0, min(strength, 1)))
         if source == "assistant" and signal in {"confirmed", "verified"} and not evidence_id:
             strength = 0.0
             note = (note + " " if note else "") + "Assistant repetition supplies no independent verification evidence."
@@ -7936,6 +7936,10 @@ class Memory:
         if scoped_claims is not None and (not isinstance(scoped_claims, list) or any(not isinstance(item, dict) for item in scoped_claims)):
             raise ValidationError("scoped_claims must be a list of scope objects.")
         scoped_claims = [dict(item) for item in scoped_claims or []]
+        for item in scoped_claims:
+            self._require_text(item.get("claim_id"), "claim_id")
+            if "scope_type" in item and not isinstance(item["scope_type"], str):
+                raise ValidationError("scope_type must be a string.")
         if strategy in {"context_scope", "time_scope"}:
             if not scoped_claims:
                 raise ValidationError("Scope resolution requires explicit scoped_claims in the same operation.")

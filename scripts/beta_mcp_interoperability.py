@@ -15,7 +15,9 @@ from mcp.client.stdio import stdio_client
 
 
 async def run(args):
-    params = StdioServerParameters(command=str(args.server_python.resolve()), args=[
+    # Keep the venv entrypoint: resolving its symlink selects the base Python
+    # and silently discards the installed artifact's site-packages.
+    params = StdioServerParameters(command=str(args.server_python.absolute()), args=[
         '-I', '-m', 'aletheia.cli.main', 'mcp', '--db', str(args.output / 'memory.db'),
         '--namespace', 'evaluation/official-sdk', '--mode', 'read_write_candidate'])
     async with stdio_client(params) as (read, write):

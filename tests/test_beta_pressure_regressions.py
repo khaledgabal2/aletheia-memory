@@ -109,7 +109,9 @@ def test_scope_resolution_requires_atomic_complete_scopes(memory, strategy):
     b = remember(memory, object='Emacs')
     conflict = memory.list_conflicts(namespace='beta/main')[0]
     before = memory.store.connection.total_changes
-    for scopes in [None, [], [{'claim_id': a.id, 'applies_when': 'architecture'}]]:
+    for scopes in [None, [], [{'claim_id': a.id, 'applies_when': 'architecture'}],
+                   [{'claim_id': []}], [{'claim_id': a.id, 'scope_type': []}],
+                   [{'claim_id': a.id, 'valid_from': 'bad time'}, {'claim_id': b.id}]]:
         with pytest.raises(ValidationError):
             memory.resolve_conflict(conflict.id, strategy=strategy, scoped_claims=scopes)
     assert memory.store.connection.total_changes == before
@@ -225,6 +227,57 @@ def test_mcp_candidate_writes_remain_pending_and_invalid_arguments_do_not_write(
 
 def test_legacy_stdio_namespace_remains_supported(tmp_path):
     assert stdio(tmp_path, [{'tool': 'memory_search', 'arguments': {'query': 'needle'}}]) == [{'ok': True, 'data': []}]
+
+
+def test_every_mcp_tool_executes_through_jsonrpc_with_real_governance(memory):
+    from aletheia.models import ServiceConfig
+    from aletheia.service.http import AletheiaService
+    from aletheia.service.mcp import McpToolRegistry
+    claim = remember(memory)
+    batch = memory.ingest(memory.namespace, source_type='manual', content='User prefers concise architecture notes.')
+    run = memory.extract_candidates(memory.namespace, batch_id=batch.id)
+    candidate = memory.list_candidates(memory.namespace, extraction_run_id=run.id)[0]
+    other = memory.ingest(memory.namespace, source_type='manual', content='User prefers careful progress summaries.')
+    other_run = memory.extract_candidates(memory.namespace, batch_id=other.id)
+    rejected = memory.list_candidates(memory.namespace, extraction_run_id=other_run.id)[0]
+    service = AletheiaService(memory, ServiceConfig(db_path=memory.store.path, auth_required=False,
+        rate_limit_enabled=False, local_pairing_enabled=False, advertise_local=False))
+    registry = McpToolRegistry(service, namespace=memory.namespace, mode='admin')
+    values = {'query': 'architecture', 'target_id': claim.id, 'target_type': 'claim', 'claim_id': claim.id,
+              'signal': 'useful', 'memory_type': 'fact', 'subject': 'mcp agent', 'predicate': 'observes',
+              'object': 'synthetic observation', 'content': 'User prefers bounded MCP probes.',
+              'candidate_id': candidate.id, 'reason': 'Synthetic operator checked evidence',
+              'evidence_ids': batch.evidence_ids, 'task_id': 'synthetic-mcp-task', 'outcome': 'success'}
+    messages = initialize()
+    names = []
+    for index, tool in enumerate(registry.tools(), 2):
+        arguments = {key: values[key] for key in tool.input_schema.get('required', [])}
+        if tool.name == 'memory_remember':
+            arguments['evidence_text'] = 'MCP agent observes synthetic observation.'
+        if tool.name == 'memory_extract_candidates':
+            arguments.update(batch_id=batch.id, extractor='rule_based')
+        if tool.name.startswith('memory_llm_'):
+            arguments['provider'] = 'mock'
+        if tool.name == 'memory_reject_candidate':
+            arguments['candidate_id'] = rejected.id
+        messages.append({'jsonrpc': '2.0', 'id': index, 'method': 'tools/call',
+                         'params': {'name': tool.name, 'arguments': arguments}})
+        names.append(tool.name)
+    output = io.StringIO()
+    registry.serve_stdio(io.StringIO(''.join(json.dumps(row) + '\n' for row in messages)), output)
+    rows = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert len(rows) == 1 + len(names)
+    for name, row in zip(names, rows[1:]):
+        assert 'result' in row and not row['result']['isError'], (name, row)
+    assert memory.read_candidate(candidate.id).candidate_status == 'promoted'
+    assert memory.read_candidate(rejected.id).candidate_status == 'rejected'
+    assert len(memory.list_claims(namespace=memory.namespace)) == 2
+
+
+def test_nonfinite_json_frame_is_rejected_and_connection_recovers(tmp_path):
+    rows = stdio(tmp_path, [{'jsonrpc': '2.0', 'id': 9, 'method': 'ping', 'params': {'value': float('nan')}}] + initialize())
+    assert rows[0]['error']['code'] == -32700
+    assert rows[1]['result']['protocolVersion'] == '2025-06-18'
 
 
 def test_console_logout_and_auth_loss_clear_panels_and_discard_late_responses(tmp_path):

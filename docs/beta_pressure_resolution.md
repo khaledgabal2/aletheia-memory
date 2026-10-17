@@ -51,3 +51,34 @@ These probes have explicit bounded scope, documented in behavior_verification.md
 Further results are appended after execution, with failed and deferred work
 kept distinct from passing checks. Beta status remains until all required
 release evidence and quality decisions are reviewed.
+
+7. `output/beta-fixes-reliability2` passed: bounded SQLITE_FULL refusal left
+   integrity intact and recovered after capacity was increased; eight separate
+   processes completed 400 real retrievals; the 120-second soak completed 200
+   candidate/operator-review/idempotent-replay/recall/feedback/context cycles plus
+   1,208 further reads. The fixture stopped its own server cleanly. This is a
+   bounded run, not a multi-day soak or physical-disk exhaustion test.
+8. Saved review branch `codex/beta-pressure-fixes`. Automatic approval review
+   required explicit authorization for a public draft PR; the user supplied it.
+   Draft PR #69 triggers actual native Linux/macOS/Windows jobs for Python
+   3.11, 3.12 and 3.13. No release workflow was started.
+
+9. `beta-fixes-coverage1` passed 915 tests with 83.2% statement and 64.5%
+   branch coverage inside pytest; 269/317 public Memory bodies were observed.
+   Independent subprocess work is excluded from those percentages. The remaining
+   M10 scorecard expected a structural certificate to say passed; corrected it.
+10. `beta-fixes-extended1` passed advisory/model, HTTP/SDK concurrency, installed
+    artifact README/version, onboarding/recovery, and all TypeScript stages.
+    Official MCP SDK 1.30.0 passed against the installed 1.6.3 wheel in
+    `beta-fixes-interop2`. The initial interoperability fixture resolved the
+    virtualenv Python symlink to base Python and lost site-packages; that harness
+    failure is retained in interop1.
+11. Added a 144-case SDK request-facade sweep using actual handlers and independent
+    OpenAPI paths, plus positive lifecycle tests for clustering, inference
+    rejection, operator dismissal/snoozing, catalog persistence and membership
+    removal. Added all 19 MCP tools through JSON-RPC. Retained fixture failures
+    for missing example seed and missing encrypted-backup key (regression4/5).
+12. First native macOS/Python 3.13 run passed 913 tests and failed two CLI
+    advertisement startup cases. The old tests discarded subprocess output;
+    added saved startup diagnostics for the repeat. No platform pass is inferred
+    from the local macOS result. Remaining native jobs are pending.
