@@ -27,7 +27,7 @@ def server(handler):
 @pytest.mark.parametrize("method", ["GET", "POST"])
 @pytest.mark.parametrize("asynchronous", [False, True])
 def test_redirects_never_forward_credentials_or_payload(code, method, asynchronous):
-    received, origins = [], []
+    received, origins, origin_bodies = [], [], []
     class Destination(BaseHTTPRequestHandler):
         def do_GET(self):
             received.append(dict(self.headers))
@@ -41,7 +41,11 @@ def test_redirects_never_forward_credentials_or_payload(code, method, asynchrono
         class Origin(BaseHTTPRequestHandler):
             def do_GET(self):
                 origins.append(self.command)
+                # Consume the request before closing: unread POST data can reset
+                # the TCP connection on Windows before the redirect is received.
+                origin_bodies.append(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
                 self.send_response(code)
+                self.send_header("Content-Length", "0")
                 self.send_header("Location", destination + "/capture")
                 self.end_headers()
             do_POST = do_GET
@@ -53,8 +57,11 @@ def test_redirects_never_forward_credentials_or_payload(code, method, asynchrono
                 result = client.health() if method == "GET" else client.retrieve(namespace="test", query="synthetic private body")
                 if asynchronous:
                     asyncio.run(result)
-            assert failure.value.code == "redirect_blocked"
+            assert failure.value.code == "redirect_blocked", (
+                failure.value.code, repr(failure.value.__cause__)
+            )
             assert failure.value.status_code == code
+            assert origin_bodies == ([b""] if method == "GET" else [b'{"namespace": "test", "query": "synthetic private body"}'])
             assert origins == [method], "Redirect rejection must not be retried."
             assert received == [], "No credentials or body may reach the redirect destination."
 
@@ -65,8 +72,10 @@ def test_same_origin_redirects_are_rejected_too(method, asynchronous):
     seen = []
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
             seen.append(self.path)
             self.send_response(302)
+            self.send_header("Content-Length", "0")
             self.send_header("Location", "/different-path")
             self.end_headers()
         do_POST = do_GET
@@ -78,7 +87,9 @@ def test_same_origin_redirects_are_rejected_too(method, asynchronous):
             value = client.health() if method == "GET" else client.retrieve(namespace="fixture")
             if asynchronous:
                 asyncio.run(value)
-        assert failure.value.code == "redirect_blocked"
+        assert failure.value.code == "redirect_blocked", (
+                failure.value.code, repr(failure.value.__cause__)
+            )
         assert seen == ["/v1/health" if method == "GET" else "/v1/retrieve"]
 
 
