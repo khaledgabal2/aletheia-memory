@@ -25,3 +25,14 @@ An initial Windows 3.12 750ms concurrency timeout passed unchanged on repeat;
 its root cause is unproven. Model review, bounded grammar, trusted Windows
 ancestors, POSIX-only pairing, sampled startup budgets and the monotonic soak's
 host-suspension limitation remain explicit release constraints, not waived gates.
+
+## Concurrency gate interpretation
+
+The 750ms Windows 3.12 health-concurrency timeout recurred on the prepublication
+main gate. No release was tagged from that failed run. Its log did not separate
+request preparation from response work, so the original timing cause remains
+unproven. The regression now bounds authenticated request preparation separately,
+then retains the original 750ms response deadlines and requires both operations
+to finish before the deliberately paused provider is released. Delayed-authentication
+cases exercise this distinction. This is provider-isolation evidence, not a
+750ms end-to-end health SLA; startup acceptance budgets are unchanged.
