@@ -496,13 +496,29 @@ def test_cli_context_sessions_projects_and_migrate(tmp_path, capsys):
     assert session_id in capsys.readouterr().out
 
 
+def test_supported_initialization_uses_wal_before_migration(tmp_path, monkeypatch):
+    from aletheia.storage import SQLiteStore
+    migrate = SQLiteStore.migrate
+    observed = []
+    def checked(store):
+        observed.append(store.connection.execute('PRAGMA journal_mode').fetchone()[0])
+        return migrate(store)
+    monkeypatch.setattr(SQLiteStore, 'migrate', checked)
+    memory = Memory.open(str(tmp_path / 'fresh.db'))
+    memory.close()
+    assert observed == ['wal']
+
+
 def test_unsupported_migration_preserves_claims_and_audit(tmp_path):
     db_path = tmp_path / "m0.db"
     _create_minimal_m0_database(db_path)
     with sqlite3.connect(db_path) as connection:
         before = list(connection.iterdump())
+    original_bytes = db_path.read_bytes()
     with pytest.raises(RuntimeError, match="supported migration range"):
         Memory.open(str(db_path))
+    assert db_path.read_bytes() == original_bytes
+    assert not db_path.with_name(db_path.name + "-wal").exists()
     with sqlite3.connect(db_path) as connection:
         assert list(connection.iterdump()) == before
         assert connection.execute("SELECT object FROM claims WHERE id='clm_m0'").fetchone()[0] == "direct"

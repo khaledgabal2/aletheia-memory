@@ -107,7 +107,8 @@ def test_archive_is_private_and_refuses_overwrite(memory, tmp_path):
     claim(memory)
     output = tmp_path / "backup.alet"
     memory.create_backup(output_path=str(output), encrypt=False, verify_after=False)
-    assert os.stat(output).st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert os.stat(output).st_mode & 0o777 == 0o600
     before = output.read_bytes()
     with pytest.raises(ValidationError, match="already exists"):
         memory.create_backup(output_path=str(output), encrypt=False, verify_after=False)

@@ -114,6 +114,11 @@ class LocalPairing:
         Handler.service = self.service
 
         class SecureServer(ThreadingHTTPServer):
+            def server_bind(self):
+                import socketserver
+                socketserver.TCPServer.server_bind(self)
+                self.server_name, self.server_port = self.server_address[:2]
+
             daemon_threads = True
             slots = threading.BoundedSemaphore(32)
             def process_request(self, request, address):

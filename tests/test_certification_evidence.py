@@ -1,6 +1,8 @@
 """Certification requires observed behavior; structure and missing probes do not pass."""
 from contextlib import closing
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 from aletheia import Memory
 from aletheia.client import AletheiaClient
 from aletheia.core import platform
+from aletheia.core.conformance import SUITES
 
 
 @pytest.fixture
@@ -74,13 +77,22 @@ def test_behavioral_probe_detects_a_regression_in_the_real_sdk(memory, tmp_path,
     assert certificate.status == "failed" and certificate.certified_at is None
 
 
-@pytest.mark.parametrize("suite", ["kernel", "http-api", "mcp", "python-sdk", "context-pack-schema", "plugin",
-                                    "protected-mode", "federation-redaction", "semantic-retrieval", "llm-governance"])
-def test_structural_checks_never_claim_behavioral_conformance(memory, suite):
+@pytest.mark.parametrize("suite", sorted(SUITES))
+def test_builtin_conformance_executes_isolated_probes_not_caller_attestations(memory, suite):
     run = memory.run_conformance(suite=suite, metadata={"assurance": "behavioral", "passed": True})
-    assert run.status in {"structural_passed", "incomplete"}
-    assert run.metadata["assurance"] == "structural"
-    assert run.passed_count == 0
+    assert run.status == "passed", run.metadata
+    assert run.metadata["assurance"] == "behavioral"
+    assert run.metadata["probes"] and len(run.metadata["implementation_sha256"]) == 64
+    assert run.passed_count == 3
+    assert not memory.list_claims(namespace=memory.namespace)
+    assert not memory.list_candidates(memory.namespace)
+
+
+def test_caller_metadata_cannot_hide_a_failed_builtin_probe(memory, monkeypatch):
+    monkeypatch.setattr(Memory, 'context_pack', lambda *a, **kw: None)
+    run = memory.run_conformance(suite='kernel', metadata={'assurance': 'behavioral', 'passed': True})
+    assert run.status == 'failed' and run.passed_count == 0
+    assert run.metadata['failure_type'] == 'AttributeError'
 
 
 def test_empty_or_unknown_case_suite_cannot_pass(memory):
@@ -125,12 +137,19 @@ def test_legacy_certificates_and_federation_inventory_do_not_claim_verified_beha
     assert memory.federation_conformance()["assurance"] == "structural"
 
 
-def test_gate_uses_latest_suite_evidence_even_if_an_older_run_passed(memory):
+def test_gate_uses_latest_suite_evidence_even_if_an_older_run_passed(memory, monkeypatch):
     old = memory.run_conformance(suite="kernel")
     with memory.store.transaction():
         memory.store.connection.execute("UPDATE conformance_runs SET status = 'passed', metadata_json = ? WHERE id = ?",
             (json.dumps({"assurance": "behavioral"}), old.id))
         memory.store.connection.execute("UPDATE conformance_suites SET required_for_v1 = CASE WHEN id = ? THEN 1 ELSE 0 END", (old.suite_id,))
+    monkeypatch.setattr(Memory, 'context_pack', lambda *a, **kw: None)
     memory.run_conformance(suite="kernel")
     gate = memory.v1_gate_run(auto_run_conformance=False)
     assert next(check for check in gate.checks if check["name"] == "conformance_passed")["status"] == "failed"
+
+
+def test_optimized_python_cannot_issue_behavioral_pass():
+    script = "from aletheia.core.conformance import observe; cases, evidence = observe('kernel'); raise SystemExit(0 if all(row[0] == 'failed' for row in cases.values()) else 1)"
+    result = subprocess.run([sys.executable, '-O', '-c', script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr

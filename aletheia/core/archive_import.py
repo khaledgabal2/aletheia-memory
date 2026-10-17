@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import tempfile
+from aletheia.storage.private_files import private_temporary_directory
 from pathlib import Path
 
 from aletheia.core import hardening as storage
@@ -21,7 +21,7 @@ def _rows(payload):
     tables = ("evidence_events", "claims", "claim_evidence_links", "derivation_edges", "deletion_tombstones")
     if "database.sqlite" not in payload:
         return {table: storage._jsonl_rows(payload.get("logical/" + table + ".jsonl", b"")) for table in tables}
-    with tempfile.TemporaryDirectory(prefix="aletheia-import-") as temp:
+    with private_temporary_directory(prefix="aletheia-import-") as temp:
         path = Path(temp) / "source.sqlite"
         path.write_bytes(payload["database.sqlite"])
         connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)

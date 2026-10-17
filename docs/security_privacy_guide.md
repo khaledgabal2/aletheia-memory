@@ -89,3 +89,17 @@ aletheia v1-gate run --db ./aletheia.db
 Read `docs/encryption_layer.md` for the full encryption-layer model, including
 algorithms, key records, rotation, backup encryption, indexing effects,
 redaction/forget interactions, and current limits.
+
+## Windows artifact isolation
+
+Windows private artifacts use native protected DACLs rather than relying on mode
+bits. Database directories and existing sidecars are inspected before opening;
+broad directories are refused rather than silently re-permissioned. Owned scratch
+directories are created with private inheritable DACLs, including on Python 3.11.
+New database/archive/recovery files have private DACLs at creation.
+
+This boundary concerns another standard local principal, with trusted directory
+ancestors. SYSTEM, elevated administrators, an account sharing the owner's token,
+and offline disk access are outside that ACL guarantee. Encryption is separate.
+Local pairing remains POSIX-only. Native qualification and its exact tested scope
+are recorded in [production qualification](production_qualification.md).

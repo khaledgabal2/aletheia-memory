@@ -10,7 +10,7 @@ import platform as py_platform
 import socket
 import sqlite3
 import sys
-import tempfile
+from aletheia.storage.private_files import private_temporary_directory
 import time
 import tomllib
 import urllib.error
@@ -755,12 +755,20 @@ def run_conformance(
     results: list[dict] = []
     evidence = {"assurance": "structural", "contract": None}
     adapter_results = None
+    builtin_results = None
+    if target is None:
+        from aletheia.core.conformance import observe
+        observed = observe(conformance_suite.name)
+        if observed is not None:
+            builtin_results, evidence = observed
     if conformance_suite.name == "agent-adapter" and target:
         from aletheia.core.adapter_contract import check_adapter
         adapter_results, evidence = check_adapter(target, _adapter_loop_source("python-sdk"),
             expected_type=(metadata or {}).get("expected_adapter_type"))
     for case in cases:
-        if adapter_results is not None:
+        if builtin_results is not None:
+            case_status, message = builtin_results.get(case.name, ("skipped", "No implemented behavioral probe for this case."))
+        elif adapter_results is not None:
             case_status, message = adapter_results.get(case.name, ("skipped", "No implemented probe for this case."))
         else:
             case_status, message = _evaluate_conformance_case(memory, conformance_suite, case, target=target, metadata=metadata or {})
@@ -1064,7 +1072,7 @@ def test_doc_examples(memory) -> dict:
 
     run("contracts", contracts)
 
-    with tempfile.TemporaryDirectory(prefix="aletheia-doc-examples-") as temp:
+    with private_temporary_directory(prefix="aletheia-doc-examples-") as temp:
         root = Path(temp)
 
         def starters() -> str:
@@ -1345,7 +1353,9 @@ def v1_gate_run(
     passed_suite_ids = set()
     for suite in required_suites:
         row = memory.store.connection.execute("SELECT * FROM conformance_runs WHERE suite_id = ? AND target_id IS NULL ORDER BY started_at DESC, rowid DESC LIMIT 1", (suite.id,)).fetchone()
-        if row and row["status"] == "passed" and json.loads(row["metadata_json"]).get("assurance") == "behavioral":
+        from aletheia.core.conformance import implementation_digest
+        proof = json.loads(row["metadata_json"]) if row else {}
+        if row and row["status"] == "passed" and proof.get("assurance") == "behavioral" and proof.get("implementation_sha256") == implementation_digest():
             passed_suite_ids.add(suite.id)
     missing_suites = [suite.name for suite in required_suites if suite.id not in passed_suite_ids]
     check("conformance_passed", not missing_suites, message="Missing passing suites: " + ", ".join(missing_suites))

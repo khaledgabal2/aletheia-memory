@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aletheia import Memory
+from aletheia.storage import SCHEMA_VERSION
 
 NAMESPACE = "user/default"
 
@@ -41,7 +42,7 @@ class M1Runner:
     def run(self) -> list[CaseResult]:
         cases: list[tuple[str, str, Callable[[], str]]] = [
             ("Command Surface", "M1 CLI commands are exposed", self.case_help),
-            ("Migration", "M0 database migrates to 1.3.0", self.case_m0_migration),
+            ("Migration", "Unsupported M0 migration is refused without changing bytes", self.case_m0_migration),
             ("Setup", "Initialize clean M1 database", self.case_init),
             ("Projects", "Create and inspect project", self.case_project_create),
             ("Sessions", "Start project session", self.case_session_start),
@@ -71,27 +72,16 @@ class M1Runner:
         with tempfile.TemporaryDirectory(prefix="aletheia-m0-") as temp_dir:
             m0_path = Path(temp_dir) / "m0.db"
             create_m0_database(m0_path)
-            migrated = self.cli(["migrate", "--db", str(m0_path)], include_db=False)
-            health = json.loads(migrated.stdout)
-            assert health["schema_version"] == "1.3.0"
-            searched = self.cli(
-                [
-                    "search",
-                    "--db",
-                    str(m0_path),
-                    "--namespace",
-                    NAMESPACE,
-                    "direct",
-                ],
-                include_db=False,
-            )
-            assert "direct" in searched.stdout
-        return "0.1.0 data preserved after migration"
+            before = m0_path.read_bytes()
+            migrated = self.cli(["migrate", "--db", str(m0_path)], include_db=False, check=False)
+            assert migrated.returncode != 0 and "predates the supported migration range" in migrated.stderr
+            assert m0_path.read_bytes() == before
+        return "Unsupported 0.1.0 migration refused without changing the original database"
 
     def case_init(self) -> str:
         health = json.loads(self.cli(["init"]).stdout)
-        assert health["schema_version"] == "1.3.0"
-        return "schema_version=1.3.0"
+        assert health["schema_version"] == SCHEMA_VERSION
+        return f"schema_version={SCHEMA_VERSION}"
 
     def case_project_create(self) -> str:
         created = json.loads(
@@ -317,6 +307,7 @@ class M1Runner:
             assert unrelated_project_claim.id not in project_ids
 
             memory.retrieve(namespace=NAMESPACE, query="stale confidence marker")
+            memory.recompute_confidence(claim_id=stale.id)
             assert memory.read_claim(stale.id).confidence_effective < 0.1
             return (
                 "namespace/type/status/project filters, core ranking, "

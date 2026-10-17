@@ -138,7 +138,7 @@ class MockLLMProvider:
             scope_type = "project" if memory_type in {"project", "decision", "procedure"} else "user"
             return {
                 "candidate_id": candidate.get("id"),
-                "suggested_scope": {"type": scope_type, "requires_review": True},
+                "suggested_scope": {"type": scope_type, "applies_when": "When the source preference or project context applies", "requires_review": True},
                 "confidence": 0.68,
                 "review_state": "pending_review",
             }
@@ -405,7 +405,7 @@ def _candidate_from_event(event: dict[str, Any]) -> dict[str, Any]:
         },
         "suggested_confidence": 0.72,
         "suggested_importance": 0.45,
-        "suggested_scope": {"type": "review_required"},
+        "suggested_scope": None,
         "privacy_level": event.get("privacy_level", "personal"),
         "candidate_reason": "Structured mock LLM extraction from source evidence.",
         "suggested_categories": categories,

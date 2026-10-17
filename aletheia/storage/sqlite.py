@@ -59,13 +59,10 @@ class SQLiteStore:
     def open(cls, path: str, auto_migrate: bool = True) -> "SQLiteStore":
         if path != ":memory:":
             expanded_path = str(Path(path).expanduser())
-            Path(expanded_path).parent.mkdir(parents=True, exist_ok=True)
+            from aletheia.storage.private_files import create_private_file, prepare_database_path
+            prepare_database_path(Path(expanded_path))
             try:
-                descriptor = os.open(
-                    expanded_path,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                )
+                descriptor = create_private_file(expanded_path)
             except FileExistsError:
                 pass
             else:
@@ -80,10 +77,12 @@ class SQLiteStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 5000")
-        if expanded_path != ":memory:":
-            connection.execute("PRAGMA journal_mode = WAL")
         store = cls(path=expanded_path, connection=connection)
         try:
+            if auto_migrate:
+                store._assert_migratable(store._current_schema_version())
+            if expanded_path != ":memory:":
+                connection.execute("PRAGMA journal_mode = WAL")
             if auto_migrate:
                 store.migrate()
         except BaseException:
@@ -91,15 +90,18 @@ class SQLiteStore:
             raise
         return store
 
+    def _assert_migratable(self, current_version) -> None:
+        if current_version and self._version_key(current_version) > self._version_key(SCHEMA_VERSION):
+            raise RuntimeError(
+                f"Database schema {current_version} is newer than supported schema {SCHEMA_VERSION}."
+            )
+        if current_version and self._version_key(current_version) < self._version_key(SUPPORTED_MIGRATION_FROM):
+            raise RuntimeError(f"Database schema {current_version} predates the supported migration range starting at {SUPPORTED_MIGRATION_FROM}; preserve it for manual recovery.")
+
     def migrate(self) -> None:
         with self._lock:
             current_version = self._current_schema_version()
-            if current_version and self._version_key(current_version) > self._version_key(SCHEMA_VERSION):
-                raise RuntimeError(
-                    f"Database schema {current_version} is newer than supported schema {SCHEMA_VERSION}."
-                )
-            if current_version and self._version_key(current_version) < self._version_key(SUPPORTED_MIGRATION_FROM):
-                raise RuntimeError(f"Database schema {current_version} predates the supported migration range starting at {SUPPORTED_MIGRATION_FROM}; preserve it for manual recovery.")
+            self._assert_migratable(current_version)
             if current_version == SCHEMA_VERSION and self._schema_current():
                 return
 
@@ -150,6 +152,8 @@ class SQLiteStore:
     def transaction(self, *, immediate: bool = True) -> Iterator[None]:
         """Run writes in an atomic transaction with savepoints for nested callers."""
         with self._lock:
+            if self._transaction_depth and not self.connection.in_transaction:
+                raise sqlite3.OperationalError("Enclosing transaction was aborted; exit it before retrying.")
             outermost = self._transaction_depth == 0 and not self.connection.in_transaction
             self._transaction_depth += 1
             if outermost:
@@ -166,15 +170,19 @@ class SQLiteStore:
 
             self._savepoint_counter += 1
             savepoint = f"aletheia_sp_{self._savepoint_counter}"
-            self.connection.execute(f"SAVEPOINT {savepoint}")
             try:
-                yield
-            except BaseException:
-                self.connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-                self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
-                raise
-            else:
-                self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                self.connection.execute(f"SAVEPOINT {savepoint}")
+                try:
+                    yield
+                except BaseException:
+                    # SQLITE_FULL/IOERR can roll back the entire transaction,
+                    # destroying every savepoint. Preserve the original error.
+                    if self.connection.in_transaction:
+                        self.connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                        self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    raise
+                else:
+                    self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
             finally:
                 self._transaction_depth -= 1
 

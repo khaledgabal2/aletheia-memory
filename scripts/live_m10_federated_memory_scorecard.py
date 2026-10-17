@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 from aletheia import AletheiaClient, AsyncAletheiaClient, Memory
 from aletheia.cli.main import main as cli_main
 from aletheia.models import ServiceConfig
+from aletheia.storage import SCHEMA_VERSION
 from aletheia.service.auth import AuthService
 from aletheia.service.http import AletheiaService, openapi_schema
 
@@ -258,8 +259,14 @@ class M10LiveScorecard:
             try:
                 trusted.create_federation_identity(display_name="trusted import target")
                 left_identity = left.export_federation_identity()
-                trusted.add_peer(peer_identity=left_identity, reason="trusted import source")
-                active_run = trusted.import_share_bundle(input_path=str(bundle), trust_policy="trusted_device")
+                trusted.add_peer(peer_identity=left_identity, trust_status="trusted_device", reason="trusted import source")
+                recipient = left.add_peer(peer_identity=trusted.export_federation_identity(), reason="explicit trusted recipient")
+                trusted_share = left.create_share_grant(name="trusted target share", namespace=NAMESPACE,
+                    recipient_peer_ids=[recipient.id], permissions=["read", "sync_pull"], privacy_ceiling="personal",
+                    memory_types=["project"], statuses=["core"], reason="explicit recipient-specific export")
+                trusted_bundle = self.base_dir / "trusted_target.aletsync"
+                left.export_share_bundle(share_id=trusted_share.id, output_path=str(trusted_bundle), encrypt=True)
+                active_run = trusted.import_share_bundle(input_path=str(trusted_bundle), trust_policy="trusted_device")
                 assert active_run.status == "completed"
                 claims = trusted.list_claims(namespace=NAMESPACE)
                 assert claims and claims[0].status == "active"
@@ -348,7 +355,7 @@ class M10LiveScorecard:
 
     def case_interfaces(self) -> str:
         status = self.request("GET", "/v1/federation/status")
-        assert status["schema_version"] == "1.3.0"
+        assert status["schema_version"] == SCHEMA_VERSION
         peers = self.request("GET", "/v1/peers/trust-domains")
         assert len(peers) == 3
         schema = openapi_schema()
@@ -369,7 +376,7 @@ class M10LiveScorecard:
         identity_output = run_cli(["federation", "init", "--db", str(cli_db), "--display-name", "live CLI"])
         conformance_output = run_cli(["federation-conformance", "run", "--db", str(cli_db)])
         assert "live CLI" in identity_output
-        assert '"status": "passed"' in conformance_output
+        assert '"status": "structural_passed"' in conformance_output
         assert hasattr(AletheiaClient, "federation_status")
         assert hasattr(AletheiaClient, "sync_run")
         assert hasattr(AsyncAletheiaClient, "create_workspace")
@@ -377,9 +384,10 @@ class M10LiveScorecard:
 
     def case_definition_complete(self) -> str:
         health = self.memory.health()
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == SCHEMA_VERSION
         conformance = self.memory.federation_conformance()
-        assert conformance["status"] == "passed"
+        assert conformance["status"] == "structural_passed"
+        assert conformance["assurance"] == "structural"
         for suite in ["federation-identity", "peer-trust", "share-bundle", "sync-protocol", "federation-conflict", "federation-redaction"]:
             run = self.memory.run_conformance(suite=suite)
             assert run.status == "passed"

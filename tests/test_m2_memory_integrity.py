@@ -181,12 +181,10 @@ def test_context_scope_resolution_controls_context_pack(tmp_path):
             family.id,
             strategy="context_scope",
             note="Concise for progress, comprehensive for architecture.",
-        )
-        memory.scope_claim(
-            detailed.id,
-            scope_type="contextual",
-            applies_when="architecture_or_design_request",
-            reason="Applies to architecture/design requests.",
+            scoped_claims=[
+                {"claim_id": concise.id, "scope_type": "contextual", "applies_when": "progress_update"},
+                {"claim_id": detailed.id, "scope_type": "contextual", "applies_when": "architecture_or_design_request"},
+            ],
         )
 
         architecture_pack = memory.context_pack(
@@ -199,7 +197,7 @@ def test_context_scope_resolution_controls_context_pack(tmp_path):
         )
         assert any("comprehensive architecture" in item.text for item in architecture_pack.items())
         assert not any("comprehensive architecture" in item.text for item in progress_pack.items())
-        assert memory.read_claim(concise.id).status == "disputed"
+        assert memory.read_claim(concise.id).status == "active"
     finally:
         memory.close()
 

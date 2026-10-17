@@ -27,6 +27,7 @@ clear audit trail.
 - CLI command: `aletheia`
 - Latest release: [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/latest) and [PyPI](https://pypi.org/project/aletheia-memory/).
 - Maturity: beta; intended for development and evaluation, not production use.
+- Upcoming source: the [qualification report](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/production_qualification.md) recommends production within its documented boundaries. This does not change the maturity of published 1.6.x packages; see [prepared release notes](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/next_release_notes.md).
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
@@ -351,7 +352,10 @@ curl -s http://127.0.0.1:8765/v1/remember \
 
 ## MCP
 
-Use MCP when an agent host can run local stdio tools.
+Use MCP when an agent host can run local stdio tools. The server supports the
+JSON-RPC initialize/initialized handshake, tool discovery, tool calls, and ping
+over newline-delimited stdio. Protocol versions 2025-06-18 and 2024-11-05 are
+supported. The selected namespace also applies to tokenless local sessions.
 
 ```bash
 aletheia mcp \
@@ -395,8 +399,14 @@ aletheia conflicts list \
 aletheia conflicts resolve conf_... \
   --db ./aletheia.db \
   --strategy context_scope \
+  --scoped-json '[{"claim_id":"clm_first","scope_type":"contextual","applies_when":"progress updates"},{"claim_id":"clm_second","scope_type":"contextual","applies_when":"architecture design"}]' \
   --note "Both claims are valid in different contexts."
 ```
+
+Replace both claim IDs with every member of the conflict family. Context and
+time resolutions require complete scopes in the same operation; invalid or
+missing scopes leave the conflict unresolved. Temporal scopes require at least
+one time boundary, with the start before the end when both are supplied.
 
 Run operational checks:
 

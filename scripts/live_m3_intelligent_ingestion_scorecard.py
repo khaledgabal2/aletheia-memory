@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aletheia import Memory
+from aletheia.storage import SCHEMA_VERSION
 from aletheia.core.errors import ValidationError
 
 NAMESPACE = "user/default"
@@ -66,7 +67,7 @@ class M3Runner:
 
     def case_init_schema(self) -> str:
         health = json.loads(self.cli("init", "--db", str(self.db_path)).stdout)
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == SCHEMA_VERSION
         memory = Memory.open(str(self.db_path), namespace=NAMESPACE)
         try:
             names = {
@@ -98,7 +99,7 @@ class M3Runner:
             assert required.issubset(names)
             labels = {row["label"] for row in memory.list_categories()}
             assert {"preference", "project", "communication_style"}.issubset(labels)
-            return f"schema_version=1.3.0, m3_tables={len(required)}"
+            return f"schema_version={SCHEMA_VERSION}, m3_tables={len(required)}"
         finally:
             memory.close()
 
@@ -559,7 +560,7 @@ class M3Runner:
         first.close()
         second = Memory.open(str(self.db_path), namespace=NAMESPACE)
         try:
-            assert second.health()["schema_version"] == "1.3.0"
+            assert second.health()["schema_version"] == SCHEMA_VERSION
             assert len(second.list_claims(namespace=NAMESPACE, limit=1000)) == before_claims
             extraction_runs = second.store.connection.execute(
                 "SELECT count(*) AS count FROM extraction_runs WHERE namespace = ?",

@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import sqlite3
+import socketserver
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -149,6 +150,7 @@ CONSOLE_HTML = """<!doctype html>
         <button id="logout">Log Out</button>
       </div>
       <p id="sessionState">Checking session...</p>
+      <p id="actionStatus" role="status" aria-live="polite"></p>
     </section>
     <section>
       <h2>Dashboard</h2>
@@ -208,14 +210,35 @@ CONSOLE_HTML = """<!doctype html>
   </main>
   <script>
     let csrfToken = sessionStorage.getItem("aletheia_console_csrf") || "";
+    let sessionGeneration = 0;
     const $ = (id) => document.getElementById(id);
+    function clearSession() {
+      sessionGeneration++;
+      csrfToken = "";
+      sessionStorage.removeItem("aletheia_console_csrf");
+      $("loginToken").value = "";
+      $("traceQuery").value = "";
+      $("actionStatus").textContent = "";
+      $("sessionState").textContent = "Console authentication required.";
+      $("metrics").replaceChildren();
+      for (const id of ["reviews", "traceOutput", "hardeningOutput", "platformOutput", "federationOutput"]) {
+        $(id).textContent = "";
+      }
+    }
     const headers = () => ({
       "Content-Type": "application/json",
       ...(csrfToken ? {"X-CSRF-Token": csrfToken} : {})
     });
     async function api(path, options = {}) {
+      const generation = sessionGeneration;
       const res = await fetch(path, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
       const json = await res.json().catch(() => ({}));
+      if (generation !== sessionGeneration) {
+        const error = new Error("Session ended.");
+        error.staleSession = true;
+        throw error;
+      }
+      if (res.status === 401) clearSession();
       if (!res.ok) throw new Error(json.error?.message || res.statusText);
       return json.data ?? json;
     }
@@ -229,20 +252,22 @@ CONSOLE_HTML = """<!doctype html>
         const reviews = await api(`/v1/reviews?namespace=${encodeURIComponent(namespace)}&limit=20`);
         $("reviews").textContent = JSON.stringify(reviews, null, 2);
       } catch (err) {
-        $("sessionState").textContent = err.message;
+        if (!err.staleSession) $("sessionState").textContent = err.message;
       }
     }
     $("login").onclick = async () => {
-      const data = await api("/v1/console/login", { method: "POST", body: JSON.stringify({ login_token: $("loginToken").value }) });
+      const loginToken = $("loginToken").value;
+      clearSession();
+      const data = await api("/v1/console/login", { method: "POST", body: JSON.stringify({ login_token: loginToken }) });
       csrfToken = data.csrf_token;
       sessionStorage.setItem("aletheia_console_csrf", csrfToken);
       await refresh();
     };
     $("logout").onclick = async () => {
-      await api("/v1/console/logout", { method: "POST", body: "{}" }).catch(() => {});
-      csrfToken = "";
-      sessionStorage.removeItem("aletheia_console_csrf");
+      const pending = api("/v1/console/logout", { method: "POST", body: "{}" });
+      clearSession();
       $("sessionState").textContent = "Logged out";
+      await pending.catch(() => {});
     };
     $("refresh").onclick = refresh;
     $("snapshot").onclick = async () => {
@@ -291,11 +316,27 @@ CONSOLE_HTML = """<!doctype html>
       $("federationOutput").textContent = JSON.stringify(await api("/v1/peers"), null, 2);
     };
     $("federationShares").onclick = async () => {
-      $("federationOutput").textContent = JSON.stringify(await api("/v1/shares"), null, 2);
+      $("federationOutput").textContent = JSON.stringify(await api("/v1/shares?namespace=" + encodeURIComponent($("namespace").value || "default")), null, 2);
     };
     $("federationConflicts").onclick = async () => {
-      $("federationOutput").textContent = JSON.stringify(await api("/v1/sync/conflicts"), null, 2);
+      $("federationOutput").textContent = JSON.stringify(await api("/v1/sync/conflicts?namespace=" + encodeURIComponent($("namespace").value || "default")), null, 2);
     };
+    for (const id of ["login", "logout", "refresh", "snapshot", "generate", "trace", "encryptStatus",
+                      "integrityCheck", "readinessCheck", "supportBundle", "contracts", "compatibility",
+                      "doctor", "conformance", "v1Gate", "federationStatus", "federationPeers",
+                      "federationShares", "federationConflicts"]) {
+      const action = $(id).onclick;
+      $(id).onclick = async () => {
+        const generation = sessionGeneration;
+        $("actionStatus").textContent = "";
+        try { await action(); }
+        catch (error) {
+          if (generation === sessionGeneration && !error.staleSession) {
+            $("actionStatus").textContent = "Request failed: " + error.message;
+          }
+        }
+      };
+    }
     refresh();
   </script>
 </body>
@@ -591,8 +632,9 @@ class AletheiaService:
                 with self.lock:
                     if self._closed:
                         raise ServiceError("service_closed", "The service is closed.", status_code=503)
-                    if endpoint in {"/v1/backups/create", "/v1/backups/verify", "/v1/exports", "/v1/support/bundle", "/v1/restore/apply", "/v1/restore/dry-run", "/v1/benchmarks/run"}:
-                        # SQLite backup requires an idle source connection; exclusive output creation prevents unsafe file replays.
+                    if endpoint in {"/v1/backups/create", "/v1/backups/verify", "/v1/exports", "/v1/support/bundle", "/v1/restore/apply", "/v1/restore/dry-run", "/v1/benchmarks/run", "/v1/compact/run"}:
+                        # Backup/checkpoint/VACUUM require an idle connection;
+                        # exclusive output creation prevents unsafe file replays.
                         kwargs["auth_context"] = self._authenticate(method, endpoint, kwargs["headers"], previous=kwargs["auth_context"])
                         result = self._route(**kwargs)
                         if completion:
@@ -3571,6 +3613,12 @@ class AletheiaDaemon:
 
         Handler.service = service
         class LocalHTTPServer(ThreadingHTTPServer):
+            def server_bind(self):
+                # HTTPServer's default performs synchronous reverse DNS. The
+                # bound numeric address is sufficient for this local service.
+                socketserver.TCPServer.server_bind(self)
+                self.server_name, self.server_port = self.server_address[:2]
+
             running = threading.Event()
             def serve_forever(self, *args, **kwargs):
                 self.running.set()

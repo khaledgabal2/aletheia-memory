@@ -123,6 +123,7 @@ class M8LiveScorecard:
             namespace=NAMESPACE,
             encrypt=True,
             passphrase=PASSPHRASE,
+            privacy_mode="full",
         )
         assert backup.encrypted is True
         assert backup.item_counts["claims"] >= 1
@@ -132,7 +133,8 @@ class M8LiveScorecard:
         return f"backup_id={backup.id}, claims={backup.item_counts['claims']}, encrypted={backup.encrypted}"
 
     def case_restore(self) -> str:
-        self.case_backup()
+        if not self.backup_path.exists():
+            self.case_backup()
         dry_run = self.memory.restore_backup(
             backup_path=str(self.backup_path),
             target_db_path=str(self.restore_path),
@@ -166,7 +168,7 @@ class M8LiveScorecard:
         )
         self.secret_event_id = event.id
         raw = self.memory.store.connection.execute("SELECT content FROM evidence_events WHERE id = ?", (event.id,)).fetchone()["content"]
-        assert raw.startswith("enc:v2:")
+        assert raw.startswith("enc:v3:")
         assert "M8 live secret" not in raw
         assert self.memory.read_event(event.id).content == "M8 live secret phrase"
         claim = self.memory.write_claim(
@@ -261,6 +263,7 @@ class M8LiveScorecard:
             namespace=NAMESPACE,
             encrypt=True,
             passphrase=PASSPHRASE,
+            privacy_mode="full",
         )
         target = Memory.open(str(self.base_dir / "m8_import.db"), namespace=NAMESPACE)
         try:

@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aletheia import Memory
+from aletheia.storage import SCHEMA_VERSION
 from aletheia.core.errors import ValidationError
 
 
@@ -120,7 +121,7 @@ class M5Runner:
 
     def case_init_schema(self) -> str:
         health = json.loads(self.cli("init", "--db", str(self.db_path)).stdout)
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == SCHEMA_VERSION
         memory = Memory.open(str(self.db_path), namespace=NAMESPACE)
         try:
             names = {
@@ -135,7 +136,7 @@ class M5Runner:
                 "SELECT active_version_id FROM context_pack_policies WHERE id = 'cpol_default'"
             ).fetchone()
             assert context_policy["active_version_id"] == "cpv_default_v1"
-            return "schema_version=1.3.0, default ranking/context policies active"
+            return f"schema_version={SCHEMA_VERSION}, default ranking/context policies active"
         finally:
             memory.close()
 

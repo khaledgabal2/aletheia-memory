@@ -44,7 +44,8 @@ def _write_encrypted_document(path: Path, document: dict, secret: str, format_na
     # No replacement, symlink following, or plaintext staging file. A leftover
     # encrypted archive on a later database failure is deliberately retained.
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        from aletheia.storage.private_files import create_private_file
+        descriptor = create_private_file(path)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump(envelope, stream, sort_keys=True)
             stream.write("\n")

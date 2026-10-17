@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from aletheia.storage import SCHEMA_VERSION
 NAMESPACE = "user/default"
 
 
@@ -106,7 +108,7 @@ class PolishRunner:
     def case_init(self) -> str:
         proc = self.cli("init")
         data = json.loads(proc.stdout)
-        assert data["schema_version"] == "1.3.0"
+        assert data["schema_version"] == SCHEMA_VERSION
         return "database initialized"
 
     def case_events_list_show(self) -> str:

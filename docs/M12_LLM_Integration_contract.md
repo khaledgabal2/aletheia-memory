@@ -269,3 +269,24 @@ test_query_expansion_does_not_create_memory
 test_summary_preserves_source_backlinks
 test_reflection_draft_requires_review
 test_llm_conflict_explanation_does_not_resolve_conflict_automatically
+## Extraction wire v2 follow-up
+
+`candidate_claim_draft.v2` uses `scope_ref` selected from each evidence event's
+`scope_options`. The host supplies and resolves explicit English calendar and
+named-project anchors, verifies reference ownership, and validates evidence spans
+independently. A reference cannot borrow a scope from another event or introduce
+a date. Legacy scope objects must equal a source anchor. Calendar month boundaries
+use the first day; the complete source remains attached for human review.
+
+This is a bounded source-qualifier parser, not universal entailment verification.
+Unknown or unsupported scope semantics require operator review. All LLM proposals
+remain pending review; source instructions cannot approve, verify or promote.
+Approved temporal boundaries survive candidate promotion. `project=NAME` and
+`project!=NAME` conditions match supplied project identity or namespace-local title,
+not query text; the optional `Project ` label prefix is equivalent.
+
+`LLMExtractor(max_repair_attempts=2)` permits at most three provider requests for
+one extraction, revalidating each proposal. Set zero to disable repair; supported
+values are integers zero through two. Privacy/policy refusal is never repaired
+around. Invocation metadata records attempt status, error and output hash. Only
+the base messages and latest rejected proposal enter repair context.

@@ -97,7 +97,9 @@ class Service:
                     assert status == 200 and version["data"]["software_version"] == expected_version
                     return
                 time.sleep(0.05)
-            raise AssertionError("Installed service did not become ready.")
+            self.log.seek(0)
+            raise AssertionError("Installed service did not become ready within 15 seconds. "
+                                 + f"Child status: {self.process.poll()}; startup log: " + self.log.read()[-4000:])
         except BaseException:
             self.stop()
             raise

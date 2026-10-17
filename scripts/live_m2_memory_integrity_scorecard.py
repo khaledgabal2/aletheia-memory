@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aletheia import Memory
+from aletheia.storage import SCHEMA_VERSION
 from aletheia.core.time import utc_now
 
 NAMESPACE = "user/default"
@@ -58,7 +59,7 @@ class M2Runner:
             ("Duplicates", "Duplicate detection writes relationship without dispute", "API", self.case_duplicate_detection),
             ("Explanation", "Explain claim includes confidence, scope, history, evidence", "API", self.case_explain_claim),
             ("Supersession", "Supersede claim preserves old evidence and relationship", "CLI/API", self.case_supersede),
-            ("Migration", "M1-style database migrates idempotently to M2", "CLI/API", self.case_m1_to_m2_migration),
+            ("Migration", "Unsupported M1 migration is repeatedly refused without changing bytes", "CLI/API", self.case_m1_to_m2_migration),
         ]
         for category, case, interface, fn in cases:
             try:
@@ -69,7 +70,7 @@ class M2Runner:
 
     def case_init_schema(self) -> str:
         health = json.loads(self.cli("init", "--db", str(self.db_path)).stdout)
-        assert health["schema_version"] == "1.3.0"
+        assert health["schema_version"] == SCHEMA_VERSION
         memory = Memory.open(str(self.db_path), namespace=NAMESPACE)
         try:
             names = {
@@ -94,7 +95,7 @@ class M2Runner:
             assert required.issubset(names)
         finally:
             memory.close()
-        return "schema_version=1.3.0 and M2 tables present"
+        return f"schema_version={SCHEMA_VERSION} and M2 tables present"
 
     def case_confidence_show(self) -> str:
         remembered = self.cli(
@@ -314,19 +315,11 @@ class M2Runner:
             "context_scope",
             "--note",
             "Concise for progress; comprehensive for architecture/design.",
-        )
-        self.cli(
-            "claims",
-            "scope",
-            self.ids["architecture_claim"],
-            "--db",
-            str(self.db_path),
-            "--type",
-            "contextual",
-            "--applies-when",
-            "architecture_or_design_request",
-            "--reason",
-            "Architecture/design requests need comprehensive explanations.",
+            "--scoped-json",
+            json.dumps([
+                {"claim_id": self.ids["concise_claim"], "scope_type": "contextual", "applies_when": "progress_update_request"},
+                {"claim_id": self.ids["architecture_claim"], "scope_type": "contextual", "applies_when": "architecture_or_design_request"},
+            ]),
         )
         memory = Memory.open(str(self.db_path), namespace=NAMESPACE)
         try:
@@ -665,31 +658,12 @@ class M2Runner:
         with tempfile.TemporaryDirectory(prefix="aletheia-m1-to-m2-") as temp_dir:
             m1_path = Path(temp_dir) / "m1.db"
             create_minimal_m1_database(m1_path)
-            first = json.loads(
-                self.cli("migrate", "--db", str(m1_path), check=True).stdout
-            )
-            second = json.loads(
-                self.cli("migrate", "--db", str(m1_path), check=True).stdout
-            )
-            assert first["schema_version"] == "1.3.0"
-            assert second["schema_version"] == "1.3.0"
-            searched = self.cli(
-                "search",
-                "--db",
-                str(m1_path),
-                "--namespace",
-                NAMESPACE,
-                "direct",
-            ).stdout
-            assert "direct" in searched
-            memory = Memory.open(str(m1_path), namespace=NAMESPACE)
-            try:
-                audit = memory.audit("clm_m1")
-                assert any(entry["action"] == "claim.write" for entry in audit["audit"])
-                assert memory.context_pack(namespace=NAMESPACE, query="direct").items()
-            finally:
-                memory.close()
-        return "0.2-style database migrated twice with claim/audit/context intact"
+            before = m1_path.read_bytes()
+            for _ in range(2):
+                result = self.cli("migrate", "--db", str(m1_path), check=False)
+                assert result.returncode != 0 and "predates the supported migration range" in result.stderr
+                assert m1_path.read_bytes() == before
+        return "Repeated unsupported 0.2 migration attempts preserve the original database"
 
     def cli(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         cmd = [sys.executable, "-m", "aletheia.cli.main", *args]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 from dataclasses import dataclass, replace
@@ -244,17 +245,136 @@ class McpToolRegistry:
             )
             raise
 
-    def serve_stdio(self) -> None:
-        print(json.dumps({"type": "ready", "tools": self.list_tools()}), flush=True)
-        for line in sys.stdin:
+    def serve_stdio(self, input_stream=None, output_stream=None) -> None:
+        """Newline-delimited MCP JSON-RPC; legacy tool/arguments input remains supported.
+
+        Nothing is emitted before the client's first request. Tool execution
+        always goes through the same mode, namespace and HTTP access gates.
+        """
+        from aletheia.version import software_version
+
+        input_stream = sys.stdin if input_stream is None else input_stream
+        output_stream = sys.stdout if output_stream is None else output_stream
+        initialized = ready = False
+        def send(value):
+            print(json.dumps(value, allow_nan=False), file=output_stream, flush=True)
+        def error(request_id, code, message):
+            send({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}})
+        def invalid_constant(value):
+            raise ValueError("Nonfinite JSON number")
+        while True:
+            line = input_stream.readline(1024 * 1024 + 1)
+            if not line:
+                break
+            if len(line) > 1024 * 1024:
+                error(None, -32700, "Message exceeds the stdio size limit.")
+                break
             if not line.strip():
                 continue
             try:
-                message = json.loads(line)
-                result = self.invoke(message["tool"], message.get("arguments") or {})
-                print(json.dumps({"ok": True, "data": result}), flush=True)
-            except Exception as exc:  # noqa: BLE001 - MCP stdio returns errors as JSON.
-                print(json.dumps({"ok": False, "error": str(exc)}), flush=True)
+                message = json.loads(line, parse_constant=invalid_constant)
+            except (ValueError, RecursionError):
+                error(None, -32700, "Invalid JSON.")
+                continue
+            if isinstance(message, dict) and "tool" in message and "jsonrpc" not in message and not initialized:
+                try:
+                    result = self.invoke(message["tool"], dict(message.get("arguments") or {}))
+                    send({"ok": True, "data": result})
+                except Exception as exc:
+                    send({"ok": False, "error": str(exc)})
+                continue
+            if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
+                error(None, -32600, "Invalid JSON-RPC request.")
+                continue
+            request_id = message.get("id")
+            if "id" in message and (type(request_id) not in (str, int)):
+                error(None, -32600, "Invalid request ID.")
+                continue
+            method, params = message["method"], message.get("params", {})
+            if "id" not in message:
+                if method == "notifications/initialized" and initialized:
+                    ready = True
+                continue
+            if not isinstance(params, dict):
+                error(request_id, -32602, "params must be an object.")
+                continue
+            if method == "initialize":
+                if initialized or not isinstance(params.get("protocolVersion"), str) or not isinstance(params.get("capabilities"), dict) or not isinstance(params.get("clientInfo"), dict):
+                    error(request_id, -32602, "Invalid or repeated initialization.")
+                    continue
+                requested = params["protocolVersion"]
+                version = requested if requested in {"2025-06-18", "2024-11-05"} else "2025-06-18"
+                result = {"protocolVersion": version, "capabilities": {"tools": {}},
+                          "serverInfo": {"name": "aletheia-memory", "version": software_version()}}
+                initialized = True
+            elif method == "ping":
+                result = {}
+            elif not ready:
+                error(request_id, -32002, "Initialize and send notifications/initialized before using tools.")
+                continue
+            elif method == "tools/list":
+                if params.get("cursor"):
+                    error(request_id, -32602, "Unknown tools cursor.")
+                    continue
+                capabilities = MODE_CAPABILITIES[self.mode]
+                result = {"tools": [{"name": tool.name, "description": tool.description,
+                                     "inputSchema": self._wire_schema(tool)} for tool in self.tools()
+                                    if tool.required_capability in capabilities or "memory:admin" in capabilities]}
+            elif method == "tools/call":
+                name, arguments = params.get("name"), params.get("arguments", {})
+                tool = next((tool for tool in self.tools() if tool.name == name), None)
+                if tool is None or not isinstance(arguments, dict):
+                    error(request_id, -32602, "Unknown tool or invalid arguments.")
+                    continue
+                schema = self._wire_schema(tool)
+                if any(key not in arguments for key in schema.get("required", [])):
+                    error(request_id, -32602, "Required tool argument is missing.")
+                    continue
+                if not self._wire_arguments_valid(arguments, schema):
+                    error(request_id, -32602, "Tool argument has an invalid type or value.")
+                    continue
+                try:
+                    data = self.invoke(name, dict(arguments))
+                    result = {"content": [{"type": "text", "text": json.dumps(data)}], "isError": False}
+                    if isinstance(data, dict):
+                        result["structuredContent"] = data
+                except Exception as exc:
+                    result = {"content": [{"type": "text", "text": str(exc)}], "isError": True}
+            else:
+                error(request_id, -32601, "Method not found.")
+                continue
+            send({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    @staticmethod
+    def _wire_arguments_valid(arguments: dict, schema: dict) -> bool:
+        for key, value in arguments.items():
+            spec = schema.get("properties", {}).get(key, {})
+            kind = spec.get("type")
+            if kind == "string" and not isinstance(value, str):
+                return False
+            if kind == "array" and (not isinstance(value, list) or any(not isinstance(item, str) for item in value)):
+                return False
+            if kind in {"integer", "number"}:
+                if type(value) not in ((int,) if kind == "integer" else (int, float)) or type(value) is float and not math.isfinite(value):
+                    return False
+                if not spec.get("minimum", -math.inf) <= value <= spec.get("maximum", math.inf):
+                    return False
+            if "enum" in spec and value not in spec["enum"]:
+                return False
+        return True
+
+    @staticmethod
+    def _wire_schema(tool: McpTool) -> dict:
+        properties = {key: {"type": "string"} for key in [
+            "namespace", "query", "memory_type", "subject", "predicate", "object", "content",
+            "target_id", "target_type", "claim_id", "candidate_id", "reason", "signal", "note",
+            "task_id", "outcome", "provider", "batch_id", "extractor", "source_type", "evidence_text"]}
+        properties.update({"evidence_ids": {"type": "array", "items": {"type": "string"}},
+                           "limit": {"type": "integer", "minimum": 0},
+                           "token_budget": {"type": "integer", "minimum": 0},
+                           "strength": {"type": "number", "minimum": 0, "maximum": 1},
+                           "write_mode": {"enum": ["candidate", "active"]}})
+        return {**tool.input_schema, "properties": properties}
 
     def _tool_to_http(self, tool_name: str, arguments: dict) -> tuple[str, dict | None, str]:
         if tool_name == "memory_context_pack":
