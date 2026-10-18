@@ -2,7 +2,7 @@
 
 All notable public changes to Aletheia are tracked here.
 
-## Unreleased
+## 1.8.0 — 2026-10-18
 
 - Add persistent namespace-scoped predicate cardinality declarations to the local
   Python API. Multivalued set members coexist in ordinary recall; single-valued

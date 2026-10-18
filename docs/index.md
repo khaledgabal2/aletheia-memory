@@ -1,6 +1,6 @@
 # Aletheia Documentation Index
 
-This help map covers Aletheia 1.7.0 production/stable, API v1 and storage 1.3.1.
+This help map covers Aletheia 1.8.0 production/stable, API v1 and storage 1.3.1.
 The primary Python quickstart uses the current package.
 Aletheia is a local, auditable memory system for AI agents. The project
 baseline is intentionally generic: product-specific integration layers belong
@@ -22,8 +22,8 @@ aletheia init --db ./aletheia.db
 aletheia docs build --db ./aletheia.db --output ./site
 ```
 
-See [1.7.0 release notes](v1_7_0_release_notes.md) and
-[release qualification](v1_7_0_release_verification.md) for the supported boundaries.
+See [1.8.0 release notes](v1_8_0_release_notes.md) and
+[release qualification](v1_8_0_release_verification.md) for the supported boundaries.
 
 ## Recommended Reading Paths
 
@@ -36,7 +36,7 @@ New users should read:
 5. `integration_guide.md`: optional semantic/LLM paths and other interfaces
 6. `security_privacy_guide.md` and `operations_guide.md` when operating a service
 
-Existing users should first read the [1.7.0 upgrade guide](v1_7_0_upgrade.md)
+Existing users should first read the [1.8.0 upgrade guide](v1_8_0_upgrade.md)
 for compatibility changes and fresh-start or data-preserving options.
 
 Agent and tool integrators should read:
@@ -90,7 +90,7 @@ Plugin authors should read:
 | `plugin_developer_guide.md` | Explain governed plugin manifests, permissions, compatibility, and conformance. |
 | `adapter_developer_guide.md` | Explain how to build and certify agent adapters. |
 | `examples.md` | Show example scaffolding and docs validation commands. |
-| `near_future_changes.md` | Summarize current 1.7.0 status and likely next changes. |
+| `near_future_changes.md` | Summarize current 1.8.0 status and likely next changes. |
 | `v1_public_contracts.md` | Document stable public contracts and compatibility expectations. |
 
 ## Repository Community Files

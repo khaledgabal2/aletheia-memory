@@ -3,12 +3,12 @@
 Aletheia is local-first software that can store sensitive user, project, and
 agent memory. Please report vulnerabilities responsibly.
 
-Aletheia releases are beta, intended for development and evaluation.
-Use disposable or synthetic data where practical. Beta status does not establish
-that an older installation or previously shared data was unaffected by a bug.
-The [1.6.2 upgrade guide](docs/v1_6_2_upgrade.md) describes semantic retrieval
-configuration and response changes. The [1.6.1 upgrade guide](docs/v1_6_1_upgrade.md)
-continues to describe access, archive and caller compatibility changes.
+Aletheia 1.8.0 is production/stable within its
+[qualified support boundaries](docs/v1_8_0_release_notes.md#qualification-and-limits).
+Earlier releases before 1.7.0 retain their beta status. Release status does not
+establish that an older installation or previously shared data was unaffected
+by a bug. The [1.8.0 upgrade guide](docs/v1_8_0_upgrade.md) describes additive
+schema migration, conflict authorization and stricter resolution validation.
 
 ## Reporting A Vulnerability
 

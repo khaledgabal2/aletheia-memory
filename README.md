@@ -34,20 +34,22 @@ single-value conflict handling. Configure through the embedded API,
 - Package name: `aletheia-memory`
 - CLI command: `aletheia`
 - Latest release: [GitHub](https://github.com/khaledgabal2/aletheia-memory/releases/latest) and [PyPI](https://pypi.org/project/aletheia-memory/).
-- Version: **1.7.0**; production/stable within the [qualified support boundaries](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_7_0_release_notes.md#qualification-and-limits).
+- Version: **1.8.0**; production/stable within the [qualified support boundaries](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_8_0_release_notes.md#qualification-and-limits).
 - API: v1; storage: 1.3.1. Earlier 1.6.x releases retain their beta status.
 - Runtime: Python 3.11+
 - Storage: local SQLite
 - License: [MIT](https://github.com/khaledgabal2/aletheia-memory/blob/main/LICENSE)
 - Distribution: [PyPI](https://pypi.org/project/aletheia-memory/); source installs and release wheels are also supported.
 
-1.7.0 adds governed extraction repairs, native Windows ACL isolation, standard
-MCP stdio, feedback/conflict corrections and startup targets. Read the
-[release notes](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_7_0_release_notes.md),
-[upgrade guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_7_0_upgrade.md)
-and [qualification record](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_7_0_release_verification.md)
-before upgrading. Model output still requires human review; local pairing remains
-POSIX-only and Windows ACL support assumes trusted ancestors.
+1.8.0 adds explicit predicate cardinality across Python, HTTP, CLI and SDKs,
+with authorization and conflict-management fixes. Multivalued properties coexist;
+single-valued contradictions remain disputed. Read the
+[release notes](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_8_0_release_notes.md),
+[upgrade guide](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_8_0_upgrade.md)
+and [qualification record](https://github.com/khaledgabal2/aletheia-memory/blob/main/docs/v1_8_0_release_verification.md)
+before upgrading. Existing databases require an additive schema migration even
+though the storage marker remains 1.3.1. Model output still requires human review;
+local pairing remains POSIX-only and Windows ACL support assumes trusted ancestors.
 
 1.6.2 fixes HTTP semantic provider selection and reports lexical fallback accurately.
 Select the server provider explicitly with `ALETHEIA_SEMANTIC_PROVIDER=ollama_style`
@@ -552,8 +554,8 @@ python -m pytest
 
 A reviewed wheel can instead be installed by its local path. Development
 checkouts may contain unreleased changes; use a pinned published version for
-repeatable deployment. Version 1.7.0 is production/stable within its documented
-support boundaries; earlier releases remain beta. Never commit credentials or
+repeatable deployment. Version 1.8.0 is production/stable within its documented
+support boundaries; releases before 1.7.0 remain beta. Never commit credentials or
 private databases.
 
 ## Local Application Pairing
