@@ -264,3 +264,73 @@ payload paths. They use passphrases or configured key material and are verified
 before restore.
 
 Read `docs/encryption_layer.md` for the full model.
+
+## Predicate cardinality and semantics
+
+Aletheia supports persistent predicate declarations per namespace through the
+embedded Python API, HTTP, CLI and synchronous/asynchronous Python SDKs. Declare
+them before storing or extracting facts:
+
+```python
+memory.set_predicate_semantics("likes", cardinality="multiple")
+memory.set_predicate_semantics("home_city", cardinality="single")
+
+for value in ("coffee", "tea"):
+    memory.remember(memory_type="preference", subject="user",
+                    predicate="likes", object=value)
+facts = memory.retrieve(subject="user", predicate="likes")
+
+meaning = memory.get_predicate_semantics("likes")
+# cardinality: multiple; semantics: set_membership
+```
+
+`multiple` means independent, positive set membership: distinct objects may
+coexist as active claims and appear in ordinary recall. `single` means exclusive
+values: distinct objects trigger the existing conflict/review rules. Undeclared
+predicates default to `single` for compatibility; names such as `likes` do not
+implicitly select semantics. Both methods accept `namespace=`; declarations
+apply to all subjects and memory types within that namespace. Conflict detection,
+screening and federation compare subject/predicate identifiers case-insensitively
+for ASCII letters (the SQLite LOWER/NOCASE policy); non-ASCII identifiers retain
+their spelling.
+Namespace lookup is exact. Object comparisons strip surrounding whitespace and
+lowercase Unicode text consistently across detection, candidate screening,
+inference screening and federation imports.
+
+Conflict detection, candidate contradiction screening and inference promotion
+consult these declarations. Candidate promotion also checks current claims and
+semantics, so a candidate screened earlier cannot silently bypass a newly
+introduced single-value contradiction. Existing stored high-risk candidate
+flags remain subject to review. Duplicate detection remains enabled for both
+cardinalities.
+
+A declaration change does not resolve existing conflicts, restore disputed
+claims, or rewrite candidate review state. Review those records explicitly.
+Changing to `single` does not immediately scan existing data; call
+`memory.detect_conflicts()` to evaluate existing active/core/disputed claims.
+Subsequent single-valued assertions join an existing unresolved dispute and stay
+out of ordinary recall. Accepted contextual/temporal scope resolutions survive
+rescans while their approved scopes remain unchanged; a new unscoped assertion
+or a broadened scope can still create a new conflict.
+
+After changing a property to `multiple`, explicitly resolve an existing family
+with `memory.resolve_conflict(family_id, strategy="coexist", note="Compatible memberships")`.
+This keeps every member active (preserving core status) and closes the family
+without superseding a membership. Historical candidate risk flags remain
+subject to review.
+Declarations survive database reopen and are added by normal automatic migration.
+For remote and command-line configuration, see the
+[HTTP and Python SDK examples](http_api_reference.md#predicate-semantics) and
+[CLI reference](cli_reference.md#predicate-semantics). Declarations are not
+federation-replicated; configure each database explicitly. Imports consult the
+receiving database's declaration. When reviewing an older sync conflict with
+`accept_remote_active` under a multivalued declaration, both memberships remain
+active; under a single-valued declaration the remote value supersedes the local
+value atomically.
+
+This is a cardinality rule, not natural-language contradiction inference.
+`likes=coffee` and `likes=tea` are compatible memberships; strings such as
+`likes=not coffee` are not interpreted as negation. Model an exclusive assessment
+as a single-valued property on a specific subject (for example,
+`subject="user:coffee", predicate="preference", object="likes"` versus
+`object="dislikes"`). Keep `include_disputed=False` for ordinary recall.

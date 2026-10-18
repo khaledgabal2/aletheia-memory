@@ -269,7 +269,7 @@ class SQLiteStore:
         return row["version"] if row else None
 
     def _schema_current(self) -> bool:
-        required_tables = {"schema_version", "claims", "evidence_events", "claims_fts", "review_state", "review_replays"}
+        required_tables = {"schema_version", "claims", "evidence_events", "claims_fts", "review_state", "review_replays", "predicate_semantics"}
         if not all(self._table_exists(table) for table in required_tables):
             return False
         if self._table_exists("embeddings"):

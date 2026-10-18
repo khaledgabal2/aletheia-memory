@@ -494,6 +494,12 @@ export interface components {
             status: string;
             subject: string;
         };
+        ConflictFamiliesEnvelope: {
+            data: components["schemas"]["ConflictFamily"][];
+            pagination?: Record<string, never> | null;
+            request_id: string;
+            warnings: string[];
+        };
         ConflictFamily: {
             active_claim_id: string | null;
             claim_ids: string[];
@@ -508,6 +514,27 @@ export interface components {
             status: string;
             subject: string | null;
             updated_at: string;
+        };
+        ConflictResolution: {
+            active_claim_id: string | null;
+            conflict_id: string;
+            created_at: string;
+            id: string;
+            namespace: string;
+            note: string;
+            rejected_claim_ids: string[];
+            scoped_claims: {
+                [key: string]: unknown;
+            }[];
+            status: string;
+            strategy: string;
+            superseded_claim_ids: string[];
+        };
+        ConflictResolutionEnvelope: {
+            data: components["schemas"]["ConflictResolution"];
+            pagination?: Record<string, never> | null;
+            request_id: string;
+            warnings: string[];
         };
         ContextItem: {
             abstraction_level: number | null;
@@ -583,6 +610,20 @@ export interface components {
             pagination?: null;
             request_id: string;
             warnings: string[];
+        };
+        DetectConflictsRequest: {
+            claim_id?: string | null;
+            /** @default true */
+            create?: boolean;
+            /** @default false */
+            include_resolved?: boolean;
+            namespace?: string | null;
+            predicate?: string | null;
+            /** @description Legacy label only; never narrows namespace-wide authorization. */
+            project_id?: string | null;
+            subject?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         ErrorEnvelope: {
             error: {
@@ -789,6 +830,26 @@ export interface components {
             stale_claim_count: number;
             unresolved_conflict_count: number;
         };
+        PredicateSemantics: {
+            /** @enum {string} */
+            cardinality: "single" | "multiple";
+            namespace: string;
+            predicate: string;
+            /** @enum {string} */
+            semantics: "exclusive_value" | "set_membership";
+        };
+        PredicateSemanticsEnvelope: {
+            data: components["schemas"]["PredicateSemantics"];
+            pagination?: Record<string, never> | null;
+            request_id: string;
+            warnings: string[];
+        };
+        PredicateSemanticsRequest: {
+            /** @enum {string} */
+            cardinality: "single" | "multiple";
+            namespace: string;
+            predicate: string;
+        };
         Principal: {
             /** @enum {unknown} */
             client_type: "admin" | "agent" | "cli" | "mcp" | "sdk" | "test" | "unknown" | "worker";
@@ -951,6 +1012,22 @@ export interface components {
             candidate: components["schemas"]["CandidateClaim"];
             /** @constant */
             write_mode: "candidate";
+        };
+        ResolveConflictRequest: {
+            active_claim_id?: string | null;
+            note?: string | null;
+            rejected_claim_ids?: string[];
+            scoped_claims?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * @default manual
+             * @enum {string}
+             */
+            strategy?: "coexist" | "context_scope" | "highest_confidence_wins" | "latest_wins" | "manual" | "mark_unresolved" | "merge_duplicates" | "reject_weak_claims" | "time_scope" | "user_correction_wins" | "verified_source_wins";
+            superseded_claim_ids?: string[];
+        } & {
+            [key: string]: unknown;
         };
         ResponseEnvelope: {
             data: unknown;

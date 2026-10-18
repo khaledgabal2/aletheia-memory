@@ -51,3 +51,24 @@ After migration:
 aletheia compatibility report --db ./aletheia.db
 aletheia doctor --db ./aletheia.db
 ```
+
+## Predicate declaration storage
+
+Predicate semantics adds the `predicate_semantics` table and review invalidation
+triggers within storage version `1.3.1`. The version string alone does not prove
+that this additive schema setup is present. Normal embedded opens with automatic
+migration enabled install it transactionally.
+
+For a service configured with automatic migration disabled, stop the service,
+provide a backup passphrase through `ALETHEIA_BACKUP_PASSPHRASE` (or the existing
+stdin option), and explicitly upgrade before restarting:
+
+```bash
+aletheia migrate apply --db ./aletheia.db --backup-before --verify-after
+```
+
+Keep the encrypted pre-migration archive and the matching older binary for
+recovery. Claims, evidence and candidate data are preserved; outstanding review
+snapshots are invalidated. Starting against the older table/trigger inventory
+with automatic migration disabled fails closed and directs the operator to
+migrate. In-place downgrade remains unsupported.

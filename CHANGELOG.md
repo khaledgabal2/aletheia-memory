@@ -2,6 +2,25 @@
 
 All notable public changes to Aletheia are tracked here.
 
+## Unreleased
+
+- Add persistent namespace-scoped predicate cardinality declarations to the local
+  Python API. Multivalued set members coexist in ordinary recall; single-valued
+  predicates retain contradiction checks in conflict detection, candidate
+  screening and inference promotion. Undeclared predicates remain single-valued.
+- Expose predicate declarations through authenticated HTTP GET/POST routes,
+  `aletheia predicates get/set`, and synchronous/asynchronous Python SDKs, with
+  explicit namespace authorization, admin-only remote changes and typed OpenAPI
+  request/response schemas.
+
+- Fix conflict-detection project/privacy authorization before mutation, retain
+  subsequent values in single-value disputes, preserve approved scopes on rescan,
+  and reject inconsistent/incomplete resolution outcomes atomically.
+- Align identifier/object comparisons and receiving-side federation conflicts
+  with predicate declarations. Add explicit multivalue `coexist` reconciliation.
+- Declare all legacy OpenAPI URI parameters and validate the complete document;
+  publish typed conflict detection/resolution contracts.
+
 ## 1.7.0 — 2026-10-17
 
 First production/stable release within documented support boundaries. Python
