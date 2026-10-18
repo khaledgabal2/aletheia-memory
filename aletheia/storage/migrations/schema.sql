@@ -2732,3 +2732,12 @@ CREATE TABLE IF NOT EXISTS agent_group_members (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_group_members_unique
 ON agent_group_members(agent_group_id, agent_id);
+
+-- Namespace-local predicate meaning. Missing declarations retain single-value behavior.
+CREATE TABLE IF NOT EXISTS predicate_semantics (
+    namespace TEXT NOT NULL,
+    predicate TEXT NOT NULL COLLATE NOCASE,
+    cardinality TEXT NOT NULL CHECK (cardinality IN ('single', 'multiple')),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (namespace, predicate)
+);

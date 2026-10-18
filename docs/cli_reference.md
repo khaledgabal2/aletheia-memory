@@ -227,3 +227,36 @@ configured `ALETHEIA_FEDERATION_RECOVERY_KEY`. `peers replace-key` requires
 `--identity`, `--expected-fingerprint`, and `--confirmed-fingerprint`; it resets
 trust and revokes old grants. See the [recovery procedure](federation_key_recovery.md)
 for the full operator workflow and encrypted historical-bundle review.
+
+## Predicate semantics
+
+Use the trusted local database CLI to inspect or declare namespace-wide
+predicate cardinality:
+
+```bash
+aletheia predicates get likes --db ./aletheia.db --namespace user/default --json
+aletheia predicates set likes --cardinality multiple --db ./aletheia.db --namespace user/default --json
+aletheia predicates set home_city --cardinality single --db ./aletheia.db --namespace user/default
+```
+
+Both commands accept `--json`; otherwise they print namespace, predicate,
+cardinality and semantics. `--namespace` defaults to `user/default` and `--db`
+to `./aletheia.db`. `get` returns `single` / `exclusive_value` for undeclared
+predicates. `set` requires `--cardinality single|multiple`; `multiple` means
+independent positive set membership (`set_membership`). The CLI uses direct
+local database access; HTTP credentials are not involved.
+
+Configure before writing/extracting claims. Changes preserve existing disputes
+and candidate review state, and invalidate outstanding review snapshots. See
+[predicate semantics](core_concepts.md#predicate-cardinality-and-semantics).
+
+After declaring an existing property's values compatible, explicitly close its
+old family without discarding members:
+
+```bash
+aletheia conflicts resolve CONFLICT_ID --strategy coexist --note "Both values are compatible" --db ./aletheia.db
+```
+
+This strategy requires a `multiple` declaration. Other resolved decisions must
+assign unique, disjoint outcomes covering the family; a winner cannot also be
+superseded or rejected. Invalid decisions leave the family unchanged.

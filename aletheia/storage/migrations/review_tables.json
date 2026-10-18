@@ -84,6 +84,7 @@
     "plugin_trust_records",
     "policy_application_history",
     "policy_proposals",
+    "predicate_semantics",
     "procedure_update_proposals",
     "procedure_versions",
     "project_claim_links",

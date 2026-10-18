@@ -432,7 +432,7 @@ class AletheiaService:
             if len(body) > self.config.max_request_bytes:
                 raise ServiceError("payload_too_large", "Request body is too large.", status_code=413)
             payload = self._json_body(body)
-            query = parse_qs(parsed.query)
+            query = parse_qs(parsed.query, keep_blank_values=endpoint == "/v1/predicate-semantics")
             namespace_for_log = payload.get("namespace") if isinstance(payload, dict) else None
             if namespace_for_log is None and query.get("namespace"):
                 namespace_for_log = query["namespace"][0]
@@ -706,6 +706,29 @@ class AletheiaService:
             return self._retrieve(payload, auth_context), [], None
         if method == "POST" and endpoint == "/v1/remember":
             return self._remember(payload, auth_context), [], None
+        if endpoint == "/v1/predicate-semantics" and method in {"GET", "POST"}:
+            if method == "GET":
+                if set(query) - {"namespace", "predicate"} or any(len(v) != 1 for v in query.values()):
+                    raise validation_error("Use one namespace and one predicate query parameter.")
+                namespace = self._query_value(query, "namespace")
+                predicate = self._query_value(query, "predicate")
+            else:
+                if query or set(payload) - {"namespace", "predicate", "cardinality"}:
+                    raise validation_error("Only namespace, predicate and cardinality are accepted.")
+                namespace = self._required(payload, "namespace")
+                predicate = self._required(payload, "predicate")
+            self.memory._require_text(namespace, "namespace")
+            self.memory._require_text(predicate, "predicate")
+            OperationAccess(self, auth_context).scope(
+                "memory:admin" if method == "POST" else "memory:read", namespace,
+            )
+            if method == "POST":
+                result = self.memory.set_predicate_semantics(
+                    predicate, namespace=namespace, cardinality=self._required(payload, "cardinality"),
+                )
+            else:
+                result = self.memory.get_predicate_semantics(predicate, namespace=namespace)
+            return result, [], None
         if method == "POST" and endpoint == "/v1/feedback":
             self._require(auth_context, "memory:feedback", payload)
             access = OperationAccess(self, auth_context)
@@ -1174,6 +1197,13 @@ class AletheiaService:
         self.auth.require_capability(auth_context, "memory:review")
         access = OperationAccess(self, auth_context)
         family = access.target("conflict_family", conflict_id)
+        for field in ("superseded_claim_ids", "rejected_claim_ids"):
+            values = payload.get(field)
+            if values is not None and (not isinstance(values, list) or any(not isinstance(value, str) for value in values)):
+                raise validation_error(f"{field} must be a list of claim IDs.")
+        scopes = payload.get("scoped_claims")
+        if scopes is not None and (not isinstance(scopes, list) or any(not isinstance(item, dict) for item in scopes)):
+            raise validation_error("scoped_claims must be a list of scope objects.")
         targets = ([payload["active_claim_id"]] if payload.get("active_claim_id") else [])
         targets += (payload.get("superseded_claim_ids") or []) + (payload.get("rejected_claim_ids") or [])
         targets += [item.get("claim_id") for item in payload.get("scoped_claims") or []]
@@ -1191,10 +1221,19 @@ class AletheiaService:
             return [asdict(item) for item in self.memory.list_conflict_families(namespace=namespace)
                     if ReadAccess(self, auth_context).allowed("conflict_family", item.id)]
         if method == "POST" and endpoint == "/v1/conflicts/detect":
-            access.scope("memory:review", payload.get("namespace") or self.memory.namespace, payload.get("project_id"))
-            if payload.get("claim_id"):
-                access.target("claim", payload["claim_id"], namespace=payload.get("namespace") or self.memory.namespace)
-            return [asdict(item) for item in self.memory.detect_conflicts(**self._detect_conflicts_args(payload))]
+            args = self._detect_conflicts_args(payload)
+            namespace = args["namespace"] or self.memory.namespace
+            # Detection compares whole property groups, so a caller's project
+            # label cannot narrow its authority. Preflight every selected source.
+            access.scope("memory:review", namespace)
+            if args["claim_id"]:
+                claim = access.target("claim", args["claim_id"], namespace=namespace)
+                args.update(subject=claim.subject, predicate=claim.predicate)
+            if args["create"]:
+                for claim in self.memory._claims_for_conflict_detection(namespace, args["subject"], args["predicate"]):
+                    access.target("claim", claim.id, namespace=namespace)
+            families = self.memory.detect_conflicts(**args)
+            return [asdict(item) for item in families if access.allowed("conflict_family", item.id)]
         if method == "POST" and endpoint.startswith("/v1/conflicts/") and endpoint.endswith("/resolve"):
             self._authorize_conflict_resolution(auth_context, endpoint.split("/")[3], payload)
             return asdict(self.memory.resolve_conflict(endpoint.split("/")[3], **self._resolve_conflict_args(payload)))
@@ -3829,7 +3868,7 @@ class AletheiaRequestHandler(BaseHTTPRequestHandler):
 
     def _send_payload(self, status: int, payload: dict) -> None:
         response_headers = payload.pop("_headers", {}) if isinstance(payload, dict) else {}
-        if self.path.split("?", 1)[0] in {*DISCOVERY_PATHS, *PAIRING_PATHS, "/v1/remember"} or is_read_path(self.path.split("?", 1)[0]):
+        if self.path.split("?", 1)[0] in {*DISCOVERY_PATHS, *PAIRING_PATHS, "/v1/remember", "/v1/predicate-semantics"} or is_read_path(self.path.split("?", 1)[0]):
             response_headers["Cache-Control"] = "no-store"
             request_id = payload.get("request_id") if isinstance(payload, dict) else None
             if isinstance(request_id, str) and len(request_id) <= 200 and all(32 <= ord(c) < 127 for c in request_id):
@@ -3866,6 +3905,8 @@ def openapi_schema() -> dict:
         ("POST", "/v1/retrieve", "memory:read"),
         ("POST", "/v1/search", "memory:read"),
         ("POST", "/v1/remember", "memory:write_candidate or memory:write_active"),
+        ("GET", "/v1/predicate-semantics", "memory:read"),
+        ("POST", "/v1/predicate-semantics", "memory:admin"),
         ("POST", "/v1/feedback", "memory:feedback"),
         ("POST", "/v1/outcomes", "memory:feedback"),
         ("POST", "/v1/retrieval-judgments", "memory:feedback"),
@@ -4109,6 +4150,10 @@ def openapi_schema() -> dict:
                 "required": True,
                 "content": {"application/json": {"schema": {"type": "object", "additionalProperties": True}}},
             }
+        operation.setdefault("parameters", []).extend(
+            {"name": name, "in": "path", "required": True, "schema": {"type": "string"}}
+            for name in re.findall(r"\{([^}]+)\}", path)
+        )
         paths.setdefault(path, {})[method.lower()] = operation
     schema = {
         "openapi": "3.1.0",
@@ -4178,4 +4223,9 @@ def openapi_schema() -> dict:
     from aletheia.service.review_contracts import apply_review_contracts
     from aletheia.service.onboarding_contract import apply_onboarding_contract
     from aletheia.service.pairing_contract import apply_pairing_contract
-    return apply_pairing_contract(apply_onboarding_contract(apply_review_contracts(apply_read_contracts(apply_discovery_contracts(schema)))))
+    from aletheia.service.predicate_contracts import apply_predicate_contracts
+    from aletheia.service.conflict_contracts import apply_conflict_contracts
+    for apply in (apply_discovery_contracts, apply_read_contracts, apply_review_contracts,
+                  apply_onboarding_contract, apply_pairing_contract, apply_predicate_contracts, apply_conflict_contracts):
+        schema = apply(schema)
+    return schema

@@ -184,6 +184,7 @@ RESOLUTION_STRATEGIES = {
     "mark_unresolved",
     "reject_weak_claims",
     "manual",
+    "coexist",
 }
 CANDIDATE_STATUSES = {
     "pending_review",
@@ -6400,6 +6401,7 @@ class Memory:
         )
 
     @_atomic_review
+    @_atomic_review
     def write_claim(
         self,
         *,
@@ -7722,6 +7724,110 @@ class Memory:
         decay = 2 ** (-age_days / half_life_days)
         return self._clamp(confidence_base * decay)
 
+    def set_predicate_semantics(
+        self, predicate: str, *, cardinality: str, namespace: str | None = None,
+    ) -> dict[str, str]:
+        """Declare whether distinct objects are exclusive or independent set members.
+
+        Configure before writing claims. Existing conflicts and candidate review
+        state are deliberately preserved when a declaration changes.
+        """
+        namespace = namespace or self.namespace
+        self._require_text(namespace, "namespace")
+        self._require_text(predicate, "predicate")
+        if not isinstance(cardinality, str) or cardinality not in {"single", "multiple"}:
+            raise ValidationError("cardinality must be single or multiple")
+        with self.store.transaction():
+            self.store.connection.execute(
+                """INSERT INTO predicate_semantics
+                   (namespace, predicate, cardinality, updated_at) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(namespace, predicate) DO UPDATE SET
+                   cardinality = excluded.cardinality, updated_at = excluded.updated_at""",
+                (namespace, predicate, cardinality, utc_now_iso()),
+            )
+            self._write_audit(
+                namespace=namespace, target_type="predicate", target_id=predicate,
+                action="predicate.semantics.set", details={"cardinality": cardinality},
+            )
+        return self.get_predicate_semantics(predicate, namespace=namespace)
+
+    def get_predicate_semantics(
+        self, predicate: str, *, namespace: str | None = None,
+    ) -> dict[str, str]:
+        """Return the declaration, defaulting to exclusive single-value semantics."""
+        namespace = namespace or self.namespace
+        self._require_text(predicate, "predicate")
+        row = self.store.connection.execute(
+            "SELECT cardinality FROM predicate_semantics WHERE namespace = ? AND predicate = ?",
+            (namespace, predicate),
+        ).fetchone()
+        cardinality = row["cardinality"] if row else "single"
+        return {"namespace": namespace, "predicate": predicate, "cardinality": cardinality,
+                "semantics": "set_membership" if cardinality == "multiple" else "exclusive_value"}
+
+    def _predicate_is_multivalued(self, namespace: str, predicate: str) -> bool:
+        return self.get_predicate_semantics(predicate, namespace=namespace)["cardinality"] == "multiple"
+
+    @staticmethod
+    def _conflict_key(value: str) -> str:
+        # Match SQLite LOWER/NOCASE identifier semantics, including for Unicode.
+        return value.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+
+    @staticmethod
+    def _conflict_object(value: str) -> str:
+        return value.strip().lower()
+
+    def _claims_for_conflict_detection(self, namespace, subject=None, predicate=None):
+        clauses = ["namespace = ?", "status IN ('active', 'core', 'disputed')"]
+        params = [namespace]
+        for field, value in (("subject", subject), ("predicate", predicate)):
+            if value is not None:
+                self._require_text(value, field)
+                clauses.append(f"lower({field}) = lower(?)")
+                params.append(value)
+        rows = self.store.connection.execute(
+            f"SELECT * FROM claims WHERE {' AND '.join(clauses)} ORDER BY created_at, id", params,
+        ).fetchall()
+        evidence = self._evidence_ids_for_claims([row["id"] for row in rows])
+        return [Claim.from_row(row, evidence.get(row["id"], [])) for row in rows]
+
+    @staticmethod
+    def _resolution_scopes_separate(left, right, strategy):
+        if strategy == "context_scope":
+            return str(left.get("applies_when") or "").strip().casefold() != str(right.get("applies_when") or "").strip().casefold()
+        try:
+            left_start, left_end = parse_iso(left.get("valid_from")), parse_iso(left.get("valid_to"))
+            right_start, right_end = parse_iso(right.get("valid_from")), parse_iso(right.get("valid_to"))
+            return bool((left_end and right_start and left_end <= right_start)
+                        or (right_end and left_start and right_end <= left_start))
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+    def _approved_scope_pairs(self, namespace):
+        """Preserve explicit human scope decisions while the approved scopes remain intact."""
+        rows = self.store.connection.execute(
+            """SELECT r.scoped_claims_json, r.strategy FROM conflict_families f
+               JOIN conflict_resolutions r ON r.id = f.resolution_id
+               WHERE f.namespace = ? AND f.status IN ('context_scoped', 'time_scoped')""",
+            (namespace,),
+        ).fetchall()
+        pairs = set()
+        fields = ("scope_type", "applies_when", "valid_from", "valid_to")
+        for row in rows:
+            approved = json.loads(row["scoped_claims_json"] or "[]")
+            intact = []
+            for item in approved:
+                expected = tuple(item.get(field) for field in fields)
+                actual = {tuple(getattr(scope, field) for field in fields)
+                          for scope in self.list_claim_scopes(item["claim_id"])}
+                if actual == {expected}:
+                    intact.append(item)
+            pairs.update(frozenset((left["claim_id"], right["claim_id"]))
+                         for i, left in enumerate(intact) for right in intact[i + 1:]
+                         if self._resolution_scopes_separate(left, right, row["strategy"]))
+        return pairs
+
+    @_atomic_review
     def detect_conflicts(
         self,
         *,
@@ -7735,74 +7841,61 @@ class Memory:
         namespace = namespace or self.namespace
         if claim_id:
             claim = self.read_claim(claim_id)
-            namespace = claim.namespace
-            subject = claim.subject
-            predicate = claim.predicate
-        params: list[object] = [namespace]
-        clauses = ["namespace = ?", "status IN ('active', 'core')"]
-        if subject:
-            clauses.append("subject = ?")
-            params.append(subject)
-        if predicate:
-            clauses.append("predicate = ?")
-            params.append(predicate)
-        rows = self.store.connection.execute(
-            f"""
-            SELECT *
-            FROM claims
-            WHERE {' AND '.join(clauses)}
-            ORDER BY subject, predicate, created_at
-            """,
-            params,
-        ).fetchall()
-        grouped: dict[tuple[str, str], list[Claim]] = {}
-        evidence = self._evidence_ids_for_claims([row["id"] for row in rows])
-        for row in rows:
-            claim = Claim.from_row(row, evidence.get(row["id"], []))
-            grouped.setdefault((claim.subject, claim.predicate), []).append(claim)
-        families: list[ConflictFamily] = []
-        for (claim_subject, claim_predicate), claims in grouped.items():
-            by_object: dict[str, list[Claim]] = {}
+            namespace, subject, predicate = claim.namespace, claim.subject, claim.predicate
+        def matches(family):
+            return ((subject is None or self._conflict_key(family.subject) == self._conflict_key(subject))
+                    and (predicate is None or self._conflict_key(family.predicate) == self._conflict_key(predicate)))
+        families = []
+        if create:
+            claims = self._claims_for_conflict_detection(namespace, subject, predicate)
+            grouped = {}
             for claim in claims:
-                by_object.setdefault(claim.object.strip().lower(), []).append(claim)
-            if len(by_object) > 1:
-                claim_ids = sorted(claim.id for claim in claims)
-                if create:
-                    conflict = self._create_or_update_conflict(
-                        namespace=namespace,
-                        subject=claim_subject,
-                        predicate=claim_predicate,
-                        claim_ids=claim_ids,
-                        conflict_type=self._conflict_type_for_claims(claims),
-                        mark_disputed=True,
-                    )
-                    families.append(self.read_conflict_family(conflict.id))
-            for duplicates in by_object.values():
-                if len(duplicates) > 1:
-                    claim_ids = sorted(claim.id for claim in duplicates)
-                    if create:
+                grouped.setdefault((self._conflict_key(claim.subject), self._conflict_key(claim.predicate)), []).append(claim)
+            approved_pairs = self._approved_scope_pairs(namespace)
+            for group in grouped.values():
+                by_object = {}
+                for claim in group:
+                    by_object.setdefault(self._conflict_object(claim.object), []).append(claim)
+                if len(by_object) > 1 and not self._predicate_is_multivalued(namespace, group[0].predicate):
+                    # Connected components keep independent scoped disputes separate.
+                    edges = {claim.id: set() for claim in group}
+                    for i, left in enumerate(group):
+                        for right in group[i + 1:]:
+                            if (self._conflict_object(left.object) != self._conflict_object(right.object)
+                                    and frozenset((left.id, right.id)) not in approved_pairs):
+                                edges[left.id].add(right.id)
+                                edges[right.id].add(left.id)
+                    visited = set()
+                    for claim in group:
+                        if claim.id in visited or not edges[claim.id]:
+                            continue
+                        component, pending = set(), [claim.id]
+                        while pending:
+                            current = pending.pop()
+                            if current in component:
+                                continue
+                            component.add(current)
+                            pending.extend(edges[current] - component)
+                        visited.update(component)
+                        members = [item for item in group if item.id in component]
                         conflict = self._create_or_update_conflict(
-                            namespace=namespace,
-                            subject=claim_subject,
-                            predicate=claim_predicate,
-                            claim_ids=claim_ids,
-                            conflict_type="duplicate_claim",
+                            namespace=namespace, subject=group[0].subject, predicate=group[0].predicate,
+                            claim_ids=sorted(component), conflict_type=self._conflict_type_for_claims(members),
+                            mark_disputed=True,
+                        )
+                        families.append(self.read_conflict_family(conflict.id))
+                for duplicates in by_object.values():
+                    if len(duplicates) > 1:
+                        conflict = self._create_or_update_conflict(
+                            namespace=namespace, subject=group[0].subject, predicate=group[0].predicate,
+                            claim_ids=sorted(claim.id for claim in duplicates), conflict_type="duplicate_claim",
                             mark_disputed=False,
                         )
                         self._link_duplicate_claims(duplicates)
                         families.append(self.read_conflict_family(conflict.id))
-        if not create:
-            status = None if include_resolved else "unresolved"
-            return self.list_conflict_families(namespace=namespace, status=status)
-        existing_ids = {family.id for family in families}
-        existing_status = None if include_resolved else "unresolved"
-        for family in self.list_conflict_families(
-            namespace=namespace,
-            status=existing_status,
-        ):
-            if family.id not in existing_ids:
-                families.append(family)
-        return families
+        existing = self.list_conflict_families(namespace=namespace, status=None if include_resolved else "unresolved", limit=-1)
+        result = {family.id: family for family in [*families, *existing] if matches(family)}
+        return list(result.values())
 
     def list_conflicts(
         self,
@@ -7925,7 +8018,7 @@ class Memory:
     ) -> ConflictResolution:
         if conflict_id is None:
             raise ValidationError("conflict_id is required.")
-        if strategy not in RESOLUTION_STRATEGIES:
+        if not isinstance(strategy, str) or strategy not in RESOLUTION_STRATEGIES:
             raise ValidationError(f"Unknown conflict resolution strategy: {strategy}")
         note = note or f"Resolved with {strategy}."
         family = self.read_conflict_family(conflict_id)
@@ -7938,8 +8031,17 @@ class Memory:
         )
         if selected_active and selected_active not in claim_ids:
             raise ValidationError("Selected active claim must belong to the conflict.")
+        for field, values in (("superseded_claim_ids", superseded_claim_ids), ("rejected_claim_ids", rejected_claim_ids)):
+            if values is not None and (not isinstance(values, list) or any(not isinstance(value, str) for value in values)):
+                raise ValidationError(f"{field} must be a list of claim IDs.")
         superseded_claim_ids = list(superseded_claim_ids or [])
         rejected_claim_ids = list(rejected_claim_ids or [])
+        if strategy == "coexist":
+            if not self._predicate_is_multivalued(family.namespace, family.predicate):
+                raise ValidationError("Coexist resolution requires a multivalued predicate.")
+            if active_claim_id or superseded_claim_ids or rejected_claim_ids or scoped_claims:
+                raise ValidationError("Coexist resolution keeps every member active without exclusive outcomes.")
+            selected_active = None
         if scoped_claims is not None and (not isinstance(scoped_claims, list) or any(not isinstance(item, dict) for item in scoped_claims)):
             raise ValidationError("scoped_claims must be a list of scope objects.")
         scoped_claims = [dict(item) for item in scoped_claims or []]
@@ -7973,15 +8075,47 @@ class Memory:
         targets = superseded_claim_ids + rejected_claim_ids + [item.get("claim_id") for item in scoped_claims]
         if any(target not in claim_ids for target in targets):
             raise ValidationError("Resolution targets must belong to the conflict.")
+        if strategy in {"context_scope", "time_scope"}:
+            for i, left in enumerate(scoped_claims):
+                for right in scoped_claims[i + 1:]:
+                    if (self._conflict_object(self.read_claim(left["claim_id"]).object)
+                            != self._conflict_object(self.read_claim(right["claim_id"]).object)
+                            and not self._resolution_scopes_separate(left, right, strategy)):
+                        raise ValidationError("Conflicting values require distinct contexts or nonoverlapping time scopes.")
+        def validate_assignments():
+            scoped_ids = [item["claim_id"] for item in scoped_claims]
+            outcomes = [superseded_claim_ids, rejected_claim_ids, scoped_ids]
+            if any(len(values) != len(set(values)) for values in outcomes):
+                raise ValidationError("Resolution outcomes must contain unique claim IDs.")
+            if any(set(left) & set(right) for i, left in enumerate(outcomes) for right in outcomes[i + 1:]):
+                raise ValidationError("Resolution outcomes must be disjoint.")
+            if selected_active in set(superseded_claim_ids + rejected_claim_ids):
+                raise ValidationError("The active claim cannot also be superseded or rejected.")
+
+        validate_assignments()
         if selected_active and not superseded_claim_ids and strategy not in {
             "context_scope",
             "time_scope",
             "mark_unresolved",
+            "coexist",
         }:
-            superseded_claim_ids = [claim_id for claim_id in claim_ids if claim_id != selected_active]
+            superseded_claim_ids = [claim_id for claim_id in claim_ids
+                                    if claim_id != selected_active and claim_id not in rejected_claim_ids]
         if strategy == "reject_weak_claims" and selected_active:
             rejected_claim_ids = [claim_id for claim_id in claim_ids if claim_id != selected_active]
             superseded_claim_ids = []
+        validate_assignments()
+        scoped_ids = [item["claim_id"] for item in scoped_claims]
+        if strategy in {"context_scope", "time_scope"} and (superseded_claim_ids or rejected_claim_ids):
+            raise ValidationError("Scoped resolutions cannot discard members.")
+        if strategy == "mark_unresolved" and (active_claim_id or superseded_claim_ids or rejected_claim_ids or scoped_claims):
+            raise ValidationError("Unresolved decisions cannot assign resolved outcomes.")
+        if strategy not in {"mark_unresolved", "coexist"}:
+            assigned = set(superseded_claim_ids + rejected_claim_ids + scoped_ids)
+            if selected_active:
+                assigned.add(selected_active)
+            if assigned != set(claim_ids):
+                raise ValidationError("A resolved decision must assign an outcome to every conflict member.")
         family_status = {
             "context_scope": "context_scoped",
             "time_scope": "time_scoped",
@@ -8062,6 +8196,13 @@ class Memory:
                     conflict_id,
                 ),
             )
+            if strategy == "coexist":
+                for claim_id in claim_ids:
+                    self._set_claim_status(
+                        claim_id=claim_id,
+                        status="core" if self.read_claim(claim_id).status == "core" else "active",
+                        action="conflict.resolve", details={"conflict_id": conflict_id, "strategy": strategy, "note": note},
+                    )
             if selected_active:
                 self._set_claim_status(
                     claim_id=selected_active,
@@ -9171,66 +9312,30 @@ class Memory:
     def _stored_evidence_span_text(self, evidence_id: str, text: str) -> str:
         return production.evidence_span_text_for_storage(self, evidence_id, text)
 
-    def _candidate_duplicate_risk(
-        self,
-        *,
-        namespace: str,
-        subject: str,
-        predicate: str,
-        object: str,
-    ) -> float:
-        row = self.store.connection.execute(
-            """
-            SELECT 1
-            FROM claims
-            WHERE namespace = ?
-              AND lower(subject) = lower(?)
-              AND lower(predicate) = lower(?)
-              AND lower(object) = lower(?)
-              AND status NOT IN ('rejected', 'archived', 'superseded')
-            LIMIT 1
-            """,
-            (namespace, subject, predicate, object),
-        ).fetchone()
-        if row:
+    def _candidate_duplicate_risk(self, *, namespace, subject, predicate, object) -> float:
+        value = self._conflict_object(object)
+        rows = self.store.connection.execute(
+            """SELECT object FROM claims WHERE namespace = ?
+               AND lower(subject) = lower(?) AND lower(predicate) = lower(?)
+               AND status NOT IN ('rejected', 'archived', 'superseded')""",
+            (namespace, subject, predicate),
+        ).fetchall()
+        if any(self._conflict_object(row["object"]) == value for row in rows):
             return 1.0
-        row = self.store.connection.execute(
-            """
-            SELECT 1
-            FROM candidate_claims
-            WHERE namespace = ?
-              AND lower(subject) = lower(?)
-              AND lower(predicate) = lower(?)
-              AND lower(object) = lower(?)
-              AND candidate_status NOT IN ('rejected', 'promoted')
-            LIMIT 1
-            """,
-            (namespace, subject, predicate, object),
-        ).fetchone()
-        return 0.95 if row else 0.0
+        rows = self.store.connection.execute(
+            """SELECT object FROM candidate_claims WHERE namespace = ?
+               AND lower(subject) = lower(?) AND lower(predicate) = lower(?)
+               AND candidate_status NOT IN ('rejected', 'promoted')""",
+            (namespace, subject, predicate),
+        ).fetchall()
+        return 0.95 if any(self._conflict_object(row["object"]) == value for row in rows) else 0.0
 
-    def _candidate_contradiction_risk(
-        self,
-        *,
-        namespace: str,
-        subject: str,
-        predicate: str,
-        object: str,
-    ) -> float:
-        row = self.store.connection.execute(
-            """
-            SELECT 1
-            FROM claims
-            WHERE namespace = ?
-              AND lower(subject) = lower(?)
-              AND lower(predicate) = lower(?)
-              AND lower(object) <> lower(?)
-              AND status IN ('active', 'core', 'disputed')
-            LIMIT 1
-            """,
-            (namespace, subject, predicate, object),
-        ).fetchone()
-        return 0.90 if row else 0.0
+    def _candidate_contradiction_risk(self, *, namespace, subject, predicate, object) -> float:
+        if self._predicate_is_multivalued(namespace, predicate):
+            return 0.0
+        value = self._conflict_object(object)
+        return 0.90 if any(self._conflict_object(claim.object) != value for claim in
+                           self._claims_for_conflict_detection(namespace, subject, predicate)) else 0.0
 
     def _candidate_promotion_failures(
         self,
@@ -9242,7 +9347,10 @@ class Memory:
             failures.append(f"candidate status is {candidate.candidate_status}")
         if candidate.candidate_status == "duplicate" or candidate.duplicate_risk >= 0.95:
             failures.append("candidate is a duplicate without merge strategy")
-        if candidate.contradiction_risk >= 0.85:
+        if candidate.contradiction_risk >= 0.85 or self._candidate_contradiction_risk(
+            namespace=candidate.namespace, subject=candidate.subject,
+            predicate=candidate.predicate, object=candidate.object,
+        ) >= 0.85:
             failures.append("candidate has unresolved high contradiction risk")
         if not candidate.evidence_ids or not candidate.evidence_spans:
             failures.append("candidate has no evidence span")
@@ -10705,27 +10813,12 @@ class Memory:
             or inference.suggested_truth_confidence < 0.90
         ):
             failures.append("core promotion requires an entailed high-confidence inference")
-        if target_type == "claim" and inference.subject and inference.predicate and inference.object:
-            rows = self.store.connection.execute(
-                """
-                SELECT id
-                FROM claims
-                WHERE namespace = ?
-                  AND subject = ?
-                  AND predicate = ?
-                  AND object != ?
-                  AND status IN ('active', 'core')
-                LIMIT 1
-                """,
-                (
-                    inference.namespace,
-                    inference.subject,
-                    inference.predicate,
-                    inference.object,
-                ),
-            ).fetchone()
-            if rows:
-                failures.append("inference conflicts with an active claim")
+        if (target_type == "claim" and inference.subject and inference.predicate and inference.object
+                and self._candidate_contradiction_risk(
+                    namespace=inference.namespace, subject=inference.subject,
+                    predicate=inference.predicate, object=inference.object,
+                ) >= 0.85):
+            failures.append("inference conflicts with an active claim")
         return sorted(set(failures))
 
     def _project_id_for_inference(self, inference: InferenceCandidate) -> str | None:
@@ -12743,9 +12836,9 @@ class Memory:
             SELECT *
             FROM conflict_families
             WHERE namespace = ?
-              AND subject = ?
-              AND predicate = ?
-              AND conflict_type = ?
+              AND lower(subject) = lower(?)
+              AND lower(predicate) = lower(?)
+              AND ((conflict_type = 'duplicate_claim') = (? = 'duplicate_claim'))
               AND status = 'unresolved'
             ORDER BY created_at DESC
             LIMIT 1

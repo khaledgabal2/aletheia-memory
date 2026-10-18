@@ -21,6 +21,14 @@ Aletheia is useful for local agents, agent frameworks, developer tools,
 research assistants, and any application that needs cross-session recall with a
 clear audit trail.
 
+For properties that can hold several values, Aletheia supports
+explicit [predicate cardinality](docs/core_concepts.md#predicate-cardinality-and-semantics):
+`memory.set_predicate_semantics("likes", cardinality="multiple")`. Distinct set
+members then coexist in ordinary recall. Undeclared predicates keep exclusive,
+single-value conflict handling. Configure through the embedded API,
+[HTTP/Python SDKs](docs/http_api_reference.md#predicate-semantics), or
+[CLI](docs/cli_reference.md#predicate-semantics).
+
 ## Status
 
 - Package name: `aletheia-memory`

@@ -440,6 +440,16 @@ def build_parser() -> argparse.ArgumentParser:
     claims_history.add_argument("--db", default="./aletheia.db")
     claims_history.add_argument("--json", action="store_true")
 
+    predicates = subparsers.add_parser("predicates", help="Inspect or declare predicate semantics.")
+    predicate_commands = predicates.add_subparsers(dest="predicate_command", required=True)
+    for action in ("get", "set"):
+        command = predicate_commands.add_parser(action)
+        command.add_argument("predicate")
+        _add_db_namespace(command)
+        command.add_argument("--json", action="store_true")
+        if action == "set":
+            command.add_argument("--cardinality", choices=["single", "multiple"], required=True)
+
     confidence = subparsers.add_parser("confidence", help="Inspect M2 confidence.")
     confidence_subparsers = confidence.add_subparsers(
         dest="confidence_command", required=True
@@ -1961,6 +1971,19 @@ def _run(args: argparse.Namespace) -> int:
             return _run_projects(memory, args)
         if args.command == "claims":
             return _run_claims(memory, args)
+        if args.command == "predicates":
+            if args.predicate_command == "set":
+                result = memory.set_predicate_semantics(
+                    args.predicate, namespace=args.namespace, cardinality=args.cardinality,
+                )
+            else:
+                result = memory.get_predicate_semantics(args.predicate, namespace=args.namespace)
+            if args.json:
+                print(json.dumps(result, indent=2))
+            else:
+                print(f"{result['namespace']} {result['predicate']}: "
+                      f"{result['cardinality']} ({result['semantics']})")
+            return 0
         if args.command == "confidence":
             return _run_confidence(memory, args)
         if args.command == "decay":

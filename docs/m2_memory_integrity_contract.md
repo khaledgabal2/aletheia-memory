@@ -597,7 +597,8 @@ Required behavior
 
 M2 conflict detection must detect at least:
 
-- Same subject + same predicate + incompatible object
+- Same subject + same predicate + incompatible object (distinct values for an
+  exclusive, single-valued predicate; declared multivalued set members coexist)
 - Active claim contradicted by user correction
 - Active claim contradicted by verified claim
 - Active claim contradicted by newer current-state claim
@@ -666,6 +667,7 @@ merge_duplicates
 mark_unresolved
 reject_weak_claims
 manual
+coexist (requires declared multiple cardinality)
 
 Required behavior
 
@@ -677,6 +679,12 @@ resolve_conflict() must:
 - Preserve all evidence links.
 - Write audit events.
 - Update retrieval behavior immediately.
+- Reject overlapping, duplicate or incomplete outcome assignments atomically.
+- Never supersede/reject the selected winner.
+- Preserve approved unchanged contextual/temporal resolutions across rescans.
+- Keep subsequent single-valued assertions in the existing unresolved dispute.
+- Allow explicit `coexist` reconciliation only for a multivalued predicate; retain
+  all family members and their evidence without selecting an exclusive winner.
 
 ConflictResolution model
 

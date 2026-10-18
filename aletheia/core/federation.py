@@ -964,7 +964,9 @@ def _sync_resolution_targets(memory, conflict, authorize_target):
     if (local.namespace != conflict.namespace or remote.namespace != conflict.namespace
         or local.id == remote.id or local.status not in {"active", "core", "disputed"}
         or local.object != conflict.metadata.get("local_object")
-        or any(getattr(local, field) != snapshot.get(field) for field in ("subject", "predicate"))
+        or any(not isinstance(snapshot.get(field), str)
+               or memory._conflict_key(getattr(local, field)) != memory._conflict_key(snapshot[field])
+               for field in ("subject", "predicate"))
         or any(getattr(remote, field) != snapshot.get(field) for field in ("subject", "predicate", "object", "memory_type"))):
         raise ValidationError("Conflict sources changed since detection; review a fresh conflict.")
     if (kind == "claim" and remote.status not in {"active", "core", "disputed"}) or (kind == "candidate_claim" and remote.candidate_status not in {"pending_review", "validated", "needs_conflict_resolution"}):
@@ -987,17 +989,24 @@ def _sync_resolution_targets(memory, conflict, authorize_target):
     return local, remote, source
 
 
-def _resolve_sync_claim_families(memory, local_id, remote_id, *, winner, reason):
-    """Resolve only the reviewed pair; broader families require their own review."""
+def _sync_claim_families(memory, local_id, remote_id):
+    """Preflight all family participants before applying a pair-only decision."""
     ids = set(memory._conflict_ids_for_claim(local_id) + memory._conflict_ids_for_claim(remote_id))
-    for value in ids:
-        family = memory.read_conflict_family(value)
-        if family.status != "unresolved":
-            continue
-        if set(family.claim_ids) != {local_id, remote_id}:
-            raise ValidationError("Conflict family includes additional claims; review the family before sync resolution.")
-        memory.resolve_conflict(value, strategy="manual", active_claim_id=winner,
-            superseded_claim_ids=[remote_id if winner == local_id else local_id], note=reason)
+    families = [memory.read_conflict_family(value) for value in ids]
+    families = [family for family in families if family.status == "unresolved"]
+    if any(set(family.claim_ids) != {local_id, remote_id} for family in families):
+        raise ValidationError("Conflict family includes additional claims; review the family before sync resolution.")
+    return families
+
+
+def _resolve_sync_claim_families(memory, local_id, remote_id, *, winner, reason, coexist=False):
+    """Resolve only the reviewed pair; broader families require their own review."""
+    for family in _sync_claim_families(memory, local_id, remote_id):
+        if coexist:
+            memory.resolve_conflict(family.id, strategy="coexist", note=reason)
+        else:
+            memory.resolve_conflict(family.id, strategy="manual", active_claim_id=winner,
+                superseded_claim_ids=[remote_id if winner == local_id else local_id], note=reason)
 
 
 def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: str, actor: str = "user",
@@ -1015,6 +1024,7 @@ def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: st
             raise ValidationError("Sync conflict is already resolved.")
         local, remote, source = _sync_resolution_targets(memory, conflict, authorize_target)
         kind, remote_id = source["local_object_type"], remote.id
+        coexist = memory._predicate_is_multivalued(conflict.namespace, local.predicate)
         if kind == "claim" and strategy not in {"defer", "accept_remote_active"}:
             _resolve_sync_claim_families(memory, local.id, remote.id, winner=local.id, reason=reason)
         if strategy in {"keep_local", "reject_remote"}:
@@ -1024,11 +1034,19 @@ def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: st
                 memory._set_claim_status(claim_id=remote.id, status="rejected", action="sync.reject_remote",
                                          details={"reason": reason, "conflict_id": conflict.id})
         elif strategy == "accept_remote_active":
+            _sync_claim_families(memory, local.id, remote_id)
             if kind == "candidate_claim":
+                if not coexist:
+                    # This explicit winner decision retires the reviewed local
+                    # value before promotion's live contradiction gate. The
+                    # enclosing transaction rolls this back on any gate failure.
+                    memory._set_claim_status(claim_id=local.id, status="superseded", action="sync.select_remote",
+                                             details={"reason": reason, "conflict_id": conflict.id})
                 remote_id = memory.promote_candidate(remote.id, reason=reason, reviewer=actor).id
                 kind = "claim"
-            _resolve_sync_claim_families(memory, local.id, remote_id, winner=remote_id, reason=reason)
-            memory.supersede_claim(local.id, remote_id, reason=reason)
+            _resolve_sync_claim_families(memory, local.id, remote_id, winner=remote_id, reason=reason, coexist=coexist)
+            if not coexist:
+                memory.supersede_claim(local.id, remote_id, reason=reason)
         elif strategy == "accept_remote_as_candidate":
             if kind == "claim":
                 remote_id = _store_remote_candidate(memory, conflict.metadata["remote_claim"], evidence_ids=remote.evidence_ids,
@@ -1051,7 +1069,8 @@ def resolve_sync_conflict(memory, conflict_id: str, *, strategy: str, reason: st
         if strategy in {"keep_local", "reject_remote"}:
             verified = current_local.status in {"active", "core"} and remote_status == "rejected"
         elif strategy == "accept_remote_active":
-            verified = (current_local.status == "superseded" and remote_status in {"active", "core"}
+            verified = ((current_local.status in {"active", "core"} if coexist else current_local.status == "superseded")
+                        and remote_status in {"active", "core"}
                         and set(current_remote.evidence_ids) == set(remote.evidence_ids))
         elif strategy == "accept_remote_as_candidate":
             verified = (current_local.status in {"active", "core"} and kind == "candidate_claim"
@@ -2426,21 +2445,13 @@ def _store_remote_candidate(memory, claim: dict, *, evidence_ids: list[str], pee
 
 
 def _local_claim_conflict(memory, claim: dict) -> dict | None:
-    row = memory.store.connection.execute(
-        """
-        SELECT id, object, status
-        FROM claims
-        WHERE namespace = ?
-          AND subject = ?
-          AND predicate = ?
-          AND status NOT IN ('rejected', 'archived', 'superseded')
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (claim["namespace"], claim["subject"], claim["predicate"]),
-    ).fetchone()
-    if row and row["object"] != claim["object"]:
-        return dict(row)
+    if memory._predicate_is_multivalued(claim["namespace"], claim["predicate"]):
+        return None
+    rows = memory._claims_for_conflict_detection(claim["namespace"], claim["subject"], claim["predicate"])
+    value = memory._conflict_object(claim["object"])
+    for local in reversed(rows):
+        if memory._conflict_object(local.object) != value:
+            return {"id": local.id, "object": local.object, "status": local.status}
     return None
 
 

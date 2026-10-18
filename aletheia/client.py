@@ -165,6 +165,18 @@ class AletheiaClient:
     def remember_active(self, *, idempotency_key: str | None = None, **payload) -> dict:
         return self.remember(idempotency_key=idempotency_key, write_mode="active", **payload)
 
+    def get_predicate_semantics(self, predicate: str, *, namespace: str) -> dict:
+        query = urlencode({"namespace": namespace, "predicate": predicate})
+        return self._request("GET", "/v1/predicate-semantics?" + query)
+
+    def set_predicate_semantics(
+        self, predicate: str, *, namespace: str, cardinality: str,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        return self._request("POST", "/v1/predicate-semantics",
+                             {"namespace": namespace, "predicate": predicate, "cardinality": cardinality},
+                             idempotency_key=idempotency_key)
+
     def feedback(self, **payload) -> dict:
         return self._request("POST", "/v1/feedback", payload)
 
@@ -599,6 +611,17 @@ class AsyncAletheiaClient:
 
     async def remember_active(self, **payload) -> dict:
         return await asyncio.to_thread(self._sync.remember_active, **payload)
+
+    async def get_predicate_semantics(self, predicate: str, *, namespace: str) -> dict:
+        return await asyncio.to_thread(self._sync.get_predicate_semantics, predicate, namespace=namespace)
+
+    async def set_predicate_semantics(
+        self, predicate: str, *, namespace: str, cardinality: str,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        return await asyncio.to_thread(self._sync.set_predicate_semantics, predicate,
+                                       namespace=namespace, cardinality=cardinality,
+                                       idempotency_key=idempotency_key)
 
     async def feedback(self, **payload) -> dict:
         return await asyncio.to_thread(self._sync.feedback, **payload)

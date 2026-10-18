@@ -87,3 +87,123 @@ Historical bundle decryption is available only through the local CLI and
 embedded API and produces an encrypted review artifact without importing.
 See [Federation key recovery](federation_key_recovery.md) for the operator
 procedure and recovery-secret handling.
+
+## Predicate semantics
+
+`GET /v1/predicate-semantics?namespace=user%2Fdefault&predicate=likes` reads a
+namespace-wide declaration. It requires `memory:read` (or `memory:admin`) and a
+namespace grant. `namespace` and `predicate` are required query parameters,
+each supplied exactly once; no other query fields are accepted. An undeclared
+predicate returns the default `single` / `exclusive_value` without creating a
+declaration.
+
+`POST /v1/predicate-semantics` sets a declaration. It requires `memory:admin`
+and a namespace grant, including when authentication is configured in tokenless
+mode. Review or active-write capability alone is insufficient. Project-only
+grants cannot read or change these namespace-wide declarations. The JSON body
+requires exactly these fields, with no query parameters:
+
+```json
+{"namespace": "user/default", "predicate": "likes", "cardinality": "multiple"}
+```
+
+`namespace` and `predicate` must be nonblank strings; `cardinality` accepts
+`single` or `multiple`. `single` means exclusive values; `multiple` means
+independent positive set membership. Names do not implicitly select cardinality.
+The response uses the standard success envelope:
+
+```json
+{
+  "data": {
+    "namespace": "user/default",
+    "predicate": "likes",
+    "cardinality": "multiple",
+    "semantics": "set_membership"
+  },
+  "request_id": "example-request",
+  "warnings": [],
+  "pagination": null
+}
+```
+
+Predicate lookup is case-insensitive; namespace lookup is exact. Responses use
+`Cache-Control: no-store`. Invalid input returns `400`, missing/invalid
+credentials `401`, and insufficient capability or namespace access `403`.
+POST accepts the standard optional `Idempotency-Key`: retry an uncertain write
+with the same key and identical body. A changed body with the same key returns
+`409`; cached receipts recheck current authority. Configure each database
+explicitly; declarations are not federation-replicated.
+
+The synchronous and asynchronous Python SDKs expose matching methods. Unlike
+the embedded API, their `namespace` argument is required:
+
+```python
+from aletheia import AletheiaClient, AsyncAletheiaClient
+
+client = AletheiaClient(base_url, admin_token)
+meaning = client.set_predicate_semantics(
+    "likes", namespace="user/default", cardinality="multiple",
+    idempotency_key="declare-likes-1",
+)
+meaning = client.get_predicate_semantics("likes", namespace="user/default")
+
+async def configure():
+    client = AsyncAletheiaClient(base_url, admin_token)
+    await client.set_predicate_semantics(
+        "likes", namespace="user/default", cardinality="multiple",
+        idempotency_key="declare-likes-async-1",
+    )
+    return await client.get_predicate_semantics("likes", namespace="user/default")
+```
+
+Both methods return the unwrapped declaration dictionary. SDK errors use the
+existing typed exceptions, including `AletheiaForbiddenError` and
+`AletheiaValidationError`. The compatibility imports from `aletheia_client`
+expose the same clients and methods.
+
+Declare semantics before storing or extracting facts. Changes invalidate review
+snapshots but do not resolve existing conflicts or rewrite candidate risk flags.
+Ordinary recall keeps disputed records excluded. Set membership does not parse
+natural-language negation; see [modeling guidance](core_concepts.md#predicate-cardinality-and-semantics).
+
+## Conflict detection and resolution boundaries
+
+`POST /v1/conflicts/detect` requires `memory:review` (or `memory:admin`) and
+namespace-wide access. A project-only grant is insufficient, even if the body
+contains a matching `project_id`. That legacy label does not narrow the scan or
+its authorization. Optional `subject` / `predicate` filters select a property
+group; `claim_id` selects the stored claim's namespace and property after
+checking its visibility. Every selected active/core/disputed claim and its
+provenance must be visible before any creation/mutation; otherwise the request
+returns `403` atomically. Returned families are visibility-filtered, including
+`create: false` requests, which only return existing families. Property filters
+also constrain returned families.
+
+Single-valued disputes retain subsequent assertions as disputed members rather
+than allowing the next value into ordinary recall. Identifier and object
+comparison follow the [shared comparison policy](core_concepts.md#predicate-cardinality-and-semantics).
+Accepted scope resolutions survive a rescan while their approved scopes remain
+unchanged. A new assertion is evaluated against existing members.
+
+`POST /v1/conflicts/{conflict_id}/resolve` requires review authority and visibility
+of the whole family. Explicit outcomes must be unique, disjoint and complete;
+a selected winner cannot also be superseded/rejected. A manual decision with
+no outcomes is invalid. Invalid requests return `400` without status, scope,
+audit or resolution mutations. Scope resolutions must specify every member,
+with distinct contextual labels or nonoverlapping time intervals for conflicting
+values. Distinct free-text contextual labels reflect an explicit reviewer
+decision; they do not imply natural-language contradiction inference.
+
+To reconcile an old family after declaring its predicate multivalued:
+
+```json
+{"strategy": "coexist", "note": "Both values are compatible positive memberships"}
+```
+
+`coexist` requires a multivalued declaration and accepts no winner, discard list
+or scope assignments. It restores all members to active (preserving core) and
+closes the family. Changing the declaration alone leaves existing reviews
+pending. Use the normal optional `Idempotency-Key` for uncertain retries.
+
+The complete published OpenAPI document declares every URI template parameter
+and is validated as a whole, including legacy conflict and claim routes.
