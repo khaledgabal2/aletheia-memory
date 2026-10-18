@@ -1,6 +1,6 @@
 """Behavioral regressions for retrieval eligibility, limits and provider waits."""
 from contextlib import closing
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import json
 import threading
 import time
@@ -146,14 +146,20 @@ def test_provider_wait_does_not_block_health_or_an_unrelated_write(tmp_path, mon
         server, _, call = service(memory)
         authenticated = {path: threading.Event() for path in ("/v1/health", "/v1/remember")}
         authenticate = server._authenticate
+        preparation_calls = {path: 0 for path in authenticated}
+        timings = {}
         def measured_authentication(method, endpoint, headers, **kwargs):
-            if endpoint in authenticated and kwargs.get("previous") is None:
-                # A separate preparation phase: serial authentication can be slow
-                # without being blocked on provider I/O. Keep its own bound and
-                # retain the original post-preparation response deadline below.
+            preparing = endpoint in authenticated and not authenticated[endpoint].is_set()
+            if preparing:
+                # Delay only initial preparation. remember_response reauthorizes
+                # inside its transaction without passing `previous`; that must
+                # not inject another preparation sleep into the response phase.
+                preparation_calls[endpoint] += 1
+                timings[endpoint + ":preparation_started"] = time.monotonic()
                 time.sleep(authentication_delay)
             context = authenticate(method, endpoint, headers, **kwargs)
-            if endpoint in authenticated:
+            if preparing:
+                timings[endpoint + ":prepared"] = time.monotonic()
                 authenticated[endpoint].set()
             return context
         monkeypatch.setattr(server, "_authenticate", measured_authentication)
@@ -165,8 +171,16 @@ def test_provider_wait_does_not_block_health_or_an_unrelated_write(tmp_path, mon
                 write = pool.submit(call, "/v1/remember", {"namespace": NS, "subject": "concurrent",
                     "predicate": "records", "object": "independent", "memory_type": "fact"})
                 assert all(event.wait(3) for event in authenticated.values()), "request preparation blocked while provider waits"
-                assert health.result(timeout=.75)[0] == 200
-                assert write.result(timeout=.75)[0] == 200
+                assert preparation_calls == {path: 1 for path in authenticated}
+                for path, future in (("/v1/health", health), ("/v1/remember", write)):
+                    response_started = time.monotonic()
+                    try:
+                        assert future.result(timeout=.75)[0] == 200
+                    except FutureTimeoutError:
+                        pytest.fail(f"{path} response exceeded 750ms while provider waits; "
+                            f"preparation_calls={preparation_calls}, timings={timings}, "
+                            f"response_wait={time.monotonic() - response_started:.3f}s, "
+                            f"provider_ended={provider_wait_ended.is_set()}")
                 # Completion must precede provider release; an expired fixture
                 # or an accidental provider completion must never yield a pass.
                 assert not release.is_set() and not provider_wait_ended.is_set() and not pending.done()
