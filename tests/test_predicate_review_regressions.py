@@ -319,3 +319,32 @@ def test_strategy_defaults_cannot_hide_an_explicit_invalid_outcome(memory, strat
     with pytest.raises(ValidationError, match='active claim'):
         memory.resolve_conflict(family.id, strategy=strategy, active_claim_id=a.id, rejected_claim_ids=[a.id])
     assert snapshot(memory) == before
+
+
+def test_same_version_additive_upgrade_requires_explicit_migration_when_disabled(tmp_path, monkeypatch):
+    from aletheia.cli.main import main
+    from aletheia.service.errors import ServiceError
+    from aletheia.storage.review import integrity
+
+    path = str(tmp_path / 'previous.db')
+    old = Memory.open(path)
+    claim = remember(old, 'preserved source')
+    before = snapshot(old)
+    old.store.connection.execute('DROP TABLE predicate_semantics')
+    old.close()
+    with pytest.raises(ServiceError, match='migrate apply') as error:
+        AletheiaService.open(ServiceConfig(db_path=path, auto_migrate=False))
+    assert error.value.code == 'stale_schema'
+    monkeypatch.setenv('ALETHEIA_BACKUP_PASSPHRASE', 'synthetic-upgrade-backup-password')
+    backup = str(tmp_path / 'before.alet')
+    assert main(['migrate', 'apply', '--db', path, '--backup-before', '--backup-output', backup, '--verify-after']) == 0
+    service = AletheiaService.open(ServiceConfig(db_path=path, auto_migrate=False))
+    try:
+        assert integrity(service.memory.store.connection)
+        assert service.memory.read_claim(claim.id).object == 'preserved source'
+        for table, rows in before.items():
+            if table not in {'audit_log'}:
+                assert [tuple(row) for row in service.memory.store.connection.execute(f'SELECT * FROM {table}')] == rows
+        assert service.memory.get_predicate_semantics('likes')['cardinality'] == 'single'
+    finally:
+        service.close()

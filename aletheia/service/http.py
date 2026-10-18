@@ -365,7 +365,7 @@ class AletheiaService:
         memory = Memory.open(config.db_path, auto_migrate=config.auto_migrate)
         if not memory.store._schema_current():
             memory.close()
-            raise ServiceError("stale_schema", "Review schema integrity check failed; inspect the migration.", status_code=503)
+            raise ServiceError("stale_schema", "Review schema integrity check failed; run aletheia migrate apply before starting with automatic migration disabled.", status_code=503)
         service = cls(memory, config)
         service._record_config(source="service_open")
         return service

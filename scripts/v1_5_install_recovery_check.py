@@ -215,6 +215,11 @@ def worker(previous_python: str, expected_version: str, previous_version: str):
         spelling = "~/" + os.path.relpath(database, Path.home())
         assert Path(spelling).expanduser().resolve() == database
         assert database_state(sys.executable, spelling) == before
+        migration = json.loads(command("migrate", "apply", "--db", spelling, "--backup-before",
+                                       "--backup-output", root / "previous.pre-migrate.alet", "--verify-after"))
+        assert migration["status"] == "completed"
+        assert (root / "previous.pre-migrate.alet").is_file()
+        assert database_state(sys.executable, spelling) == before
         service = start(spelling)
         identity = service.info()
         registration, initial = next(iter(records().items()))
@@ -222,7 +227,7 @@ def worker(previous_python: str, expected_version: str, previous_version: str):
         assert registration.stat().st_mode & 0o777 == 0o600
         token = pair(spelling, service)
         unused = invite(spelling, service)
-        passed(f"{previous_version} database opens without migration; quoted tilde paths, explicit grants and TLS-only credentials")
+        passed(f"{previous_version} database upgrades with a backup and preserved domain data; quoted tilde paths, explicit grants and TLS-only credentials")
 
         deadline = time.monotonic() + 15
         while records()[registration]["expires_at_ms"] <= initial["expires_at_ms"]:
