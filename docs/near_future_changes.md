@@ -1,12 +1,12 @@
 # Near-Future Changes
 
-This document separates Aletheia 1.7.0 production/stable from future directions.
-Support is limited to the [qualified boundaries](v1_7_0_release_notes.md#qualification-and-limits);
+This document separates Aletheia 1.8.0 production/stable from future directions.
+Support is limited to the [qualified boundaries](v1_8_0_release_notes.md#qualification-and-limits);
 experimental milestone labels do not expand that support.
 
 Current implementation source:
 
-- `pyproject.toml` declares package version `1.7.0` and Production/Stable maturity.
+- `pyproject.toml` declares package version `1.8.0` and Production/Stable maturity.
 - `aletheia/storage/sqlite.py` declares `SCHEMA_VERSION = "1.3.1"`.
 - `docs/v1_public_contracts.md` defines stable v1 surfaces and semver policy.
 - `docs/m10_federated_memory_contract.md` is implemented as the M10 federation-beta milestone.
@@ -120,7 +120,7 @@ Revocation prevents future sync and records the limit honestly; it cannot forcib
 Future milestones may add relay transports, richer peer discovery, stronger cryptographic key management, richer console federation workflows, richer vector-store plugins, richer provider-specific LLM policies, or richer LLM review workflows. Those should remain explicit, governed, and compatible with existing v1 public contracts.
 
 A general historical-data recovery scanner remains outside the release scope.
-The bounded production qualification is recorded in [the release report](v1_7_0_release_verification.md). Existing recovery procedures remain available for
+The bounded production qualification is recorded in [the release report](v1_8_0_release_verification.md). Existing recovery procedures remain available for
 affected real-data use.
 
 ## Practical Guidance For Integrators
@@ -135,6 +135,6 @@ affected real-data use.
 
 ## Short Version
 
-Aletheia 1.7.0 is a local, auditable memory platform with governed
+Aletheia 1.8.0 is a local, auditable memory platform with governed
 federation, semantic retrieval and LLM memory formation. Embeddings improve
 recall; LLMs draft candidates and summaries for explicit review and governance.
